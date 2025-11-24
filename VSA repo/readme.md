@@ -7,7 +7,7 @@ This project automates the setup of a **local Veeam VSA (Software Appliance) pac
 
 ### Architecture Overview
 
-- **Setup script** (`vsa_repo.sh`): Orchestrates the entire mirror infrastructure setup with idempotent, rerunnable logic
+- **Setup script** (`vsa_repo.sh`): Orchestrates the entire mirror infrastructure setup
 - **Reposync script** (generated at `/usr/local/sbin/veeam-vsa-reposync.sh`): Dynamically configured with parameters from setup script; runs on-demand or hourly via systemd timer to mirror RPM packages from upstream Veeam repositories
 - **Nginx** (port 80): Publishes the local mirror for client consumption
 - **XFS filesystem**: Optional: Dedicated data disk (`/dev/sdb` → `/mnt/data`) for repository storage (~30GB initial)

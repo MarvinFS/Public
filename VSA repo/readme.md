@@ -1,4 +1,4 @@
-# Veeam VSA Repository Mirror creating script
+# Veeam VSA Linux Repository Mirror creation script
 # Supported OS: RHEL / Rocky / Alma / CentOS Stream 9+
 
 ## Project Overview

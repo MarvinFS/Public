@@ -1,674 +1,2513 @@
-#!/usr/bin/env bash
-set -euo pipefail
 
-# ============================================================
-# Veeam Software Appliance repository mirror script 
-#
-# This script orchestrates the complete setup of a local Veeam VSA
-# package mirror infrastructure on RHEL-family systems. It:
-#
-#   1) Partitions and mounts a dedicated XFS filesystem on extra data disk
-#   2) Installs core packages (dnf-plugins-core, curl, nginx, SELinux tools, firewalld)
-#   3) Creates /etc/yum.repos.d/veeam-vsa-upstream.repo with 3 repo definitions
-#   4) Generates parameterized /usr/local/sbin/veeam-vsa-reposync.sh with injected configuration
-#   5) Sets up repo directory with proper ownership and permissions
-#   6) Configures nginx to serve mirror on port 80
-#   7) Applies SELinux contexts and firewall rules
-#   8) Creates systemd service + hourly timer for automated syncing
-#   9) Validates available disk space for sync operations
-#   10) Tests local HTTP connectivity to mirror paths
-#
-# NOTE: This script sets up infrastructure only. Manual reposync trigger required:
-#   sudo /usr/local/sbin/veeam-vsa-reposync.sh
-#
-# Supported: RHEL / Rocky / Alma / CentOS Stream 9+ (incl. Rocky 10)
-# NOT SUPPORTED: Debian / Ubuntu / SUSE / anything without dnf + reposync.
-#
-# Created by MarvinFS wrapped up with AI assistance.
-# This script is NOT officially provided by Veeam Software company or supported in any way.
-# Strictly provided AS IS - use at your own discretion
-# ============================================================
 
-# -------------------------
-# CONFIG - EDIT IF NEEDED
-# -------------------------
-DATA_DEVICE="/dev/sdb"              # disk to use for repo data (will be partitioned) I have added new drive to a VM 100GB
-DATA_PARTITION="${DATA_DEVICE}1"    # resulting partition 
-MOUNT_POINT="/mnt/data"             # mount point for XFS
 
-REPO_ROOT="${MOUNT_POINT}/repo/repository.veeam.com"
 
-OS_VERSION="9.2"
-VBR_VERSION="13.0"
 
-# desired hostnames and IP which NGINX serves on port 80 (no SSL used, if needed, use any reverse proxy with SSL certs)
-REPO_HOSTNAME_SHORT="veeamrepo"
-REPO_HOSTNAME_FQDN="veeamrepo.test.local"
-REPO_HOST_IP="192.168.1.54"
 
-# Paths and constants
-UPSTREAM_MANDATORY_URL="https://repository.veeam.com/vsa/${OS_VERSION}/vbr/${VBR_VERSION}/mandatory"
-UPSTREAM_OPTIONAL_URL="https://repository.veeam.com/vsa/${OS_VERSION}/vbr/${VBR_VERSION}/optional"
-UPSTREAM_EXTERNAL_MANDATORY_URL="https://repository.veeam.com/vsa/${OS_VERSION}/external-mandatory"
+<!DOCTYPE html>
+<html
+  lang="en"
+  
+  data-color-mode="auto" data-light-theme="light" data-dark-theme="dark"
+  data-a11y-animated-images="system" data-a11y-link-underlines="true"
+  
+  >
 
-DNF_BIN="/usr/bin/dnf"
-KEY_INDEX_URL="https://repository.veeam.com/keys/"
-KEY_LOCAL_DIR="/etc/veeam/rpm-gpg"
-UPSTREAM_REPO_FILE="/etc/yum.repos.d/veeam-vsa-upstream.repo"
-REPOSYNC_SCRIPT="/usr/local/sbin/veeam-vsa-reposync.sh"
-NGINX_CONF="/etc/nginx/conf.d/veeam-repo.conf"
-
-REPOID_MANDATORY="veeam-vsa-mandatory"
-REPOID_OPTIONAL="veeam-vsa-optional"
-REPOID_EXTERNAL_MANDATORY="veeam-vsa-external-mandatory"
-
-SYSTEMD_SERVICE="/etc/systemd/system/veeam-vsa-reposync.service"
-SYSTEMD_TIMER="/etc/systemd/system/veeam-vsa-reposync.timer"
-
-# -------------------------
-# LOGGING HELPERS
-# -------------------------
-log() {
-  printf '[%(%Y-%m-%d %H:%M:%S)T] %s\n' -1 "$*" >&2
+    <style>
+:root {
+  --fontStack-monospace: "Monaspace Neon", ui-monospace, SFMono-Regular, SF Mono, Menlo, Consolas, Liberation Mono, monospace !important;
 }
+</style>
 
-fatal() {
-  log "FATAL: $*"
-  exit 1
-}
 
-# -------------------------
-# BASIC CHECKS
-# -------------------------
-require_root() {
-  if [[ $EUID -ne 0 ]]; then
-    fatal "Must be run as root."
-  fi
-}
 
-check_os() {
-  if [[ -r /etc/os-release ]]; then
-    . /etc/os-release
-  else
-    fatal "/etc/os-release not found. Unsupported OS."
-  fi
 
-  case "${ID:-unknown}" in
-    rhel|rocky|almalinux|centos)
-      log "OS detected: ${PRETTY_NAME:-$ID}"
-      ;;
-    *)
-      fatal "Unsupported OS ID: ${ID:-unknown}. Only RHEL/Rocky/Alma/CentOS-family is supported."
-      ;;
-  esac
-}
+  <head>
+    <meta charset="utf-8">
+  <link rel="dns-prefetch" href="https://github.githubassets.com">
+  <link rel="dns-prefetch" href="https://avatars.githubusercontent.com">
+  <link rel="dns-prefetch" href="https://github-cloud.s3.amazonaws.com">
+  <link rel="dns-prefetch" href="https://user-images.githubusercontent.com/">
+  <link rel="preconnect" href="https://github.githubassets.com" crossorigin>
+  <link rel="preconnect" href="https://avatars.githubusercontent.com">
 
-check_dnf() {
-  if ! command -v "${DNF_BIN}" >/dev/null 2>&1; then
-    fatal "dnf not found. This script requires a dnf based system."
-  fi
-}
+  
 
-# -------------------------
-# DISK AND FILESYSTEM SETUP
-# -------------------------
-prepare_disk() {
-  log "Checking data disk ${DATA_DEVICE}"
 
-  if [[ ! -b "${DATA_DEVICE}" ]]; then
-    fatal "Device ${DATA_DEVICE} does not exist. Adjust DATA_DEVICE in script."
-  fi
+  <link crossorigin="anonymous" media="all" rel="stylesheet" href="https://github.githubassets.com/assets/light-8e973f836952.css" /><link crossorigin="anonymous" media="all" rel="stylesheet" href="https://github.githubassets.com/assets/dark-4bce7af39e21.css" /><link data-color-theme="light_high_contrast" crossorigin="anonymous" media="all" rel="stylesheet" data-href="https://github.githubassets.com/assets/light_high_contrast-34b642d57214.css" /><link data-color-theme="light_colorblind" crossorigin="anonymous" media="all" rel="stylesheet" data-href="https://github.githubassets.com/assets/light_colorblind-54be93e666a7.css" /><link data-color-theme="light_colorblind_high_contrast" crossorigin="anonymous" media="all" rel="stylesheet" data-href="https://github.githubassets.com/assets/light_colorblind_high_contrast-8ae7edf5489c.css" /><link data-color-theme="light_tritanopia" crossorigin="anonymous" media="all" rel="stylesheet" data-href="https://github.githubassets.com/assets/light_tritanopia-84d50df427c0.css" /><link data-color-theme="light_tritanopia_high_contrast" crossorigin="anonymous" media="all" rel="stylesheet" data-href="https://github.githubassets.com/assets/light_tritanopia_high_contrast-a80873375146.css" /><link data-color-theme="dark_high_contrast" crossorigin="anonymous" media="all" rel="stylesheet" data-href="https://github.githubassets.com/assets/dark_high_contrast-ad512d3e2f3b.css" /><link data-color-theme="dark_colorblind" crossorigin="anonymous" media="all" rel="stylesheet" data-href="https://github.githubassets.com/assets/dark_colorblind-d152d6cd6879.css" /><link data-color-theme="dark_colorblind_high_contrast" crossorigin="anonymous" media="all" rel="stylesheet" data-href="https://github.githubassets.com/assets/dark_colorblind_high_contrast-fa4060c1a9da.css" /><link data-color-theme="dark_tritanopia" crossorigin="anonymous" media="all" rel="stylesheet" data-href="https://github.githubassets.com/assets/dark_tritanopia-d7bad0fb00bb.css" /><link data-color-theme="dark_tritanopia_high_contrast" crossorigin="anonymous" media="all" rel="stylesheet" data-href="https://github.githubassets.com/assets/dark_tritanopia_high_contrast-4a0107c0f60c.css" /><link data-color-theme="dark_dimmed" crossorigin="anonymous" media="all" rel="stylesheet" data-href="https://github.githubassets.com/assets/dark_dimmed-045e6b6ac094.css" /><link data-color-theme="dark_dimmed_high_contrast" crossorigin="anonymous" media="all" rel="stylesheet" data-href="https://github.githubassets.com/assets/dark_dimmed_high_contrast-5de537db5e79.css" />
 
-  # If partition already exists and is XFS, assume it is fine and skip destructive steps
-  if lsblk -no TYPE "${DATA_PARTITION}" 2>/dev/null | grep -q '^part$'; then
-    local fstype
-    fstype=$(lsblk -no FSTYPE "${DATA_PARTITION}" 2>/dev/null || true)
-    log "Found existing partition ${DATA_PARTITION} (FSTYPE=${fstype:-unknown}). Will NOT repartition or reformat."
-
-    if [[ "${fstype}" != "xfs" ]]; then
-      log "WARNING: ${DATA_PARTITION} is not XFS. Script expects XFS. Mount may fail."
-    fi
-    return
-  fi
-
-  log "No existing partition ${DATA_PARTITION} detected. Creating fresh GPT + XFS."
-
-  # Extra sanity: ensure disk is not already mounted
-  if lsblk -no MOUNTPOINT "${DATA_DEVICE}" | grep -q '/'; then
-    fatal "${DATA_DEVICE} appears to have mounted filesystems. Refusing to wipe."
-  fi
-
-  # Wipe signatures and create partition table
-  log "Wiping filesystem signatures on ${DATA_DEVICE}"
-  wipefs -a "${DATA_DEVICE}"
-
-  log "Creating GPT and single XFS partition on ${DATA_DEVICE}"
-  parted "${DATA_DEVICE}" --script \
-    mklabel gpt \
-    mkpart primary xfs 0% 100%
-
-  # Format partition
-  log "Formatting ${DATA_PARTITION} as XFS"
-  mkfs.xfs -f "${DATA_PARTITION}"
-
-  log "Disk preparation completed for ${DATA_PARTITION}"
-}
-
-ensure_mountpoint() {
-  mkdir -p "${MOUNT_POINT}"
-  chmod 0755 "${MOUNT_POINT}"
-}
-
-ensure_fstab_entry() {
-  log "Ensuring /etc/fstab has PARTUUID entry for ${DATA_PARTITION}"
-
-  local partuuid
-  partuuid=$(blkid -o value -s PARTUUID "${DATA_PARTITION}" 2>/dev/null || true)
-  if [[ -z "${partuuid}" ]]; then
-    fatal "Could not read PARTUUID for ${DATA_PARTITION}. Check blkid output."
-  fi
-
-  local fstab_line="PARTUUID=${partuuid}   ${MOUNT_POINT}   xfs   defaults,noatime   0 0"
-
-  if grep -q "PARTUUID=${partuuid}" /etc/fstab 2>/dev/null; then
-    log "fstab already contains entry for PARTUUID=${partuuid}. Skipping append."
-  else
-    log "Adding new fstab entry: ${fstab_line}"
-    if ! printf "\n%s\n" "${fstab_line}" >> /etc/fstab; then
-      fatal "Failed to write to /etc/fstab. Check permissions and disk space."
-    fi
-  fi
-}
-
-mount_data_fs() {
-  log "Reloading systemd daemon and mounting all filesystems."
-  systemctl daemon-reload || true
-  mount -a
-
-  local mp
-  mp=$(lsblk -no MOUNTPOINT "${DATA_PARTITION}" 2>/dev/null || true)
-  if [[ "${mp}" != "${MOUNT_POINT}" ]]; then
-    fatal "Expected ${DATA_PARTITION} to be mounted on ${MOUNT_POINT} but got '${mp:-<none>}'"
-  fi
-
-  log "Mount check passed: ${DATA_PARTITION} -> ${MOUNT_POINT}"
-}
-
-# -------------------------
-# CORE PACKAGES
-# -------------------------
-install_core_packages() {
-  log "Installing required packages (dnf-plugins-core, curl, nginx, SELinux tools, firewalld helpers)"
-
-  "${DNF_BIN}" install -y dnf-plugins-core curl nginx policycoreutils-python-utils selinux-policy-targeted firewalld || \
-    log "WARNING: Some packages failed to install. If your distro variant does not use them, this may be ok."
-
-  # Make sure dnf reposync is available
-  if ! "${DNF_BIN}" --help 2>&1 | grep -q 'reposync'; then
-    fatal "dnf reposync plugin not available even after installing dnf-plugins-core."
-  fi
-}
-
-# -------------------------
-# DISK SPACE VALIDATION
-# -------------------------
-check_disk_space() {
-  log "Checking available disk space on ${MOUNT_POINT}"
-
-  local available_gb
-  available_gb=$(df -B1G "${MOUNT_POINT}" | awk 'NR==2 {print $4}' | sed 's/G$//')
-
-  if [[ -z "${available_gb}" ]]; then
-    log "WARNING: Could not determine available disk space. Proceeding anyway."
-    return
-  fi
-
-  # Warn if less than 40GB available (initial sync is ~30GB + buffer)
-  if (( available_gb < 40 )); then
-    log "WARNING: Only ${available_gb}GB available on ${MOUNT_POINT}. Initial reposync needs ~30GB."
-    log "WARNING: Sync may fail if space is insufficient."
-  else
-    log "Disk space check: ${available_gb}GB available (sufficient for initial sync)."
-  fi
-}
-
-# -------------------------
-# VEEAM UPSTREAM .repo FILE
-# -------------------------
-create_upstream_repo_file() {
-  if [[ -f "${UPSTREAM_REPO_FILE}" ]]; then
-    log "Upstream repo file ${UPSTREAM_REPO_FILE} already exists. Leaving it intact."
-    return
-  fi
-
-  log "Creating upstream repo definition at ${UPSTREAM_REPO_FILE}"
-
-  tee "${UPSTREAM_REPO_FILE}" >/dev/null <<EOF
-[${REPOID_MANDATORY}]
-name=Veeam VSA mandatory (upstream mirror source)
-baseurl=https://repository.veeam.com/vsa/${OS_VERSION}/vbr/${VBR_VERSION}/mandatory/
-enabled=0
-gpgcheck=0
-repo_gpgcheck=0
-gpgkey=https://repository.veeam.com/keys/RPM-E6FBD664 https://repository.veeam.com/keys/RPM-EFDCEA77
-
-[${REPOID_OPTIONAL}]
-name=Veeam VSA optional (upstream mirror source)
-baseurl=https://repository.veeam.com/vsa/${OS_VERSION}/vbr/${VBR_VERSION}/optional/
-enabled=0
-gpgcheck=0
-repo_gpgcheck=0
-gpgkey=https://repository.veeam.com/keys/RPM-E6FBD664 https://repository.veeam.com/keys/RPM-EFDCEA77
-
-[${REPOID_EXTERNAL_MANDATORY}]
-name=Veeam VSA external mandatory (upstream mirror source)
-baseurl=https://repository.veeam.com/vsa/${OS_VERSION}/external-mandatory/
-enabled=0
-gpgcheck=0
-repo_gpgcheck=0
-gpgkey=https://repository.veeam.com/keys/RPM-E6FBD664 https://repository.veeam.com/keys/RPM-EFDCEA77
-EOF
-}
-
-# -------------------------
-# REPOSYNC SCRIPT
-# -------------------------
-create_reposync_script() {
-  log "Creating reposync script at ${REPOSYNC_SCRIPT}"
-
-  mkdir -p "$(dirname "${REPOSYNC_SCRIPT}")"
-
-  # Inject configuration variables into the embedded script
-  tee "${REPOSYNC_SCRIPT}" >/dev/null <<EOF
-#!/usr/bin/env bash
-set -euo pipefail
-
-# ============================================================
-# VSA local mirror script using dnf reposync
-# Supported: RHEL / Rocky / Alma / CentOS Stream 9+ (incl. Rocky 10)
-# NOT SUPPORTED: Debian/Ubuntu or non-dnf systems.
-# Created by MarvinFS 
-# This script is NOT officially provided by Veeam Software company or supported in any way.
-# Strictly provided AS IS - use at your own discretion
-#
-# NOTE:
-#  - GPG checks are DISABLED on the mirror host (--nogpgcheck),
-#    because external-mandatory contains packages signed by
-#    multiple vendor keys (Rocky, CIQ, PGDG, etc).
-#  - The VSA itself can still enforce full GPG checks (packages
-#    and metadata) when using this mirror.
-# ============================================================
-
-REPO_ROOT="${REPO_ROOT}"
-
-REPOID_MANDATORY="veeam-vsa-mandatory"
-REPOID_OPTIONAL="veeam-vsa-optional"
-REPOID_EXTERNAL_MANDATORY="veeam-vsa-external-mandatory"
-
-# Upstream Veeam URLs for VSA repos (metadata signatures live here)
-UPSTREAM_MANDATORY_URL="${UPSTREAM_MANDATORY_URL}"
-UPSTREAM_OPTIONAL_URL="${UPSTREAM_OPTIONAL_URL}"
-UPSTREAM_EXTERNAL_MANDATORY_URL="${UPSTREAM_EXTERNAL_MANDATORY_URL}"
-
-DNF_BIN="/usr/bin/dnf"
-KEY_INDEX_URL="https://repository.veeam.com/keys/"
-KEY_LOCAL_DIR="/etc/veeam/rpm-gpg"
-
-log() {
-  printf '[%(%Y-%m-%d %H:%M:%S)T] %s\n' -1 "$*" >&2
-}
-
-check_os() {
-  if [[ -r /etc/os-release ]]; then
-    # shellcheck disable=SC1091
-    . /etc/os-release
-  else
-    log "ERROR: /etc/os-release not found. Unsupported OS."
-    exit 1
-  fi
-
-  case "${ID:-unknown}" in
-    rhel|rocky|almalinux|centos)
-      ;;
-    *)
-      log "ERROR: This script supports only RHEL/Rocky/Alma/CentOS-family systems."
-      exit 1
-      ;;
-  esac
-}
-
-check_prereqs() {
-  if ! command -v "${DNF_BIN}" >/dev/null 2>&1; then
-    log "ERROR: dnf not found. This is not a RHEL-family system."
-    exit 1
-  fi
-
-  if ! "${DNF_BIN}" --help 2>&1 | grep -q 'reposync'; then
-    log "ERROR: dnf reposync plugin not available. Install dnf-plugins-core first:"
-    log "       dnf install -y dnf-plugins-core"
-    exit 1
-  fi
-
-  if ! command -v curl >/dev/null 2>&1; then
-    log "ERROR: curl not found. Install it first:"
-    log "       dnf install -y curl"
-    exit 1
-  fi
-
-  if [[ ! -f /etc/yum.repos.d/veeam-vsa-upstream.repo ]]; then
-    log "ERROR: /etc/yum.repos.d/veeam-vsa-upstream.repo not found."
-    log "       Create it before running this script."
-    exit 1
-  fi
-}
-
-sync_veeam_keys() {
-  log "Syncing Veeam RPM GPG keys from ${KEY_INDEX_URL}"
-
-  mkdir -p "${KEY_LOCAL_DIR}"
-
-  local index
-  if ! index=$(curl -fsSL "${KEY_INDEX_URL}"); then
-    log "WARNING: Failed to download key index, skipping key sync."
-    return
-  fi
-
-  local keys
-  keys=$(printf '%s\n' "${index}" | grep -o 'RPM-[A-Za-z0-9]\+' | sort -u || true)
-
-  if [[ -z "${keys}" ]]; then
-    log "WARNING: No RPM-* keys found in index, skipping key sync."
-    return
-  fi
-
-  local k
-  for k in ${keys}; do
-    local dst="${KEY_LOCAL_DIR}/${k}.gpg"
-    local url="${KEY_INDEX_URL}${k}"
-
-    log "  - Downloading key ${k}"
-    if curl -fsSL "${url}" -o "${dst}"; then
-      rpm --import "${dst}" || log "WARNING: Failed to import key ${dst}"
-    else
-      log "WARNING: Could not download key ${k}"
-    fi
-  done
-
-  log "Veeam RPM GPG key sync completed (some keys may be rejected by policies - this is expected)."
-}
-
-sync_repo_signatures() {
-  local upstream_url="$1"
-  local target_path="$2"
-  local repodata_path="${target_path}/repodata"
-
-  mkdir -p "${repodata_path}"
-
-  # We try to pull both repomd.xml.asc and repomd.xml.key.
-  # If they are missing upstream, we only log a warning and continue.
-  local f
-  for f in repomd.xml.asc repomd.xml.key; do
-    local url="${upstream_url}/repodata/${f}"
-    local dst="${repodata_path}/${f}"
-
-    log "Syncing metadata signature ${f} from ${url}"
-    if curl -fsSL "${url}" -o "${dst}"; then
-      log "  - Downloaded ${f} to ${dst}"
-    else
-      log "WARNING: Could not download ${f} from ${url} (metadata GPG for this repo may fail if repo_gpgcheck=1)."
-    fi
-  done
-}
-
-mirror_repo() {
-  local repoid="$1"
-  local relpath="$2"
-  local upstream_url="$3"
-  local target_path="${REPO_ROOT}/${relpath}"
-
-  mkdir -p "${target_path}"
-
-  log "Running dnf reposync for ${repoid}"
-  log "Target: ${target_path}"
-
-  # IMPORTANT:
-  #   --nogpgcheck is ONLY for this mirror host.
-  #   The VSA still does GPG checks when consuming this mirror.
-  "${DNF_BIN}" -y reposync \
-    --repoid="${repoid}" \
-    --download-metadata \
-    --download-path="${target_path}" \
-    --norepopath \
-    --delete \
-    --nogpgcheck
-
-  # After successful reposync, pull metadata signature files
-  sync_repo_signatures "${upstream_url}" "${target_path}"
-}
-
-main() {
-  if [[ $EUID -ne 0 ]]; then
-    log "ERROR: Must run as root."
-    exit 1
-  fi
-
-  check_os
-  check_prereqs
-  sync_veeam_keys
-
-  # Mirror the three VSA repos into the expected tree
-  mirror_repo "${REPOID_MANDATORY}"          "vsa/9.2/vbr/13.0/mandatory"       "${UPSTREAM_MANDATORY_URL}"
-  mirror_repo "${REPOID_OPTIONAL}"           "vsa/9.2/vbr/13.0/optional"        "${UPSTREAM_OPTIONAL_URL}"
-  mirror_repo "${REPOID_EXTERNAL_MANDATORY}" "vsa/9.2/external-mandatory"       "${UPSTREAM_EXTERNAL_MANDATORY_URL}"
-
-  log "Veeam VSA reposync completed successfully."
-}
-
-main "$@"
-EOF
-
-  chmod 0755 "${REPOSYNC_SCRIPT}"
-EOF
-}
-
-# -------------------------
-# NGINX CONFIG
-# -------------------------
-configure_nginx() {
-  log "Enabling and starting nginx"
-  systemctl enable --now nginx || fatal "Failed to enable or start nginx."
-
-  log "Writing nginx repo config to ${NGINX_CONF}"
-
-  tee "${NGINX_CONF}" >/dev/null <<EOF
-server {
-    listen 80;
-    server_name ${REPO_HOSTNAME_FQDN} ${REPO_HOSTNAME_SHORT} ${REPO_HOST_IP};
-
-    # Root of the mirrored repo
-    root ${REPO_ROOT};
-
-    autoindex on;
-    autoindex_exact_size off;
-    autoindex_localtime on;
-
-    # Everything served read-only
-    location / {
-        try_files \$uri \$uri/ =404;
+  <style type="text/css">
+    :root {
+      --tab-size-preference: 4;
     }
-}
-EOF
 
-  log "Testing nginx configuration"
-  nginx -t
+    pre, code {
+      tab-size: var(--tab-size-preference);
+    }
+  </style>
 
-  log "Reloading nginx"
-  systemctl reload nginx
-}
+    <link crossorigin="anonymous" media="all" rel="stylesheet" href="https://github.githubassets.com/assets/primer-primitives-c37d781e2da5.css" />
+    <link crossorigin="anonymous" media="all" rel="stylesheet" href="https://github.githubassets.com/assets/primer-efa08b71f947.css" />
+    <link crossorigin="anonymous" media="all" rel="stylesheet" href="https://github.githubassets.com/assets/global-6dcb16809e76.css" />
+    <link crossorigin="anonymous" media="all" rel="stylesheet" href="https://github.githubassets.com/assets/github-f86c648606b5.css" />
+  <link crossorigin="anonymous" media="all" rel="stylesheet" href="https://github.githubassets.com/assets/repository-5d735668c600.css" />
+<link crossorigin="anonymous" media="all" rel="stylesheet" href="https://github.githubassets.com/assets/code-9c9b8dc61e74.css" />
 
-# -------------------------
-# SELINUX CONTEXTS
-# -------------------------
-configure_selinux() {
-  if command -v getenforce >/dev/null 2>&1; then
-    local mode
-    mode=$(getenforce || echo "Unknown")
-    log "SELinux mode: ${mode}"
+  
 
-    case "${mode}" in
-      Enforcing|Permissive)
-        log "Applying SELinux context httpd_sys_content_t to ${MOUNT_POINT}/repo"
-        semanage fcontext -a -t httpd_sys_content_t "${MOUNT_POINT}/repo(/.*)?" || \
-          log "WARNING: semanage failed. Check if policycoreutils-python-utils is installed."
-        restorecon -Rv "${MOUNT_POINT}/repo" || \
-          log "WARNING: restorecon failed. Check SELinux configuration."
-        ;;
-      *)
-        log "SELinux not enforcing or permissive. Skipping context configuration."
-        ;;
-    esac
-  else
-    log "getenforce not available. Assuming SELinux not in use, skipping."
-  fi
-}
+  <script type="application/json" id="client-env">{"locale":"en","featureFlags":["a11y_status_checks_ruleset","actions_custom_images_public_preview_visibility","actions_custom_images_storage_billing_ui_visibility","actions_enable_snapshot_keyword","actions_image_version_event","alternate_user_config_repo","api_insights_show_missing_data_banner","arianotify_comprehensive_migration","arianotify_partial_migration","billing_budget_pagination_enabled","billing_hard_budget_limits_for_licenses","client_version_header","codespaces_prebuild_region_target_update","contentful_lp_footnotes","copilot_agent_cli_public_preview","copilot_agent_task_list_v2","copilot_agent_tasks_btn_code_nav","copilot_agent_tasks_btn_code_view","copilot_agent_tasks_btn_code_view_lines","copilot_agent_tasks_btn_repo","copilot_api_agentic_issue_marshal_yaml","copilot_api_draft_issues_with_dependencies","copilot_api_github_draft_update_issue_skill","copilot_byok","copilot_byok_capabilities","copilot_chat_agents_empty_state","copilot_chat_attach_multiple_images","copilot_chat_disable_model_picker_while_streaming","copilot_chat_file_redirect","copilot_chat_input_commands","copilot_chat_opening_thread_switch","copilot_chat_reduce_quota_checks","copilot_chat_search_bar_redirect","copilot_chat_selection_attachments","copilot_chat_vision_in_claude","copilot_chat_vision_preview_gate","copilot_coding_agent_task_response","copilot_custom_copilots","copilot_custom_copilots_feature_preview","copilot_duplicate_thread","copilot_extensions_hide_in_dotcom_chat","copilot_extensions_removal_on_marketplace","copilot_features_raycast_logo","copilot_file_block_ref_matching","copilot_ftp_hyperspace_upgrade_prompt","copilot_ftp_settings_upgrade","copilot_immersive_generate_thread_name_async","copilot_immersive_issues_readonly_viewer","copilot_immersive_issues_show_relationships","copilot_immersive_structured_model_picker","copilot_immersive_task_hyperlinking","copilot_immersive_task_within_chat_thread","copilot_issue_list_show_more","copilot_org_policy_page_focus_mode","copilot_pipes_code_nodes","copilot_pipes_github_graphql_nodes","copilot_premium_request_quotas","copilot_security_alert_assignee_options","copilot_share_active_subthread","copilot_spaces_as_attachments","copilot_spaces_ga","copilot_spark_empty_state","copilot_spark_loading_webgl","copilot_spark_progressive_error_handling","copilot_spark_use_billing_headers","copilot_stable_conversation_view","copilot_swe_agent_progress_commands","copilot_swe_agent_use_subagents","copilot_workbench_agent_seed_tool","copilot_workbench_agent_user_edit_awareness","copilot_workbench_cache","copilot_workbench_preview_analytics","copilot_workbench_use_single_prompt","data_router_force_refetch_on_navigation","direct_to_salesforce","disable_dashboard_universe_2025_private_preview","dom_node_counts","dotcom_chat_client_side_skills","enterprise_ai_controls","failbot_report_error_react_apps_on_page","failbot_verify_history_replace_state","fetch_graphql_improved_error_serialization","fgpat_permissions_selector_redesign","ghost_pilot_confidence_truncation_25","ghost_pilot_confidence_truncation_40","global_search_multi_orgs","global_sso_banner","global_sso_banner_dismiss_dialog","hyperspace_2025_logged_out_batch_1","hyperspace_nudges_universe25","hyperspace_nudges_universe25_post_event","initial_per_page_pagination_updates","inp_reduced_threshold","issue_fields_report_usage","issues_expanded_file_types","issues_lazy_load_comment_box_suggestions","issues_react_bots_timeline_pagination","issues_react_include_bots_in_pickers","issues_react_prohibit_title_fallback","issues_report_sidebar_interactions","issues_sticky_sidebar","issues_template_copilot_assignment","item_picker_label_tsq_migration","item_picker_project_tsq_migration","kb_convert_to_space","kb_semantic_api_migration","lifecycle_label_name_updates","link_contact_sales_swp_marketo","marketing_pages_search_explore_provider","mcp_registry_install","mcp_registry_oss_v0_1_api","memex_default_issue_create_repository","memex_grouped_by_edit_route","memex_mwl_filter_field_delimiter","memex_roadmap_drag_style","mission_control_use_body_html","new_traffic_page_banner","open_agent_session_in_vscode_insiders","open_agent_session_in_vscode_stable","pinned_issue_fields","pr_react_loading_optimizations","pr_sfv_new_diff_fetch","primer_react_segmented_control_tooltip","projects_assignee_max_limit","react_fetch_graphql_ignore_expected_errors","record_sso_banner_metrics","repos_insights_remove_new_url","repository_suggester_elastic_search","ruleset_deletion_confirmation","sample_network_conn_type","scheduled_reminders_updated_limits","site_features_copilot_universe","site_homepage_collaborate_video","site_homepage_contentful","site_homepage_eyebrow_banner","site_homepage_universe_animations","site_msbuild_webgl_hero","spark_agent_max_output_tokens_error","spark_fix_rename","spark_force_push_after_checkout","spark_improve_image_upload","spark_kv_encocoded_keys","spark_show_data_access_on_publish","spark_sync_repository_after_iteration","viewscreen_sandbox","webp_support","workbench_store_readonly"],"login":"MarvinFS","copilotApiOverrideUrl":"https://api.individual.githubcopilot.com"}</script>
+<script crossorigin="anonymous" type="application/javascript" src="https://github.githubassets.com/assets/wp-runtime-1b454873a246.js" defer="defer"></script>
+<script crossorigin="anonymous" type="application/javascript" src="https://github.githubassets.com/assets/913-ca2305638c53.js" defer="defer"></script>
+<script crossorigin="anonymous" type="application/javascript" src="https://github.githubassets.com/assets/6488-de87864e6818.js" defer="defer"></script>
+<script crossorigin="anonymous" type="application/javascript" src="https://github.githubassets.com/assets/environment-e9bc8febbcb8.js" defer="defer"></script>
+<script crossorigin="anonymous" type="application/javascript" src="https://github.githubassets.com/assets/11683-aa3d1ebe6648.js" defer="defer"></script>
+<script crossorigin="anonymous" type="application/javascript" src="https://github.githubassets.com/assets/43784-4652ae97a661.js" defer="defer"></script>
+<script crossorigin="anonymous" type="application/javascript" src="https://github.githubassets.com/assets/4712-809eac2badf7.js" defer="defer"></script>
+<script crossorigin="anonymous" type="application/javascript" src="https://github.githubassets.com/assets/81028-5b8c5e07a4fa.js" defer="defer"></script>
+<script crossorigin="anonymous" type="application/javascript" src="https://github.githubassets.com/assets/74911-6a311b93ee8e.js" defer="defer"></script>
+<script crossorigin="anonymous" type="application/javascript" src="https://github.githubassets.com/assets/91853-b5d2e5602241.js" defer="defer"></script>
+<script crossorigin="anonymous" type="application/javascript" src="https://github.githubassets.com/assets/78143-31968346cf4c.js" defer="defer"></script>
+<script crossorigin="anonymous" type="application/javascript" src="https://github.githubassets.com/assets/52430-c46e2de36eb2.js" defer="defer"></script>
+<script crossorigin="anonymous" type="application/javascript" src="https://github.githubassets.com/assets/github-elements-5b3e77949adb.js" defer="defer"></script>
+<script crossorigin="anonymous" type="application/javascript" src="https://github.githubassets.com/assets/element-registry-addcfb9f223a.js" defer="defer"></script>
+<script crossorigin="anonymous" type="application/javascript" src="https://github.githubassets.com/assets/28546-ee41c9313871.js" defer="defer"></script>
+<script crossorigin="anonymous" type="application/javascript" src="https://github.githubassets.com/assets/17688-a9e16fb5ed13.js" defer="defer"></script>
+<script crossorigin="anonymous" type="application/javascript" src="https://github.githubassets.com/assets/2869-a4ba8f17edb3.js" defer="defer"></script>
+<script crossorigin="anonymous" type="application/javascript" src="https://github.githubassets.com/assets/70191-5122bf27bf3e.js" defer="defer"></script>
+<script crossorigin="anonymous" type="application/javascript" src="https://github.githubassets.com/assets/7332-5ea4ccf72018.js" defer="defer"></script>
+<script crossorigin="anonymous" type="application/javascript" src="https://github.githubassets.com/assets/3561-d56ebea34f95.js" defer="defer"></script>
+<script crossorigin="anonymous" type="application/javascript" src="https://github.githubassets.com/assets/19037-69d630e73af8.js" defer="defer"></script>
+<script crossorigin="anonymous" type="application/javascript" src="https://github.githubassets.com/assets/89708-7e15c2dde8ff.js" defer="defer"></script>
+<script crossorigin="anonymous" type="application/javascript" src="https://github.githubassets.com/assets/51519-dc0d4e14166a.js" defer="defer"></script>
+<script crossorigin="anonymous" type="application/javascript" src="https://github.githubassets.com/assets/7534-e77ef16596b9.js" defer="defer"></script>
+<script crossorigin="anonymous" type="application/javascript" src="https://github.githubassets.com/assets/96384-750ef5263abe.js" defer="defer"></script>
+<script crossorigin="anonymous" type="application/javascript" src="https://github.githubassets.com/assets/19718-676a65610616.js" defer="defer"></script>
+<script crossorigin="anonymous" type="application/javascript" src="https://github.githubassets.com/assets/behaviors-970a6d0490b7.js" defer="defer"></script>
+<script crossorigin="anonymous" type="application/javascript" src="https://github.githubassets.com/assets/48011-5b6f71a93de7.js" defer="defer"></script>
+<script crossorigin="anonymous" type="application/javascript" src="https://github.githubassets.com/assets/notifications-global-eb21f5b0029d.js" defer="defer"></script>
+<script crossorigin="anonymous" type="application/javascript" src="https://github.githubassets.com/assets/31615-7b7b4b278091.js" defer="defer"></script>
+<script crossorigin="anonymous" type="application/javascript" src="https://github.githubassets.com/assets/code-menu-67717e88b7e6.js" defer="defer"></script>
+  
+  <script crossorigin="anonymous" type="application/javascript" src="https://github.githubassets.com/assets/primer-react-1d943c070f89.js" defer="defer"></script>
+<script crossorigin="anonymous" type="application/javascript" src="https://github.githubassets.com/assets/react-lib-760965ba27bb.js" defer="defer"></script>
+<script crossorigin="anonymous" type="application/javascript" src="https://github.githubassets.com/assets/react-core-6bff7e7eaf4e.js" defer="defer"></script>
+<script crossorigin="anonymous" type="application/javascript" src="https://github.githubassets.com/assets/octicons-react-a215e6ee021a.js" defer="defer"></script>
+<script crossorigin="anonymous" type="application/javascript" src="https://github.githubassets.com/assets/58267-d3b3e418eb9c.js" defer="defer"></script>
+<script crossorigin="anonymous" type="application/javascript" src="https://github.githubassets.com/assets/48775-3cc79d2cd30e.js" defer="defer"></script>
+<script crossorigin="anonymous" type="application/javascript" src="https://github.githubassets.com/assets/42892-9fe102b0683f.js" defer="defer"></script>
+<script crossorigin="anonymous" type="application/javascript" src="https://github.githubassets.com/assets/23832-db66abd83e08.js" defer="defer"></script>
+<script crossorigin="anonymous" type="application/javascript" src="https://github.githubassets.com/assets/99418-9d4961969e0d.js" defer="defer"></script>
+<script crossorigin="anonymous" type="application/javascript" src="https://github.githubassets.com/assets/33915-05ba9b3edc31.js" defer="defer"></script>
+<script crossorigin="anonymous" type="application/javascript" src="https://github.githubassets.com/assets/96537-8e29101f7d81.js" defer="defer"></script>
+<script crossorigin="anonymous" type="application/javascript" src="https://github.githubassets.com/assets/51220-ec5733320b36.js" defer="defer"></script>
+<script crossorigin="anonymous" type="application/javascript" src="https://github.githubassets.com/assets/32219-236f5281aec8.js" defer="defer"></script>
+<script crossorigin="anonymous" type="application/javascript" src="https://github.githubassets.com/assets/59579-2ea999aac712.js" defer="defer"></script>
+<script crossorigin="anonymous" type="application/javascript" src="https://github.githubassets.com/assets/25407-c730eb15ec58.js" defer="defer"></script>
+<script crossorigin="anonymous" type="application/javascript" src="https://github.githubassets.com/assets/81929-030492d8699e.js" defer="defer"></script>
+<script crossorigin="anonymous" type="application/javascript" src="https://github.githubassets.com/assets/40771-4c4aab5809d1.js" defer="defer"></script>
+<script crossorigin="anonymous" type="application/javascript" src="https://github.githubassets.com/assets/66990-27ecfaeccb1f.js" defer="defer"></script>
+<script crossorigin="anonymous" type="application/javascript" src="https://github.githubassets.com/assets/29665-62ce2fd15aa9.js" defer="defer"></script>
+<script crossorigin="anonymous" type="application/javascript" src="https://github.githubassets.com/assets/6623-178929f2cfc3.js" defer="defer"></script>
+<script crossorigin="anonymous" type="application/javascript" src="https://github.githubassets.com/assets/19976-d9a685a90a0d.js" defer="defer"></script>
+<script crossorigin="anonymous" type="application/javascript" src="https://github.githubassets.com/assets/3774-e23e5aa0808e.js" defer="defer"></script>
+<script crossorigin="anonymous" type="application/javascript" src="https://github.githubassets.com/assets/18406-85a4d432416b.js" defer="defer"></script>
+<script crossorigin="anonymous" type="application/javascript" src="https://github.githubassets.com/assets/36584-ae5a2e336b6d.js" defer="defer"></script>
+<script crossorigin="anonymous" type="application/javascript" src="https://github.githubassets.com/assets/29806-96d8fc477230.js" defer="defer"></script>
+<script crossorigin="anonymous" type="application/javascript" src="https://github.githubassets.com/assets/react-code-view-ba8c0b5e7b96.js" defer="defer"></script>
+<link crossorigin="anonymous" media="all" rel="stylesheet" href="https://github.githubassets.com/assets/primer-react.95c095f938576ec73363.module.css" />
+<link crossorigin="anonymous" media="all" rel="stylesheet" href="https://github.githubassets.com/assets/react-code-view.5fabe269aba9949ea13c.module.css" />
 
-# -------------------------
-# FIREWALLD
-# -------------------------
-configure_firewall() {
-  if systemctl is-active --quiet firewalld; then
-    log "Opening HTTP service in firewalld"
-    firewall-cmd --add-service=http --permanent || \
-      log "WARNING: failed to add http service to firewalld."
-    firewall-cmd --reload || \
-      log "WARNING: failed to reload firewalld."
-  else
-    log "firewalld is not active. Skipping firewall configuration."
-  fi
-}
 
-# -------------------------
-# CONNECTIVITY CHECKS
-# -------------------------
-check_connectivity() {
-  if ! command -v curl >/dev/null 2>&1; then
-    log "curl not available for connectivity checks. Skipping."
-    return
-  fi
+  <title>scripts/VSA repo/vsa_repo.sh at main · MarvinFS/scripts</title>
 
-  log "Checking local HTTP access to repo paths"
 
-  local urls=(
-    "http://${REPO_HOSTNAME_SHORT}/vsa/${OS_VERSION}/vbr/${VBR_VERSION}/mandatory/"
-    "http://${REPO_HOSTNAME_FQDN}/vsa/${OS_VERSION}/vbr/${VBR_VERSION}/mandatory/"
-    "http://${REPO_HOST_IP}/vsa/${OS_VERSION}/vbr/${VBR_VERSION}/mandatory/"
-  )
 
-  local u
-  for u in "${urls[@]}"; do
-    log "  - curl -I ${u}"
-    if curl -I -s "${u}" >/dev/null; then
-      log "    OK: ${u}"
-    else
-      log "    WARNING: failed to connect to ${u}"
-    fi
-  done
-}
+  <meta name="route-pattern" content="/:user_id/:repository/blob/*name(/*path)" data-turbo-transient>
+  <meta name="route-controller" content="blob" data-turbo-transient>
+  <meta name="route-action" content="show" data-turbo-transient>
+  <meta name="fetch-nonce" content="v2:abf33aa6-6e52-b46c-7070-ed465b4a8af0">
 
-# -------------------------
-# SYSTEMD SERVICE + TIMER
-# -------------------------
-create_systemd_units() {
-  log "Creating systemd service at ${SYSTEMD_SERVICE}"
+    
+  <meta name="current-catalog-service-hash" content="f3abb0cc802f3d7b95fc8762b94bdcb13bf39634c40c357301c4aa1d67a256fb">
 
-  tee "${SYSTEMD_SERVICE}" >/dev/null <<EOF
-[Unit]
-Description=Veeam VSA repository mirror sync
-Documentation=file:${REPOSYNC_SCRIPT}
-Wants=network-online.target
-After=network-online.target
 
-[Service]
-Type=oneshot
-ExecStart=${REPOSYNC_SCRIPT}
-Nice=10
-IOSchedulingClass=best-effort
-IOSchedulingPriority=7
-EOF
+  <meta name="request-id" content="46BE:2D9328:15BABE3:1325209:692464BC" data-turbo-transient="true" /><meta name="html-safe-nonce" content="58aa53650da0eca229df233989139a4552539294a922aa8163cb336afaa1df42" data-turbo-transient="true" /><meta name="visitor-payload" content="eyJyZWZlcnJlciI6Imh0dHBzOi8vZ2l0aHViLmNvbS9NYXJ2aW5GUy9zY3JpcHRzL3RyZWUvbWFpbi9WU0ElMjByZXBvIiwicmVxdWVzdF9pZCI6IjQ2QkU6MkQ5MzI4OjE1QkFCRTM6MTMyNTIwOTo2OTI0NjRCQyIsInZpc2l0b3JfaWQiOiI1MTM0Mjk2NTI0MDU4NTE2OTAzIiwicmVnaW9uX2VkZ2UiOiJmcmEiLCJyZWdpb25fcmVuZGVyIjoiaWFkIn0=" data-turbo-transient="true" /><meta name="visitor-hmac" content="9359aa71daf83a9793422a3746fb9824212ed691235e76d2159e92414ba6439e" data-turbo-transient="true" />
 
-  log "Creating systemd timer at ${SYSTEMD_TIMER}"
 
-  tee "${SYSTEMD_TIMER}" >/dev/null <<EOF
-[Unit]
-Description=Run Veeam VSA repository mirror sync hourly
+    <meta name="hovercard-subject-tag" content="repository:1102294399" data-turbo-transient>
 
-[Timer]
-OnBootSec=15min
-OnUnitActiveSec=1h
-Unit=veeam-vsa-reposync.service
-Persistent=true
 
-[Install]
-WantedBy=timers.target
-EOF
+  <meta name="github-keyboard-shortcuts" content="repository,source-code,file-tree,copilot" data-turbo-transient="true" />
+  
 
-  log "Reloading systemd units and enabling timer"
-  systemctl daemon-reload
-  systemctl enable --now veeam-vsa-reposync.timer
-}
+  <meta name="selected-link" value="repo_source" data-turbo-transient>
+  <link rel="assets" href="https://github.githubassets.com/">
 
-# -------------------------
-# MAIN
-# -------------------------
-main() {
-  require_root
-  check_os
-  check_dnf
+    <meta name="google-site-verification" content="Apib7-x98H0j5cPqHWwSMm6dNU4GmODRoqxLiDzdx9I">
 
-  # 1) Disk and filesystem setup
-  prepare_disk
-  ensure_mountpoint
-  ensure_fstab_entry
-  mount_data_fs
+<meta name="octolytics-url" content="https://collector.github.com/github/collect" /><meta name="octolytics-actor-id" content="7998636" /><meta name="octolytics-actor-login" content="MarvinFS" /><meta name="octolytics-actor-hash" content="9ce2d6a60f6d9e3291b9597f0f63881d6f3165c05948d67b0c3d14b429166751" />
 
-  # 2) Package installation
-  install_core_packages
+  <meta name="analytics-location" content="/&lt;user-name&gt;/&lt;repo-name&gt;/blob/show" data-turbo-transient="true" />
 
-  # 3) Upstream repo configuration
-  create_upstream_repo_file
+  
 
-  # 4) Reposync script generation (with injected configuration)
-  create_reposync_script
 
-  # 5) Directory preparation
-  log "Ensuring repo root directory ${REPO_ROOT}"
-  mkdir -p "${REPO_ROOT}"
-  chown root:root "${MOUNT_POINT}" "${MOUNT_POINT}/repo" "${REPO_ROOT}" || true
-  chmod 0755 "${MOUNT_POINT}" "${MOUNT_POINT}/repo" "${REPO_ROOT}" || true
 
-  # 6) Network and security configuration
-  configure_nginx
-  configure_selinux
-  configure_firewall
 
-  # 7) Systemd automation setup
-  create_systemd_units
+    <meta name="user-login" content="MarvinFS">
 
-  # 8) Connectivity test
-  check_connectivity
+  <link rel="sudo-modal" href="/sessions/sudo_modal">
 
-  log "============================================================"
-  log "Veeam VSA mirror setup completed."
-  log "Serve URL examples:"
-  log "  http://${REPO_HOSTNAME_SHORT}/vsa"
-  log "  http://${REPO_HOSTNAME_FQDN}/vsa"
-  log "  http://${REPO_HOST_IP}/vsa"
-  log ""
-  log "Hourly sync is handled by systemd timer: veeam-vsa-reposync.timer"
-  log "Check status with: systemctl status veeam-vsa-reposync.timer"
-  log "You need to run initial repo-sync (this will download ~30 GB on first run) with:"
-  log "${REPOSYNC_SCRIPT}"
-  log "============================================================"
-}
+    <meta name="viewport" content="width=device-width">
 
-main "$@"
+    
+
+      <meta name="description" content="Contribute to MarvinFS/scripts development by creating an account on GitHub.">
+
+      <link rel="search" type="application/opensearchdescription+xml" href="/opensearch.xml" title="GitHub">
+
+    <link rel="fluid-icon" href="https://github.com/fluidicon.png" title="GitHub">
+    <meta property="fb:app_id" content="1401488693436528">
+    <meta name="apple-itunes-app" content="app-id=1477376905, app-argument=https://github.com/MarvinFS/scripts/blob/main/VSA%20repo/vsa_repo.sh" />
+
+      <meta name="twitter:image" content="https://avatars.githubusercontent.com/u/7998636?s=400&amp;v=4" /><meta name="twitter:site" content="@github" /><meta name="twitter:card" content="summary" /><meta name="twitter:title" content="scripts/VSA repo/vsa_repo.sh at main · MarvinFS/scripts" /><meta name="twitter:description" content="Contribute to MarvinFS/scripts development by creating an account on GitHub." />
+  <meta property="og:image" content="https://avatars.githubusercontent.com/u/7998636?s=400&amp;v=4" /><meta property="og:image:alt" content="Contribute to MarvinFS/scripts development by creating an account on GitHub." /><meta property="og:site_name" content="GitHub" /><meta property="og:type" content="object" /><meta property="og:title" content="scripts/VSA repo/vsa_repo.sh at main · MarvinFS/scripts" /><meta property="og:url" content="https://github.com/MarvinFS/scripts/blob/main/VSA%20repo/vsa_repo.sh" /><meta property="og:description" content="Contribute to MarvinFS/scripts development by creating an account on GitHub." />
+  
+
+
+      <link rel="shared-web-socket" href="wss://alive.github.com/_sockets/u/7998636/ws?session=eyJ2IjoiVjMiLCJ1Ijo3OTk4NjM2LCJzIjoxODc1MzMzMzIwLCJjIjoyMTExOTg5NTk0LCJ0IjoxNzYzOTkyNzc3fQ==--8d05ba4a267a5570d432fa8dd81b0784fa7f1161c6b7f9b60c25754fcaf5af80" data-refresh-url="/_alive" data-session-id="182112708a51e245dd23cf820b2201ad292731083bdefa760a70d523b43a4739">
+      <link rel="shared-web-socket-src" href="/assets-cdn/worker/socket-worker-2a038060e454.js">
+
+
+      <meta name="hostname" content="github.com">
+
+
+      <meta name="keyboard-shortcuts-preference" content="all">
+      <meta name="hovercards-preference" content="true">
+      <meta name="announcement-preference-hovercard" content="true">
+
+        <meta name="expected-hostname" content="github.com">
+
+
+  <meta http-equiv="x-pjax-version" content="35a74d56ce18e9d23f2ac020bc18906440e10c1822356e533e3b1674434359a9" data-turbo-track="reload">
+  <meta http-equiv="x-pjax-csp-version" content="21a43568025709b66240454fc92d4f09335a96863f8ab1c46b4a07f6a5b67102" data-turbo-track="reload">
+  <meta http-equiv="x-pjax-css-version" content="8487fec39c8c06b815832ce80ebd89387f6b3bac9b5498b820bc97b9a51ed30a" data-turbo-track="reload">
+  <meta http-equiv="x-pjax-js-version" content="755c85d36b2e9f4a4229fea422ac1abb9fefa83beaeae421dab9321951726c0e" data-turbo-track="reload">
+
+  <meta name="turbo-cache-control" content="no-preview" data-turbo-transient="">
+
+      <meta name="turbo-cache-control" content="no-cache" data-turbo-transient>
+
+    <meta data-hydrostats="publish">
+
+  <meta name="go-import" content="github.com/MarvinFS/scripts git https://github.com/MarvinFS/scripts.git">
+
+  <meta name="octolytics-dimension-user_id" content="7998636" /><meta name="octolytics-dimension-user_login" content="MarvinFS" /><meta name="octolytics-dimension-repository_id" content="1102294399" /><meta name="octolytics-dimension-repository_nwo" content="MarvinFS/scripts" /><meta name="octolytics-dimension-repository_public" content="false" /><meta name="octolytics-dimension-repository_is_fork" content="false" /><meta name="octolytics-dimension-repository_network_root_id" content="1102294399" /><meta name="octolytics-dimension-repository_network_root_nwo" content="MarvinFS/scripts" />
+
+
+
+    
+
+    <meta name="turbo-body-classes" content="logged-in env-production page-responsive">
+  <meta name="disable-turbo" content="false">
+
+
+  <meta name="browser-stats-url" content="https://api.github.com/_private/browser/stats">
+
+  <meta name="browser-errors-url" content="https://api.github.com/_private/browser/errors">
+
+  <meta name="release" content="dceb755cffea0c985ff251ad7d93a43966081204">
+  <meta name="ui-target" content="full">
+
+  <link rel="mask-icon" href="https://github.githubassets.com/assets/pinned-octocat-093da3e6fa40.svg" color="#000000">
+  <link rel="alternate icon" class="js-site-favicon" type="image/png" href="https://github.githubassets.com/favicons/favicon.png">
+  <link rel="icon" class="js-site-favicon" type="image/svg+xml" href="https://github.githubassets.com/favicons/favicon.svg" data-base-href="https://github.githubassets.com/favicons/favicon">
+
+<meta name="theme-color" content="#1e2327">
+<meta name="color-scheme" content="light dark" />
+
+
+  <link rel="manifest" href="/manifest.json" crossOrigin="use-credentials">
+
+  </head>
+
+  <body class="logged-in env-production page-responsive" style="word-wrap: break-word;" >
+    <div data-turbo-body class="logged-in env-production page-responsive" style="word-wrap: break-word;" >
+        <div id="__primerPortalRoot__" role="region" style="z-index: 1000; position: absolute; width: 100%;" data-turbo-permanent></div>
+      
+
+
+
+    <div class="position-relative header-wrapper js-header-wrapper ">
+      <a href="#start-of-content" data-skip-target-assigned="false" class="p-3 color-bg-accent-emphasis color-fg-on-emphasis show-on-focus js-skip-to-content">Skip to content</a>
+
+      <span data-view-component="true" class="progress-pjax-loader Progress position-fixed width-full">
+    <span style="width: 0%;" data-view-component="true" class="Progress-item progress-pjax-loader-bar left-0 top-0 color-bg-accent-emphasis"></span>
+</span>      
+      
+      <link crossorigin="anonymous" media="all" rel="stylesheet" href="https://github.githubassets.com/assets/primer-react.95c095f938576ec73363.module.css" />
+<link crossorigin="anonymous" media="all" rel="stylesheet" href="https://github.githubassets.com/assets/keyboard-shortcuts-dialog.29aaeaafa90f007c6f61.module.css" />
+
+<react-partial
+  partial-name="keyboard-shortcuts-dialog"
+  data-ssr="false"
+  data-attempted-ssr="false"
+  data-react-profiling="false"
+>
+  
+  <script type="application/json" data-target="react-partial.embeddedData">{"props":{"docsUrl":"https://docs.github.com/get-started/accessibility/keyboard-shortcuts"}}</script>
+  <div data-target="react-partial.reactRoot"></div>
+</react-partial>
+
+
+
+
+
+      
+
+          
+
+                  <header class="AppHeader" role="banner">
+      <h2 class="sr-only">Navigation Menu</h2>
+
+
+        
+
+        <div class="AppHeader-globalBar pb-2  js-global-bar">
+          <div class="AppHeader-globalBar-start responsive-context-region">
+            <div class="">
+                      <react-partial-anchor>
+        <button data-target="react-partial-anchor.anchor" aria-label="Open global navigation menu" show_tooltip="false" type="button" data-view-component="true" class="AppHeader-button Button--secondary Button--medium Button p-0 color-fg-muted">  <span class="Button-content">
+    <span class="Button-label"><svg aria-hidden="true" height="16" viewBox="0 0 16 16" version="1.1" width="16" data-view-component="true" class="octicon octicon-three-bars">
+    <path d="M1 2.75A.75.75 0 0 1 1.75 2h12.5a.75.75 0 0 1 0 1.5H1.75A.75.75 0 0 1 1 2.75Zm0 5A.75.75 0 0 1 1.75 7h12.5a.75.75 0 0 1 0 1.5H1.75A.75.75 0 0 1 1 7.75ZM1.75 12h12.5a.75.75 0 0 1 0 1.5H1.75a.75.75 0 0 1 0-1.5Z"></path>
+</svg></span>
+  </span>
+</button>
+        <template data-target="react-partial-anchor.template">
+          <link crossorigin="anonymous" media="all" rel="stylesheet" href="https://github.githubassets.com/assets/primer-react.95c095f938576ec73363.module.css" />
+<link crossorigin="anonymous" media="all" rel="stylesheet" href="https://github.githubassets.com/assets/93156.519b286ced52663f8fe2.module.css" />
+<link crossorigin="anonymous" media="all" rel="stylesheet" href="https://github.githubassets.com/assets/global-nav-menu.e073f1462f845f41ad0d.module.css" />
+
+<react-partial
+  partial-name="global-nav-menu"
+  data-ssr="false"
+  data-attempted-ssr="false"
+  data-react-profiling="true"
+>
+  
+  <script type="application/json" data-target="react-partial.embeddedData">{"props":{"home":{"href":"/dashboard","hotkey":"g d"},"feed":{"show":false,"href":"/feed"},"issues":{"href":"/issues","hotkey":"g i"},"pulls":{"href":"/pulls","hotkey":"g p"},"contributedRepos":{"show":false,"href":null,"hotkey":null},"projects":{"href":"/projects"},"discussions":{"show":true,"href":"/discussions"},"codespaces":{"show":true,"href":"https://github.com/codespaces"},"copilot":{"show":true,"href":"/copilot"},"spark":{"show":false,"href":null},"marketplace":{"show":true,"href":"/marketplace"},"mcp":{"show":true,"href":"https://github.com/mcp"},"explore":{"show":true,"href":"/explore"},"richContent":{"show":true,"contentUrl":"/_side-panels/global.json","repositoriesSearchUrl":"/_side-panel-items/global/repositories.json","teamsSearchUrl":"/_side-panel-items/global/teams.json"}}}</script>
+  <div data-target="react-partial.reactRoot"></div>
+</react-partial>
+
+
+        </template>
+      </react-partial-anchor>
+
+            </div>
+
+            <a class="AppHeader-logo ml-1 "
+              href="https://github.com/"
+              data-hotkey="g d"
+              aria-label="Homepage "
+              data-turbo="false"
+              data-analytics-event="{&quot;category&quot;:&quot;Header&quot;,&quot;action&quot;:&quot;go to dashboard&quot;,&quot;label&quot;:&quot;icon:logo&quot;}"
+            >
+              <svg height="32" aria-hidden="true" viewBox="0 0 24 24" version="1.1" width="32" data-view-component="true" class="octicon octicon-mark-github v-align-middle">
+    <path d="M12 1C5.923 1 1 5.923 1 12c0 4.867 3.149 8.979 7.521 10.436.55.096.756-.233.756-.522 0-.262-.013-1.128-.013-2.049-2.764.509-3.479-.674-3.699-1.292-.124-.317-.66-1.293-1.127-1.554-.385-.207-.936-.715-.014-.729.866-.014 1.485.797 1.691 1.128.99 1.663 2.571 1.196 3.204.907.096-.715.385-1.196.701-1.471-2.448-.275-5.005-1.224-5.005-5.432 0-1.196.426-2.186 1.128-2.956-.111-.275-.496-1.402.11-2.915 0 0 .921-.288 3.024 1.128a10.193 10.193 0 0 1 2.75-.371c.936 0 1.871.123 2.75.371 2.104-1.43 3.025-1.128 3.025-1.128.605 1.513.221 2.64.111 2.915.701.77 1.127 1.747 1.127 2.956 0 4.222-2.571 5.157-5.019 5.432.399.344.743 1.004.743 2.035 0 1.471-.014 2.654-.014 3.025 0 .289.206.632.756.522C19.851 20.979 23 16.854 23 12c0-6.077-4.922-11-11-11Z"></path>
+</svg>
+            </a>
+
+              <context-region-controller
+  class="AppHeader-context responsive-context-region"
+  data-max-items="5"
+  
+>
+  <div class="AppHeader-context-full">
+    <nav role="navigation" aria-label="GitHub Breadcrumb">
+      
+<context-region data-target="context-region-controller.contextRegion" role="list"  data-action="context-region-changed:context-region-controller#crumbsChanged">
+    <context-region-crumb
+      data-crumb-id="contextregion-usercrumb-marvinfs"
+      data-targets="context-region.crumbs"
+      data-label="MarvinFS"
+      data-href="/MarvinFS"
+      data-pre-rendered
+      role="listitem"
+      
+    >
+      <a data-target="context-region-crumb.linkElement" data-analytics-event="{&quot;category&quot;:&quot;SiteHeaderComponent&quot;,&quot;action&quot;:&quot;context_region_crumb&quot;,&quot;label&quot;:&quot;MarvinFS&quot;,&quot;screen_size&quot;:&quot;full&quot;}" data-hovercard-type="user" data-hovercard-url="/users/MarvinFS/hovercard" data-octo-click="hovercard-link-click" data-octo-dimensions="link_type:self" href="/MarvinFS" id="contextregion-usercrumb-marvinfs-link" data-view-component="true" class="AppHeader-context-item">
+        <span data-target="context-region-crumb.labelElement" class="AppHeader-context-item-label ">
+          MarvinFS
+        </span>
+
+</a>
+      <context-region-divider data-target="context-region-crumb.dividerElement" data-pre-rendered >
+  <span class="AppHeader-context-item-separator">
+    <span class="sr-only">/</span>
+    <svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+      <path d="M10.956 1.27994L6.06418 14.7201L5 14.7201L9.89181 1.27994L10.956 1.27994Z" fill="currentcolor" />
+    </svg>
+  </span>
+</context-region-divider>
+
+    </context-region-crumb>
+
+      <li data-target="context-region-controller.overflowMenuContainer context-region.overflowMenuContainer" role="listitem" hidden>
+        <action-menu data-target="context-region-controller.overflowActionMenu" data-select-variant="none" data-view-component="true">
+  <focus-group direction="vertical" mnemonics retain>
+    <button id="action-menu-6c6f350b-32c0-444e-b961-e139ded8a790-button" popovertarget="action-menu-6c6f350b-32c0-444e-b961-e139ded8a790-overlay" aria-controls="action-menu-6c6f350b-32c0-444e-b961-e139ded8a790-list" aria-haspopup="true" aria-labelledby="tooltip-194cdccc-6725-4be2-85e4-d8eb8f1c21e7" type="button" data-view-component="true" class="Button Button--iconOnly Button--secondary Button--medium">  <svg aria-hidden="true" height="16" viewBox="0 0 16 16" version="1.1" width="16" data-view-component="true" class="octicon octicon-kebab-horizontal Button-visual">
+    <path d="M8 9a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3ZM1.5 9a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3Zm13 0a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3Z"></path>
+</svg>
+</button><tool-tip id="tooltip-194cdccc-6725-4be2-85e4-d8eb8f1c21e7" for="action-menu-6c6f350b-32c0-444e-b961-e139ded8a790-button" popover="manual" data-direction="s" data-type="label" data-view-component="true" class="sr-only position-absolute">Show more breadcrumb items</tool-tip>
+
+
+<anchored-position data-target="action-menu.overlay" id="action-menu-6c6f350b-32c0-444e-b961-e139ded8a790-overlay" anchor="action-menu-6c6f350b-32c0-444e-b961-e139ded8a790-button" align="start" side="outside-bottom" anchor-offset="normal" popover="auto" data-view-component="true">
+  <div data-view-component="true" class="Overlay Overlay--size-auto">
+    
+      <div data-view-component="true" class="Overlay-body Overlay-body--paddingNone">          <action-list>
+  <div data-view-component="true">
+    <ul aria-labelledby="action-menu-6c6f350b-32c0-444e-b961-e139ded8a790-button" id="action-menu-6c6f350b-32c0-444e-b961-e139ded8a790-list" role="menu" data-view-component="true" class="ActionListWrap--inset ActionListWrap">
+        <li hidden="hidden" data-crumb-id="contextregion-usercrumb-marvinfs" data-targets="context-region.overflowCrumbs action-list.items" data-analytics-event="{&quot;category&quot;:&quot;SiteHeaderComponent&quot;,&quot;action&quot;:&quot;context_region_overflow_menu_crumb&quot;,&quot;label&quot;:&quot;global-navigation&quot;}" role="none" data-view-component="true" class="ActionListItem">
+    
+    
+    <a tabindex="-1" id="item-6b7b9af8-19b3-4fce-b28f-27669ea56dd4" href="/MarvinFS" role="menuitem" data-view-component="true" class="ActionListContent">
+      
+        <span data-view-component="true" class="ActionListItem-label">
+          MarvinFS
+</span>      
+</a>
+  
+</li>
+        <li hidden="hidden" data-crumb-id="contextregion-repositorycrumb-scripts" data-targets="context-region.overflowCrumbs action-list.items" data-analytics-event="{&quot;category&quot;:&quot;SiteHeaderComponent&quot;,&quot;action&quot;:&quot;context_region_overflow_menu_crumb&quot;,&quot;label&quot;:&quot;global-navigation&quot;}" role="none" data-view-component="true" class="ActionListItem">
+    
+    
+    <a tabindex="-1" id="item-6bd9464f-b1a1-4a11-90ac-4e8612561822" href="/MarvinFS/scripts" role="menuitem" data-view-component="true" class="ActionListContent">
+      
+        <span data-view-component="true" class="ActionListItem-label">
+          scripts
+</span>      
+</a>
+  
+</li>
+</ul>    
+</div></action-list>
+
+
+</div>
+      
+</div></anchored-position>  </focus-group>
+</action-menu>
+  <context-region-divider data-target="context-region-crumb.dividerElement" data-pre-rendered >
+  <span class="AppHeader-context-item-separator">
+    <span class="sr-only">/</span>
+    <svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+      <path d="M10.956 1.27994L6.06418 14.7201L5 14.7201L9.89181 1.27994L10.956 1.27994Z" fill="currentcolor" />
+    </svg>
+  </span>
+</context-region-divider>
+
+
+      </li>
+    <context-region-crumb
+      data-crumb-id="contextregion-repositorycrumb-scripts"
+      data-targets="context-region.crumbs"
+      data-label="scripts"
+      data-href="/MarvinFS/scripts"
+      data-pre-rendered
+      role="listitem"
+      
+    >
+      <a data-target="context-region-crumb.linkElement" data-analytics-event="{&quot;category&quot;:&quot;SiteHeaderComponent&quot;,&quot;action&quot;:&quot;context_region_crumb&quot;,&quot;label&quot;:&quot;scripts&quot;,&quot;screen_size&quot;:&quot;full&quot;}" href="/MarvinFS/scripts" id="contextregion-repositorycrumb-scripts-link" data-view-component="true" class="AppHeader-context-item">
+        <span data-target="context-region-crumb.labelElement" class="AppHeader-context-item-label ">
+          scripts
+        </span>
+
+          <svg data-target="context-region-crumb.trailingIcon" aria-hidden="true" height="12" viewBox="0 0 16 16" version="1.1" width="12" data-view-component="true" class="octicon octicon-lock ml-1">
+    <path d="M4 4a4 4 0 0 1 8 0v2h.25c.966 0 1.75.784 1.75 1.75v5.5A1.75 1.75 0 0 1 12.25 15h-8.5A1.75 1.75 0 0 1 2 13.25v-5.5C2 6.784 2.784 6 3.75 6H4Zm8.25 3.5h-8.5a.25.25 0 0 0-.25.25v5.5c0 .138.112.25.25.25h8.5a.25.25 0 0 0 .25-.25v-5.5a.25.25 0 0 0-.25-.25ZM10.5 6V4a2.5 2.5 0 1 0-5 0v2Z"></path>
+</svg>
+</a>
+      <context-region-divider data-target="context-region-crumb.dividerElement" data-pre-rendered >
+  <span class="AppHeader-context-item-separator">
+    <span class="sr-only">/</span>
+    <svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+      <path d="M10.956 1.27994L6.06418 14.7201L5 14.7201L9.89181 1.27994L10.956 1.27994Z" fill="currentcolor" />
+    </svg>
+  </span>
+</context-region-divider>
+
+    </context-region-crumb>
+
+</context-region>
+
+    </nav>
+  </div>
+</context-region-controller>
+
+          </div>
+          <div class="AppHeader-globalBar-end">
+              <div class="AppHeader-search" >
+                  
+
+
+<qbsearch-input class="search-input" data-scope="repo:MarvinFS/scripts" data-custom-scopes-path="/search/custom_scopes" data-delete-custom-scopes-csrf="Wof6QOM9NfGj4QDOH0tQ5ELyUNIu6oD3uhC54snB8SQD20BSgv1BQlhF-LGA8oif2kWi_0rKf1yPD7c8P3YAig" data-max-custom-scopes="10" data-header-redesign-enabled="true" data-initial-value="" data-blackbird-suggestions-path="/search/suggestions" data-jump-to-suggestions-path="/_graphql/GetSuggestedNavigationDestinations" data-current-repository="MarvinFS/scripts" data-current-org="" data-current-owner="MarvinFS" data-logged-in="true" data-copilot-chat-enabled="true" data-nl-search-enabled="false">
+  <div
+    class="search-input-container search-with-dialog position-relative d-flex flex-row flex-items-center height-auto color-bg-transparent border-0 color-fg-subtle mx-0"
+    data-action="click:qbsearch-input#searchInputContainerClicked"
+  >
+        
+              <button type="button" data-action="click:qbsearch-input#handleExpand" class="AppHeader-button AppHeader-search-whenNarrow" aria-label="Search or jump to…" aria-expanded="false" aria-haspopup="dialog">
+              <svg aria-hidden="true" height="16" viewBox="0 0 16 16" version="1.1" width="16" data-view-component="true" class="octicon octicon-search">
+    <path d="M10.68 11.74a6 6 0 0 1-7.922-8.982 6 6 0 0 1 8.982 7.922l3.04 3.04a.749.749 0 0 1-.326 1.275.749.749 0 0 1-.734-.215ZM11.5 7a4.499 4.499 0 1 0-8.997 0A4.499 4.499 0 0 0 11.5 7Z"></path>
+</svg>
+            </button>
+
+
+<div class="AppHeader-search-whenRegular">
+  <div class="AppHeader-search-wrap AppHeader-search-wrap--hasTrailing">
+    <div class="AppHeader-search-control AppHeader-search-control-overflow">
+      <label
+        for="AppHeader-searchInput"
+        aria-label="Search or jump to…"
+        class="AppHeader-search-visual--leading"
+      >
+        <svg aria-hidden="true" height="16" viewBox="0 0 16 16" version="1.1" width="16" data-view-component="true" class="octicon octicon-search">
+    <path d="M10.68 11.74a6 6 0 0 1-7.922-8.982 6 6 0 0 1 8.982 7.922l3.04 3.04a.749.749 0 0 1-.326 1.275.749.749 0 0 1-.734-.215ZM11.5 7a4.499 4.499 0 1 0-8.997 0A4.499 4.499 0 0 0 11.5 7Z"></path>
+</svg>
+      </label>
+
+                  <button
+              type="button"
+              data-target="qbsearch-input.inputButton"
+              data-action="click:qbsearch-input#handleExpand"
+              class="AppHeader-searchButton form-control text-left color-fg-subtle no-wrap"
+              data-hotkey="s,/"
+              data-analytics-event="{&quot;location&quot;:&quot;navbar&quot;,&quot;action&quot;:&quot;searchbar&quot;,&quot;context&quot;:&quot;global&quot;,&quot;tag&quot;:&quot;input&quot;,&quot;label&quot;:&quot;searchbar_input_global_navbar&quot;}"
+              aria-describedby="search-error-message-flash"
+            >
+              <div class="overflow-hidden">
+                <span id="qb-input-query" data-target="qbsearch-input.inputButtonText">
+                    Type <kbd class="AppHeader-search-kbd">/</kbd> to search
+                </span>
+              </div>
+            </button>
+
+    </div>
+
+
+  </div>
+</div>
+
+    <input type="hidden" name="type" class="js-site-search-type-field">
+
+    
+<div class="Overlay--hidden " data-modal-dialog-overlay>
+  <modal-dialog data-action="close:qbsearch-input#handleClose cancel:qbsearch-input#handleClose" data-target="qbsearch-input.searchSuggestionsDialog" role="dialog" id="search-suggestions-dialog" aria-modal="true" aria-labelledby="search-suggestions-dialog-header" data-view-component="true" class="Overlay Overlay--width-medium Overlay--height-auto">
+      <h1 id="search-suggestions-dialog-header" class="sr-only">Search code, repositories, users, issues, pull requests...</h1>
+    <div class="Overlay-body Overlay-body--paddingNone">
+      
+          <div data-view-component="true">        <div class="search-suggestions position-absolute width-full color-shadow-large border color-fg-default color-bg-default overflow-hidden d-flex flex-column query-builder-container"
+          style="border-radius: 12px;"
+          data-target="qbsearch-input.queryBuilderContainer"
+          hidden
+        >
+          <!-- '"` --><!-- </textarea></xmp> --></option></form><form id="query-builder-test-form" action="" accept-charset="UTF-8" method="get">
+  <query-builder data-target="qbsearch-input.queryBuilder" id="query-builder-query-builder-test" data-filter-key=":" data-view-component="true" class="QueryBuilder search-query-builder">
+    <div class="FormControl FormControl--fullWidth">
+      <label id="query-builder-test-label" for="query-builder-test" class="FormControl-label sr-only">
+        Search
+      </label>
+      <div
+        class="QueryBuilder-StyledInput width-fit "
+        data-target="query-builder.styledInput"
+      >
+          <span id="query-builder-test-leadingvisual-wrap" class="FormControl-input-leadingVisualWrap QueryBuilder-leadingVisualWrap">
+            <svg aria-hidden="true" height="16" viewBox="0 0 16 16" version="1.1" width="16" data-view-component="true" class="octicon octicon-search FormControl-input-leadingVisual">
+    <path d="M10.68 11.74a6 6 0 0 1-7.922-8.982 6 6 0 0 1 8.982 7.922l3.04 3.04a.749.749 0 0 1-.326 1.275.749.749 0 0 1-.734-.215ZM11.5 7a4.499 4.499 0 1 0-8.997 0A4.499 4.499 0 0 0 11.5 7Z"></path>
+</svg>
+          </span>
+        <div data-target="query-builder.styledInputContainer" class="QueryBuilder-StyledInputContainer">
+          <div
+            aria-hidden="true"
+            class="QueryBuilder-StyledInputContent"
+            data-target="query-builder.styledInputContent"
+          ></div>
+          <div class="QueryBuilder-InputWrapper">
+            <div aria-hidden="true" class="QueryBuilder-Sizer" data-target="query-builder.sizer"></div>
+            <input id="query-builder-test" name="query-builder-test" value="" autocomplete="off" type="text" role="combobox" spellcheck="false" aria-expanded="false" aria-describedby="validation-6ddbb050-187c-491d-83bd-90a6726f56d4" data-target="query-builder.input" data-action="
+          input:query-builder#inputChange
+          blur:query-builder#inputBlur
+          keydown:query-builder#inputKeydown
+          focus:query-builder#inputFocus
+        " data-view-component="true" class="FormControl-input QueryBuilder-Input FormControl-medium" />
+          </div>
+        </div>
+          <span class="sr-only" id="query-builder-test-clear">Clear</span>
+          <button role="button" id="query-builder-test-clear-button" aria-labelledby="query-builder-test-clear query-builder-test-label" data-target="query-builder.clearButton" data-action="
+                click:query-builder#clear
+                focus:query-builder#clearButtonFocus
+                blur:query-builder#clearButtonBlur
+              " variant="small" hidden="hidden" type="button" data-view-component="true" class="Button Button--iconOnly Button--invisible Button--medium mr-1 px-2 py-0 d-flex flex-items-center rounded-1 color-fg-muted">  <svg aria-hidden="true" height="16" viewBox="0 0 16 16" version="1.1" width="16" data-view-component="true" class="octicon octicon-x-circle-fill Button-visual">
+    <path d="M2.343 13.657A8 8 0 1 1 13.658 2.343 8 8 0 0 1 2.343 13.657ZM6.03 4.97a.751.751 0 0 0-1.042.018.751.751 0 0 0-.018 1.042L6.94 8 4.97 9.97a.749.749 0 0 0 .326 1.275.749.749 0 0 0 .734-.215L8 9.06l1.97 1.97a.749.749 0 0 0 1.275-.326.749.749 0 0 0-.215-.734L9.06 8l1.97-1.97a.749.749 0 0 0-.326-1.275.749.749 0 0 0-.734.215L8 6.94Z"></path>
+</svg>
+</button>
+
+      </div>
+      <template id="search-icon">
+  <svg aria-hidden="true" height="16" viewBox="0 0 16 16" version="1.1" width="16" data-view-component="true" class="octicon octicon-search">
+    <path d="M10.68 11.74a6 6 0 0 1-7.922-8.982 6 6 0 0 1 8.982 7.922l3.04 3.04a.749.749 0 0 1-.326 1.275.749.749 0 0 1-.734-.215ZM11.5 7a4.499 4.499 0 1 0-8.997 0A4.499 4.499 0 0 0 11.5 7Z"></path>
+</svg>
+</template>
+
+<template id="code-icon">
+  <svg aria-hidden="true" height="16" viewBox="0 0 16 16" version="1.1" width="16" data-view-component="true" class="octicon octicon-code">
+    <path d="m11.28 3.22 4.25 4.25a.75.75 0 0 1 0 1.06l-4.25 4.25a.749.749 0 0 1-1.275-.326.749.749 0 0 1 .215-.734L13.94 8l-3.72-3.72a.749.749 0 0 1 .326-1.275.749.749 0 0 1 .734.215Zm-6.56 0a.751.751 0 0 1 1.042.018.751.751 0 0 1 .018 1.042L2.06 8l3.72 3.72a.749.749 0 0 1-.326 1.275.749.749 0 0 1-.734-.215L.47 8.53a.75.75 0 0 1 0-1.06Z"></path>
+</svg>
+</template>
+
+<template id="file-code-icon">
+  <svg aria-hidden="true" height="16" viewBox="0 0 16 16" version="1.1" width="16" data-view-component="true" class="octicon octicon-file-code">
+    <path d="M4 1.75C4 .784 4.784 0 5.75 0h5.586c.464 0 .909.184 1.237.513l2.914 2.914c.329.328.513.773.513 1.237v8.586A1.75 1.75 0 0 1 14.25 15h-9a.75.75 0 0 1 0-1.5h9a.25.25 0 0 0 .25-.25V6h-2.75A1.75 1.75 0 0 1 10 4.25V1.5H5.75a.25.25 0 0 0-.25.25v2.5a.75.75 0 0 1-1.5 0Zm1.72 4.97a.75.75 0 0 1 1.06 0l2 2a.75.75 0 0 1 0 1.06l-2 2a.749.749 0 0 1-1.275-.326.749.749 0 0 1 .215-.734l1.47-1.47-1.47-1.47a.75.75 0 0 1 0-1.06ZM3.28 7.78 1.81 9.25l1.47 1.47a.751.751 0 0 1-.018 1.042.751.751 0 0 1-1.042.018l-2-2a.75.75 0 0 1 0-1.06l2-2a.751.751 0 0 1 1.042.018.751.751 0 0 1 .018 1.042Zm8.22-6.218V4.25c0 .138.112.25.25.25h2.688l-.011-.013-2.914-2.914-.013-.011Z"></path>
+</svg>
+</template>
+
+<template id="history-icon">
+  <svg aria-hidden="true" height="16" viewBox="0 0 16 16" version="1.1" width="16" data-view-component="true" class="octicon octicon-history">
+    <path d="m.427 1.927 1.215 1.215a8.002 8.002 0 1 1-1.6 5.685.75.75 0 1 1 1.493-.154 6.5 6.5 0 1 0 1.18-4.458l1.358 1.358A.25.25 0 0 1 3.896 6H.25A.25.25 0 0 1 0 5.75V2.104a.25.25 0 0 1 .427-.177ZM7.75 4a.75.75 0 0 1 .75.75v2.992l2.028.812a.75.75 0 0 1-.557 1.392l-2.5-1A.751.751 0 0 1 7 8.25v-3.5A.75.75 0 0 1 7.75 4Z"></path>
+</svg>
+</template>
+
+<template id="repo-icon">
+  <svg aria-hidden="true" height="16" viewBox="0 0 16 16" version="1.1" width="16" data-view-component="true" class="octicon octicon-repo">
+    <path d="M2 2.5A2.5 2.5 0 0 1 4.5 0h8.75a.75.75 0 0 1 .75.75v12.5a.75.75 0 0 1-.75.75h-2.5a.75.75 0 0 1 0-1.5h1.75v-2h-8a1 1 0 0 0-.714 1.7.75.75 0 1 1-1.072 1.05A2.495 2.495 0 0 1 2 11.5Zm10.5-1h-8a1 1 0 0 0-1 1v6.708A2.486 2.486 0 0 1 4.5 9h8ZM5 12.25a.25.25 0 0 1 .25-.25h3.5a.25.25 0 0 1 .25.25v3.25a.25.25 0 0 1-.4.2l-1.45-1.087a.249.249 0 0 0-.3 0L5.4 15.7a.25.25 0 0 1-.4-.2Z"></path>
+</svg>
+</template>
+
+<template id="bookmark-icon">
+  <svg aria-hidden="true" height="16" viewBox="0 0 16 16" version="1.1" width="16" data-view-component="true" class="octicon octicon-bookmark">
+    <path d="M3 2.75C3 1.784 3.784 1 4.75 1h6.5c.966 0 1.75.784 1.75 1.75v11.5a.75.75 0 0 1-1.227.579L8 11.722l-3.773 3.107A.751.751 0 0 1 3 14.25Zm1.75-.25a.25.25 0 0 0-.25.25v9.91l3.023-2.489a.75.75 0 0 1 .954 0l3.023 2.49V2.75a.25.25 0 0 0-.25-.25Z"></path>
+</svg>
+</template>
+
+<template id="plus-circle-icon">
+  <svg aria-hidden="true" height="16" viewBox="0 0 16 16" version="1.1" width="16" data-view-component="true" class="octicon octicon-plus-circle">
+    <path d="M8 0a8 8 0 1 1 0 16A8 8 0 0 1 8 0ZM1.5 8a6.5 6.5 0 1 0 13 0 6.5 6.5 0 0 0-13 0Zm7.25-3.25v2.5h2.5a.75.75 0 0 1 0 1.5h-2.5v2.5a.75.75 0 0 1-1.5 0v-2.5h-2.5a.75.75 0 0 1 0-1.5h2.5v-2.5a.75.75 0 0 1 1.5 0Z"></path>
+</svg>
+</template>
+
+<template id="circle-icon">
+  <svg aria-hidden="true" height="16" viewBox="0 0 16 16" version="1.1" width="16" data-view-component="true" class="octicon octicon-dot-fill">
+    <path d="M8 4a4 4 0 1 1 0 8 4 4 0 0 1 0-8Z"></path>
+</svg>
+</template>
+
+<template id="trash-icon">
+  <svg aria-hidden="true" height="16" viewBox="0 0 16 16" version="1.1" width="16" data-view-component="true" class="octicon octicon-trash">
+    <path d="M11 1.75V3h2.25a.75.75 0 0 1 0 1.5H2.75a.75.75 0 0 1 0-1.5H5V1.75C5 .784 5.784 0 6.75 0h2.5C10.216 0 11 .784 11 1.75ZM4.496 6.675l.66 6.6a.25.25 0 0 0 .249.225h5.19a.25.25 0 0 0 .249-.225l.66-6.6a.75.75 0 0 1 1.492.149l-.66 6.6A1.748 1.748 0 0 1 10.595 15h-5.19a1.75 1.75 0 0 1-1.741-1.575l-.66-6.6a.75.75 0 1 1 1.492-.15ZM6.5 1.75V3h3V1.75a.25.25 0 0 0-.25-.25h-2.5a.25.25 0 0 0-.25.25Z"></path>
+</svg>
+</template>
+
+<template id="team-icon">
+  <svg aria-hidden="true" height="16" viewBox="0 0 16 16" version="1.1" width="16" data-view-component="true" class="octicon octicon-people">
+    <path d="M2 5.5a3.5 3.5 0 1 1 5.898 2.549 5.508 5.508 0 0 1 3.034 4.084.75.75 0 1 1-1.482.235 4 4 0 0 0-7.9 0 .75.75 0 0 1-1.482-.236A5.507 5.507 0 0 1 3.102 8.05 3.493 3.493 0 0 1 2 5.5ZM11 4a3.001 3.001 0 0 1 2.22 5.018 5.01 5.01 0 0 1 2.56 3.012.749.749 0 0 1-.885.954.752.752 0 0 1-.549-.514 3.507 3.507 0 0 0-2.522-2.372.75.75 0 0 1-.574-.73v-.352a.75.75 0 0 1 .416-.672A1.5 1.5 0 0 0 11 5.5.75.75 0 0 1 11 4Zm-5.5-.5a2 2 0 1 0-.001 3.999A2 2 0 0 0 5.5 3.5Z"></path>
+</svg>
+</template>
+
+<template id="project-icon">
+  <svg aria-hidden="true" height="16" viewBox="0 0 16 16" version="1.1" width="16" data-view-component="true" class="octicon octicon-project">
+    <path d="M1.75 0h12.5C15.216 0 16 .784 16 1.75v12.5A1.75 1.75 0 0 1 14.25 16H1.75A1.75 1.75 0 0 1 0 14.25V1.75C0 .784.784 0 1.75 0ZM1.5 1.75v12.5c0 .138.112.25.25.25h12.5a.25.25 0 0 0 .25-.25V1.75a.25.25 0 0 0-.25-.25H1.75a.25.25 0 0 0-.25.25ZM11.75 3a.75.75 0 0 1 .75.75v7.5a.75.75 0 0 1-1.5 0v-7.5a.75.75 0 0 1 .75-.75Zm-8.25.75a.75.75 0 0 1 1.5 0v5.5a.75.75 0 0 1-1.5 0ZM8 3a.75.75 0 0 1 .75.75v3.5a.75.75 0 0 1-1.5 0v-3.5A.75.75 0 0 1 8 3Z"></path>
+</svg>
+</template>
+
+<template id="pencil-icon">
+  <svg aria-hidden="true" height="16" viewBox="0 0 16 16" version="1.1" width="16" data-view-component="true" class="octicon octicon-pencil">
+    <path d="M11.013 1.427a1.75 1.75 0 0 1 2.474 0l1.086 1.086a1.75 1.75 0 0 1 0 2.474l-8.61 8.61c-.21.21-.47.364-.756.445l-3.251.93a.75.75 0 0 1-.927-.928l.929-3.25c.081-.286.235-.547.445-.758l8.61-8.61Zm.176 4.823L9.75 4.81l-6.286 6.287a.253.253 0 0 0-.064.108l-.558 1.953 1.953-.558a.253.253 0 0 0 .108-.064Zm1.238-3.763a.25.25 0 0 0-.354 0L10.811 3.75l1.439 1.44 1.263-1.263a.25.25 0 0 0 0-.354Z"></path>
+</svg>
+</template>
+
+<template id="copilot-icon">
+  <svg aria-hidden="true" height="16" viewBox="0 0 16 16" version="1.1" width="16" data-view-component="true" class="octicon octicon-copilot">
+    <path d="M7.998 15.035c-4.562 0-7.873-2.914-7.998-3.749V9.338c.085-.628.677-1.686 1.588-2.065.013-.07.024-.143.036-.218.029-.183.06-.384.126-.612-.201-.508-.254-1.084-.254-1.656 0-.87.128-1.769.693-2.484.579-.733 1.494-1.124 2.724-1.261 1.206-.134 2.262.034 2.944.765.05.053.096.108.139.165.044-.057.094-.112.143-.165.682-.731 1.738-.899 2.944-.765 1.23.137 2.145.528 2.724 1.261.566.715.693 1.614.693 2.484 0 .572-.053 1.148-.254 1.656.066.228.098.429.126.612.012.076.024.148.037.218.924.385 1.522 1.471 1.591 2.095v1.872c0 .766-3.351 3.795-8.002 3.795Zm0-1.485c2.28 0 4.584-1.11 5.002-1.433V7.862l-.023-.116c-.49.21-1.075.291-1.727.291-1.146 0-2.059-.327-2.71-.991A3.222 3.222 0 0 1 8 6.303a3.24 3.24 0 0 1-.544.743c-.65.664-1.563.991-2.71.991-.652 0-1.236-.081-1.727-.291l-.023.116v4.255c.419.323 2.722 1.433 5.002 1.433ZM6.762 2.83c-.193-.206-.637-.413-1.682-.297-1.019.113-1.479.404-1.713.7-.247.312-.369.789-.369 1.554 0 .793.129 1.171.308 1.371.162.181.519.379 1.442.379.853 0 1.339-.235 1.638-.54.315-.322.527-.827.617-1.553.117-.935-.037-1.395-.241-1.614Zm4.155-.297c-1.044-.116-1.488.091-1.681.297-.204.219-.359.679-.242 1.614.091.726.303 1.231.618 1.553.299.305.784.54 1.638.54.922 0 1.28-.198 1.442-.379.179-.2.308-.578.308-1.371 0-.765-.123-1.242-.37-1.554-.233-.296-.693-.587-1.713-.7Z"></path><path d="M6.25 9.037a.75.75 0 0 1 .75.75v1.501a.75.75 0 0 1-1.5 0V9.787a.75.75 0 0 1 .75-.75Zm4.25.75v1.501a.75.75 0 0 1-1.5 0V9.787a.75.75 0 0 1 1.5 0Z"></path>
+</svg>
+</template>
+
+<template id="copilot-error-icon">
+  <svg aria-hidden="true" height="16" viewBox="0 0 16 16" version="1.1" width="16" data-view-component="true" class="octicon octicon-copilot-error">
+    <path d="M16 11.24c0 .112-.072.274-.21.467L13 9.688V7.862l-.023-.116c-.49.21-1.075.291-1.727.291-.198 0-.388-.009-.571-.029L6.833 5.226a4.01 4.01 0 0 0 .17-.782c.117-.935-.037-1.395-.241-1.614-.193-.206-.637-.413-1.682-.297-.683.076-1.115.231-1.395.415l-1.257-.91c.579-.564 1.413-.877 2.485-.996 1.206-.134 2.262.034 2.944.765.05.053.096.108.139.165.044-.057.094-.112.143-.165.682-.731 1.738-.899 2.944-.765 1.23.137 2.145.528 2.724 1.261.566.715.693 1.614.693 2.484 0 .572-.053 1.148-.254 1.656.066.228.098.429.126.612.012.076.024.148.037.218.924.385 1.522 1.471 1.591 2.095Zm-5.083-8.707c-1.044-.116-1.488.091-1.681.297-.204.219-.359.679-.242 1.614.091.726.303 1.231.618 1.553.299.305.784.54 1.638.54.922 0 1.28-.198 1.442-.379.179-.2.308-.578.308-1.371 0-.765-.123-1.242-.37-1.554-.233-.296-.693-.587-1.713-.7Zm2.511 11.074c-1.393.776-3.272 1.428-5.43 1.428-4.562 0-7.873-2.914-7.998-3.749V9.338c.085-.628.677-1.686 1.588-2.065.013-.07.024-.143.036-.218.029-.183.06-.384.126-.612-.18-.455-.241-.963-.252-1.475L.31 4.107A.747.747 0 0 1 0 3.509V3.49a.748.748 0 0 1 .625-.73c.156-.026.306.047.435.139l14.667 10.578a.592.592 0 0 1 .227.264.752.752 0 0 1 .046.249v.022a.75.75 0 0 1-1.19.596Zm-1.367-.991L5.635 7.964a5.128 5.128 0 0 1-.889.073c-.652 0-1.236-.081-1.727-.291l-.023.116v4.255c.419.323 2.722 1.433 5.002 1.433 1.539 0 3.089-.505 4.063-.934Z"></path>
+</svg>
+</template>
+
+<template id="workflow-icon">
+  <svg aria-hidden="true" height="16" viewBox="0 0 16 16" version="1.1" width="16" data-view-component="true" class="octicon octicon-workflow">
+    <path d="M0 1.75C0 .784.784 0 1.75 0h3.5C6.216 0 7 .784 7 1.75v3.5A1.75 1.75 0 0 1 5.25 7H4v4a1 1 0 0 0 1 1h4v-1.25C9 9.784 9.784 9 10.75 9h3.5c.966 0 1.75.784 1.75 1.75v3.5A1.75 1.75 0 0 1 14.25 16h-3.5A1.75 1.75 0 0 1 9 14.25v-.75H5A2.5 2.5 0 0 1 2.5 11V7h-.75A1.75 1.75 0 0 1 0 5.25Zm1.75-.25a.25.25 0 0 0-.25.25v3.5c0 .138.112.25.25.25h3.5a.25.25 0 0 0 .25-.25v-3.5a.25.25 0 0 0-.25-.25Zm9 9a.25.25 0 0 0-.25.25v3.5c0 .138.112.25.25.25h3.5a.25.25 0 0 0 .25-.25v-3.5a.25.25 0 0 0-.25-.25Z"></path>
+</svg>
+</template>
+
+<template id="book-icon">
+  <svg aria-hidden="true" height="16" viewBox="0 0 16 16" version="1.1" width="16" data-view-component="true" class="octicon octicon-book">
+    <path d="M0 1.75A.75.75 0 0 1 .75 1h4.253c1.227 0 2.317.59 3 1.501A3.743 3.743 0 0 1 11.006 1h4.245a.75.75 0 0 1 .75.75v10.5a.75.75 0 0 1-.75.75h-4.507a2.25 2.25 0 0 0-1.591.659l-.622.621a.75.75 0 0 1-1.06 0l-.622-.621A2.25 2.25 0 0 0 5.258 13H.75a.75.75 0 0 1-.75-.75Zm7.251 10.324.004-5.073-.002-2.253A2.25 2.25 0 0 0 5.003 2.5H1.5v9h3.757a3.75 3.75 0 0 1 1.994.574ZM8.755 4.75l-.004 7.322a3.752 3.752 0 0 1 1.992-.572H14.5v-9h-3.495a2.25 2.25 0 0 0-2.25 2.25Z"></path>
+</svg>
+</template>
+
+<template id="code-review-icon">
+  <svg aria-hidden="true" height="16" viewBox="0 0 16 16" version="1.1" width="16" data-view-component="true" class="octicon octicon-code-review">
+    <path d="M1.75 1h12.5c.966 0 1.75.784 1.75 1.75v8.5A1.75 1.75 0 0 1 14.25 13H8.061l-2.574 2.573A1.458 1.458 0 0 1 3 14.543V13H1.75A1.75 1.75 0 0 1 0 11.25v-8.5C0 1.784.784 1 1.75 1ZM1.5 2.75v8.5c0 .138.112.25.25.25h2a.75.75 0 0 1 .75.75v2.19l2.72-2.72a.749.749 0 0 1 .53-.22h6.5a.25.25 0 0 0 .25-.25v-8.5a.25.25 0 0 0-.25-.25H1.75a.25.25 0 0 0-.25.25Zm5.28 1.72a.75.75 0 0 1 0 1.06L5.31 7l1.47 1.47a.751.751 0 0 1-.018 1.042.751.751 0 0 1-1.042.018l-2-2a.75.75 0 0 1 0-1.06l2-2a.75.75 0 0 1 1.06 0Zm2.44 0a.75.75 0 0 1 1.06 0l2 2a.75.75 0 0 1 0 1.06l-2 2a.751.751 0 0 1-1.042-.018.751.751 0 0 1-.018-1.042L10.69 7 9.22 5.53a.75.75 0 0 1 0-1.06Z"></path>
+</svg>
+</template>
+
+<template id="codespaces-icon">
+  <svg aria-hidden="true" height="16" viewBox="0 0 16 16" version="1.1" width="16" data-view-component="true" class="octicon octicon-codespaces">
+    <path d="M0 11.25c0-.966.784-1.75 1.75-1.75h12.5c.966 0 1.75.784 1.75 1.75v3A1.75 1.75 0 0 1 14.25 16H1.75A1.75 1.75 0 0 1 0 14.25Zm2-9.5C2 .784 2.784 0 3.75 0h8.5C13.216 0 14 .784 14 1.75v5a1.75 1.75 0 0 1-1.75 1.75h-8.5A1.75 1.75 0 0 1 2 6.75Zm1.75-.25a.25.25 0 0 0-.25.25v5c0 .138.112.25.25.25h8.5a.25.25 0 0 0 .25-.25v-5a.25.25 0 0 0-.25-.25Zm-2 9.5a.25.25 0 0 0-.25.25v3c0 .138.112.25.25.25h12.5a.25.25 0 0 0 .25-.25v-3a.25.25 0 0 0-.25-.25Z"></path><path d="M7 12.75a.75.75 0 0 1 .75-.75h4.5a.75.75 0 0 1 0 1.5h-4.5a.75.75 0 0 1-.75-.75Zm-4 0a.75.75 0 0 1 .75-.75h.5a.75.75 0 0 1 0 1.5h-.5a.75.75 0 0 1-.75-.75Z"></path>
+</svg>
+</template>
+
+<template id="comment-icon">
+  <svg aria-hidden="true" height="16" viewBox="0 0 16 16" version="1.1" width="16" data-view-component="true" class="octicon octicon-comment">
+    <path d="M1 2.75C1 1.784 1.784 1 2.75 1h10.5c.966 0 1.75.784 1.75 1.75v7.5A1.75 1.75 0 0 1 13.25 12H9.06l-2.573 2.573A1.458 1.458 0 0 1 4 13.543V12H2.75A1.75 1.75 0 0 1 1 10.25Zm1.75-.25a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h2a.75.75 0 0 1 .75.75v2.19l2.72-2.72a.749.749 0 0 1 .53-.22h4.5a.25.25 0 0 0 .25-.25v-7.5a.25.25 0 0 0-.25-.25Z"></path>
+</svg>
+</template>
+
+<template id="comment-discussion-icon">
+  <svg aria-hidden="true" height="16" viewBox="0 0 16 16" version="1.1" width="16" data-view-component="true" class="octicon octicon-comment-discussion">
+    <path d="M1.75 1h8.5c.966 0 1.75.784 1.75 1.75v5.5A1.75 1.75 0 0 1 10.25 10H7.061l-2.574 2.573A1.458 1.458 0 0 1 2 11.543V10h-.25A1.75 1.75 0 0 1 0 8.25v-5.5C0 1.784.784 1 1.75 1ZM1.5 2.75v5.5c0 .138.112.25.25.25h1a.75.75 0 0 1 .75.75v2.19l2.72-2.72a.749.749 0 0 1 .53-.22h3.5a.25.25 0 0 0 .25-.25v-5.5a.25.25 0 0 0-.25-.25h-8.5a.25.25 0 0 0-.25.25Zm13 2a.25.25 0 0 0-.25-.25h-.5a.75.75 0 0 1 0-1.5h.5c.966 0 1.75.784 1.75 1.75v5.5A1.75 1.75 0 0 1 14.25 12H14v1.543a1.458 1.458 0 0 1-2.487 1.03L9.22 12.28a.749.749 0 0 1 .326-1.275.749.749 0 0 1 .734.215l2.22 2.22v-2.19a.75.75 0 0 1 .75-.75h1a.25.25 0 0 0 .25-.25Z"></path>
+</svg>
+</template>
+
+<template id="organization-icon">
+  <svg aria-hidden="true" height="16" viewBox="0 0 16 16" version="1.1" width="16" data-view-component="true" class="octicon octicon-organization">
+    <path d="M1.75 16A1.75 1.75 0 0 1 0 14.25V1.75C0 .784.784 0 1.75 0h8.5C11.216 0 12 .784 12 1.75v12.5c0 .085-.006.168-.018.25h2.268a.25.25 0 0 0 .25-.25V8.285a.25.25 0 0 0-.111-.208l-1.055-.703a.749.749 0 1 1 .832-1.248l1.055.703c.487.325.779.871.779 1.456v5.965A1.75 1.75 0 0 1 14.25 16h-3.5a.766.766 0 0 1-.197-.026c-.099.017-.2.026-.303.026h-3a.75.75 0 0 1-.75-.75V14h-1v1.25a.75.75 0 0 1-.75.75Zm-.25-1.75c0 .138.112.25.25.25H4v-1.25a.75.75 0 0 1 .75-.75h2.5a.75.75 0 0 1 .75.75v1.25h2.25a.25.25 0 0 0 .25-.25V1.75a.25.25 0 0 0-.25-.25h-8.5a.25.25 0 0 0-.25.25ZM3.75 6h.5a.75.75 0 0 1 0 1.5h-.5a.75.75 0 0 1 0-1.5ZM3 3.75A.75.75 0 0 1 3.75 3h.5a.75.75 0 0 1 0 1.5h-.5A.75.75 0 0 1 3 3.75Zm4 3A.75.75 0 0 1 7.75 6h.5a.75.75 0 0 1 0 1.5h-.5A.75.75 0 0 1 7 6.75ZM7.75 3h.5a.75.75 0 0 1 0 1.5h-.5a.75.75 0 0 1 0-1.5ZM3 9.75A.75.75 0 0 1 3.75 9h.5a.75.75 0 0 1 0 1.5h-.5A.75.75 0 0 1 3 9.75ZM7.75 9h.5a.75.75 0 0 1 0 1.5h-.5a.75.75 0 0 1 0-1.5Z"></path>
+</svg>
+</template>
+
+<template id="rocket-icon">
+  <svg aria-hidden="true" height="16" viewBox="0 0 16 16" version="1.1" width="16" data-view-component="true" class="octicon octicon-rocket">
+    <path d="M14.064 0h.186C15.216 0 16 .784 16 1.75v.186a8.752 8.752 0 0 1-2.564 6.186l-.458.459c-.314.314-.641.616-.979.904v3.207c0 .608-.315 1.172-.833 1.49l-2.774 1.707a.749.749 0 0 1-1.11-.418l-.954-3.102a1.214 1.214 0 0 1-.145-.125L3.754 9.816a1.218 1.218 0 0 1-.124-.145L.528 8.717a.749.749 0 0 1-.418-1.11l1.71-2.774A1.748 1.748 0 0 1 3.31 4h3.204c.288-.338.59-.665.904-.979l.459-.458A8.749 8.749 0 0 1 14.064 0ZM8.938 3.623h-.002l-.458.458c-.76.76-1.437 1.598-2.02 2.5l-1.5 2.317 2.143 2.143 2.317-1.5c.902-.583 1.74-1.26 2.499-2.02l.459-.458a7.25 7.25 0 0 0 2.123-5.127V1.75a.25.25 0 0 0-.25-.25h-.186a7.249 7.249 0 0 0-5.125 2.123ZM3.56 14.56c-.732.732-2.334 1.045-3.005 1.148a.234.234 0 0 1-.201-.064.234.234 0 0 1-.064-.201c.103-.671.416-2.273 1.15-3.003a1.502 1.502 0 1 1 2.12 2.12Zm6.94-3.935c-.088.06-.177.118-.266.175l-2.35 1.521.548 1.783 1.949-1.2a.25.25 0 0 0 .119-.213ZM3.678 8.116 5.2 5.766c.058-.09.117-.178.176-.266H3.309a.25.25 0 0 0-.213.119l-1.2 1.95ZM12 5a1 1 0 1 1-2 0 1 1 0 0 1 2 0Z"></path>
+</svg>
+</template>
+
+<template id="shield-check-icon">
+  <svg aria-hidden="true" height="16" viewBox="0 0 16 16" version="1.1" width="16" data-view-component="true" class="octicon octicon-shield-check">
+    <path d="m8.533.133 5.25 1.68A1.75 1.75 0 0 1 15 3.48V7c0 1.566-.32 3.182-1.303 4.682-.983 1.498-2.585 2.813-5.032 3.855a1.697 1.697 0 0 1-1.33 0c-2.447-1.042-4.049-2.357-5.032-3.855C1.32 10.182 1 8.566 1 7V3.48a1.75 1.75 0 0 1 1.217-1.667l5.25-1.68a1.748 1.748 0 0 1 1.066 0Zm-.61 1.429.001.001-5.25 1.68a.251.251 0 0 0-.174.237V7c0 1.36.275 2.666 1.057 3.859.784 1.194 2.121 2.342 4.366 3.298a.196.196 0 0 0 .154 0c2.245-.957 3.582-2.103 4.366-3.297C13.225 9.666 13.5 8.358 13.5 7V3.48a.25.25 0 0 0-.174-.238l-5.25-1.68a.25.25 0 0 0-.153 0ZM11.28 6.28l-3.5 3.5a.75.75 0 0 1-1.06 0l-1.5-1.5a.749.749 0 0 1 .326-1.275.749.749 0 0 1 .734.215l.97.97 2.97-2.97a.751.751 0 0 1 1.042.018.751.751 0 0 1 .018 1.042Z"></path>
+</svg>
+</template>
+
+<template id="heart-icon">
+  <svg aria-hidden="true" height="16" viewBox="0 0 16 16" version="1.1" width="16" data-view-component="true" class="octicon octicon-heart">
+    <path d="m8 14.25.345.666a.75.75 0 0 1-.69 0l-.008-.004-.018-.01a7.152 7.152 0 0 1-.31-.17 22.055 22.055 0 0 1-3.434-2.414C2.045 10.731 0 8.35 0 5.5 0 2.836 2.086 1 4.25 1 5.797 1 7.153 1.802 8 3.02 8.847 1.802 10.203 1 11.75 1 13.914 1 16 2.836 16 5.5c0 2.85-2.045 5.231-3.885 6.818a22.066 22.066 0 0 1-3.744 2.584l-.018.01-.006.003h-.002ZM4.25 2.5c-1.336 0-2.75 1.164-2.75 3 0 2.15 1.58 4.144 3.365 5.682A20.58 20.58 0 0 0 8 13.393a20.58 20.58 0 0 0 3.135-2.211C12.92 9.644 14.5 7.65 14.5 5.5c0-1.836-1.414-3-2.75-3-1.373 0-2.609.986-3.029 2.456a.749.749 0 0 1-1.442 0C6.859 3.486 5.623 2.5 4.25 2.5Z"></path>
+</svg>
+</template>
+
+<template id="server-icon">
+  <svg aria-hidden="true" height="16" viewBox="0 0 16 16" version="1.1" width="16" data-view-component="true" class="octicon octicon-server">
+    <path d="M1.75 1h12.5c.966 0 1.75.784 1.75 1.75v4c0 .372-.116.717-.314 1 .198.283.314.628.314 1v4a1.75 1.75 0 0 1-1.75 1.75H1.75A1.75 1.75 0 0 1 0 12.75v-4c0-.358.109-.707.314-1a1.739 1.739 0 0 1-.314-1v-4C0 1.784.784 1 1.75 1ZM1.5 2.75v4c0 .138.112.25.25.25h12.5a.25.25 0 0 0 .25-.25v-4a.25.25 0 0 0-.25-.25H1.75a.25.25 0 0 0-.25.25Zm.25 5.75a.25.25 0 0 0-.25.25v4c0 .138.112.25.25.25h12.5a.25.25 0 0 0 .25-.25v-4a.25.25 0 0 0-.25-.25ZM7 4.75A.75.75 0 0 1 7.75 4h4.5a.75.75 0 0 1 0 1.5h-4.5A.75.75 0 0 1 7 4.75ZM7.75 10h4.5a.75.75 0 0 1 0 1.5h-4.5a.75.75 0 0 1 0-1.5ZM3 4.75A.75.75 0 0 1 3.75 4h.5a.75.75 0 0 1 0 1.5h-.5A.75.75 0 0 1 3 4.75ZM3.75 10h.5a.75.75 0 0 1 0 1.5h-.5a.75.75 0 0 1 0-1.5Z"></path>
+</svg>
+</template>
+
+<template id="globe-icon">
+  <svg aria-hidden="true" height="16" viewBox="0 0 16 16" version="1.1" width="16" data-view-component="true" class="octicon octicon-globe">
+    <path d="M8 0a8 8 0 1 1 0 16A8 8 0 0 1 8 0ZM5.78 8.75a9.64 9.64 0 0 0 1.363 4.177c.255.426.542.832.857 1.215.245-.296.551-.705.857-1.215A9.64 9.64 0 0 0 10.22 8.75Zm4.44-1.5a9.64 9.64 0 0 0-1.363-4.177c-.307-.51-.612-.919-.857-1.215a9.927 9.927 0 0 0-.857 1.215A9.64 9.64 0 0 0 5.78 7.25Zm-5.944 1.5H1.543a6.507 6.507 0 0 0 4.666 5.5c-.123-.181-.24-.365-.352-.552-.715-1.192-1.437-2.874-1.581-4.948Zm-2.733-1.5h2.733c.144-2.074.866-3.756 1.58-4.948.12-.197.237-.381.353-.552a6.507 6.507 0 0 0-4.666 5.5Zm10.181 1.5c-.144 2.074-.866 3.756-1.58 4.948-.12.197-.237.381-.353.552a6.507 6.507 0 0 0 4.666-5.5Zm2.733-1.5a6.507 6.507 0 0 0-4.666-5.5c.123.181.24.365.353.552.714 1.192 1.436 2.874 1.58 4.948Z"></path>
+</svg>
+</template>
+
+<template id="issue-opened-icon">
+  <svg aria-hidden="true" height="16" viewBox="0 0 16 16" version="1.1" width="16" data-view-component="true" class="octicon octicon-issue-opened">
+    <path d="M8 9.5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3Z"></path><path d="M8 0a8 8 0 1 1 0 16A8 8 0 0 1 8 0ZM1.5 8a6.5 6.5 0 1 0 13 0 6.5 6.5 0 0 0-13 0Z"></path>
+</svg>
+</template>
+
+<template id="device-mobile-icon">
+  <svg aria-hidden="true" height="16" viewBox="0 0 16 16" version="1.1" width="16" data-view-component="true" class="octicon octicon-device-mobile">
+    <path d="M3.75 0h8.5C13.216 0 14 .784 14 1.75v12.5A1.75 1.75 0 0 1 12.25 16h-8.5A1.75 1.75 0 0 1 2 14.25V1.75C2 .784 2.784 0 3.75 0ZM3.5 1.75v12.5c0 .138.112.25.25.25h8.5a.25.25 0 0 0 .25-.25V1.75a.25.25 0 0 0-.25-.25h-8.5a.25.25 0 0 0-.25.25ZM8 13a1 1 0 1 1 0-2 1 1 0 0 1 0 2Z"></path>
+</svg>
+</template>
+
+<template id="package-icon">
+  <svg aria-hidden="true" height="16" viewBox="0 0 16 16" version="1.1" width="16" data-view-component="true" class="octicon octicon-package">
+    <path d="m8.878.392 5.25 3.045c.54.314.872.89.872 1.514v6.098a1.75 1.75 0 0 1-.872 1.514l-5.25 3.045a1.75 1.75 0 0 1-1.756 0l-5.25-3.045A1.75 1.75 0 0 1 1 11.049V4.951c0-.624.332-1.201.872-1.514L7.122.392a1.75 1.75 0 0 1 1.756 0ZM7.875 1.69l-4.63 2.685L8 7.133l4.755-2.758-4.63-2.685a.248.248 0 0 0-.25 0ZM2.5 5.677v5.372c0 .09.047.171.125.216l4.625 2.683V8.432Zm6.25 8.271 4.625-2.683a.25.25 0 0 0 .125-.216V5.677L8.75 8.432Z"></path>
+</svg>
+</template>
+
+<template id="credit-card-icon">
+  <svg aria-hidden="true" height="16" viewBox="0 0 16 16" version="1.1" width="16" data-view-component="true" class="octicon octicon-credit-card">
+    <path d="M10.75 9a.75.75 0 0 0 0 1.5h1.5a.75.75 0 0 0 0-1.5h-1.5Z"></path><path d="M0 3.75C0 2.784.784 2 1.75 2h12.5c.966 0 1.75.784 1.75 1.75v8.5A1.75 1.75 0 0 1 14.25 14H1.75A1.75 1.75 0 0 1 0 12.25ZM14.5 6.5h-13v5.75c0 .138.112.25.25.25h12.5a.25.25 0 0 0 .25-.25Zm0-2.75a.25.25 0 0 0-.25-.25H1.75a.25.25 0 0 0-.25.25V5h13Z"></path>
+</svg>
+</template>
+
+<template id="play-icon">
+  <svg aria-hidden="true" height="16" viewBox="0 0 16 16" version="1.1" width="16" data-view-component="true" class="octicon octicon-play">
+    <path d="M8 0a8 8 0 1 1 0 16A8 8 0 0 1 8 0ZM1.5 8a6.5 6.5 0 1 0 13 0 6.5 6.5 0 0 0-13 0Zm4.879-2.773 4.264 2.559a.25.25 0 0 1 0 .428l-4.264 2.559A.25.25 0 0 1 6 10.559V5.442a.25.25 0 0 1 .379-.215Z"></path>
+</svg>
+</template>
+
+<template id="gift-icon">
+  <svg aria-hidden="true" height="16" viewBox="0 0 16 16" version="1.1" width="16" data-view-component="true" class="octicon octicon-gift">
+    <path d="M2 2.75A2.75 2.75 0 0 1 4.75 0c.983 0 1.873.42 2.57 1.232.268.318.497.668.68 1.042.183-.375.411-.725.68-1.044C9.376.42 10.266 0 11.25 0a2.75 2.75 0 0 1 2.45 4h.55c.966 0 1.75.784 1.75 1.75v2c0 .698-.409 1.301-1 1.582v4.918A1.75 1.75 0 0 1 13.25 16H2.75A1.75 1.75 0 0 1 1 14.25V9.332C.409 9.05 0 8.448 0 7.75v-2C0 4.784.784 4 1.75 4h.55c-.192-.375-.3-.8-.3-1.25ZM7.25 9.5H2.5v4.75c0 .138.112.25.25.25h4.5Zm1.5 0v5h4.5a.25.25 0 0 0 .25-.25V9.5Zm0-4V8h5.5a.25.25 0 0 0 .25-.25v-2a.25.25 0 0 0-.25-.25Zm-7 0a.25.25 0 0 0-.25.25v2c0 .138.112.25.25.25h5.5V5.5h-5.5Zm3-4a1.25 1.25 0 0 0 0 2.5h2.309c-.233-.818-.542-1.401-.878-1.793-.43-.502-.915-.707-1.431-.707ZM8.941 4h2.309a1.25 1.25 0 0 0 0-2.5c-.516 0-1 .205-1.43.707-.337.392-.646.975-.879 1.793Z"></path>
+</svg>
+</template>
+
+<template id="code-square-icon">
+  <svg aria-hidden="true" height="16" viewBox="0 0 16 16" version="1.1" width="16" data-view-component="true" class="octicon octicon-code-square">
+    <path d="M0 1.75C0 .784.784 0 1.75 0h12.5C15.216 0 16 .784 16 1.75v12.5A1.75 1.75 0 0 1 14.25 16H1.75A1.75 1.75 0 0 1 0 14.25Zm1.75-.25a.25.25 0 0 0-.25.25v12.5c0 .138.112.25.25.25h12.5a.25.25 0 0 0 .25-.25V1.75a.25.25 0 0 0-.25-.25Zm7.47 3.97a.75.75 0 0 1 1.06 0l2 2a.75.75 0 0 1 0 1.06l-2 2a.749.749 0 0 1-1.275-.326.749.749 0 0 1 .215-.734L10.69 8 9.22 6.53a.75.75 0 0 1 0-1.06ZM6.78 6.53 5.31 8l1.47 1.47a.749.749 0 0 1-.326 1.275.749.749 0 0 1-.734-.215l-2-2a.75.75 0 0 1 0-1.06l2-2a.751.751 0 0 1 1.042.018.751.751 0 0 1 .018 1.042Z"></path>
+</svg>
+</template>
+
+<template id="device-desktop-icon">
+  <svg aria-hidden="true" height="16" viewBox="0 0 16 16" version="1.1" width="16" data-view-component="true" class="octicon octicon-device-desktop">
+    <path d="M14.25 1c.966 0 1.75.784 1.75 1.75v7.5A1.75 1.75 0 0 1 14.25 12h-3.727c.099 1.041.52 1.872 1.292 2.757A.752.752 0 0 1 11.25 16h-6.5a.75.75 0 0 1-.565-1.243c.772-.885 1.192-1.716 1.292-2.757H1.75A1.75 1.75 0 0 1 0 10.25v-7.5C0 1.784.784 1 1.75 1ZM1.75 2.5a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h12.5a.25.25 0 0 0 .25-.25v-7.5a.25.25 0 0 0-.25-.25ZM9.018 12H6.982a5.72 5.72 0 0 1-.765 2.5h3.566a5.72 5.72 0 0 1-.765-2.5Z"></path>
+</svg>
+</template>
+
+        <div class="position-relative">
+                <ul
+                  role="listbox"
+                  class="ActionListWrap QueryBuilder-ListWrap"
+                  aria-label="Suggestions"
+                  data-action="
+                    combobox-commit:query-builder#comboboxCommit
+                    mousedown:query-builder#resultsMousedown
+                  "
+                  data-target="query-builder.resultsList"
+                  data-persist-list=false
+                  id="query-builder-test-results"
+                  tabindex="-1"
+                ></ul>
+        </div>
+      <div class="FormControl-inlineValidation" id="validation-6ddbb050-187c-491d-83bd-90a6726f56d4" hidden="hidden">
+        <span class="FormControl-inlineValidation--visual">
+          <svg aria-hidden="true" height="12" viewBox="0 0 12 12" version="1.1" width="12" data-view-component="true" class="octicon octicon-alert-fill">
+    <path d="M4.855.708c.5-.896 1.79-.896 2.29 0l4.675 8.351a1.312 1.312 0 0 1-1.146 1.954H1.33A1.313 1.313 0 0 1 .183 9.058ZM7 7V3H5v4Zm-1 3a1 1 0 1 0 0-2 1 1 0 0 0 0 2Z"></path>
+</svg>
+        </span>
+        <span></span>
+</div>    </div>
+    <div data-target="query-builder.screenReaderFeedback" aria-live="polite" aria-atomic="true" class="sr-only"></div>
+</query-builder></form>
+          <div class="d-flex flex-row color-fg-muted px-3 text-small color-bg-default search-feedback-prompt">
+            <a target="_blank" href="https://docs.github.com/search-github/github-code-search/understanding-github-code-search-syntax" data-view-component="true" class="Link color-fg-accent text-normal ml-2">Search syntax tips</a>            <div class="d-flex flex-1"></div>
+              <button data-action="click:qbsearch-input#showFeedbackDialog" type="button" data-view-component="true" class="Button--link Button--medium Button color-fg-accent text-normal ml-2">  <span class="Button-content">
+    <span class="Button-label">Give feedback</span>
+  </span>
+</button>
+          </div>
+        </div>
+</div>
+
+    </div>
+</modal-dialog></div>
+  </div>
+  <div data-action="click:qbsearch-input#retract" class="dark-backdrop position-fixed" hidden data-target="qbsearch-input.darkBackdrop"></div>
+  <div class="color-fg-default">
+    
+<dialog-helper>
+  <dialog data-target="qbsearch-input.feedbackDialog" data-action="close:qbsearch-input#handleDialogClose cancel:qbsearch-input#handleDialogClose" id="feedback-dialog" aria-modal="true" aria-labelledby="feedback-dialog-title" aria-describedby="feedback-dialog-description" data-view-component="true" class="Overlay Overlay-whenNarrow Overlay--size-medium Overlay--motion-scaleFade Overlay--disableScroll">
+    <div data-view-component="true" class="Overlay-header">
+  <div class="Overlay-headerContentWrap">
+    <div class="Overlay-titleWrap">
+      <h1 class="Overlay-title " id="feedback-dialog-title">
+        Provide feedback
+      </h1>
+        
+    </div>
+    <div class="Overlay-actionWrap">
+      <button data-close-dialog-id="feedback-dialog" aria-label="Close" aria-label="Close" type="button" data-view-component="true" class="close-button Overlay-closeButton"><svg aria-hidden="true" height="16" viewBox="0 0 16 16" version="1.1" width="16" data-view-component="true" class="octicon octicon-x">
+    <path d="M3.72 3.72a.75.75 0 0 1 1.06 0L8 6.94l3.22-3.22a.749.749 0 0 1 1.275.326.749.749 0 0 1-.215.734L9.06 8l3.22 3.22a.749.749 0 0 1-.326 1.275.749.749 0 0 1-.734-.215L8 9.06l-3.22 3.22a.751.751 0 0 1-1.042-.018.751.751 0 0 1-.018-1.042L6.94 8 3.72 4.78a.75.75 0 0 1 0-1.06Z"></path>
+</svg></button>
+    </div>
+  </div>
+  
+</div>
+      <scrollable-region data-labelled-by="feedback-dialog-title">
+        <div data-view-component="true" class="Overlay-body">        <!-- '"` --><!-- </textarea></xmp> --></option></form><form id="code-search-feedback-form" data-turbo="false" action="/search/feedback" accept-charset="UTF-8" method="post"><input type="hidden" name="authenticity_token" value="9hCbrO2-8ufW5bBgono4AlvQs0RGlyr731v_2OR3LYLyo7BBc6XVN5k8MJnHQqRw7bbKnGaSIVI04ehcEeGNRw" />
+          <p>We read every piece of feedback, and take your input very seriously.</p>
+          <textarea name="feedback" class="form-control width-full mb-2" style="height: 120px" id="feedback"></textarea>
+          <input name="include_email" id="include_email" aria-label="Include my email address so I can be contacted" class="form-control mr-2" type="checkbox">
+          <label for="include_email" style="font-weight: normal">Include my email address so I can be contacted</label>
+</form></div>
+      </scrollable-region>
+      <div data-view-component="true" class="Overlay-footer Overlay-footer--alignEnd">          <button data-close-dialog-id="feedback-dialog" type="button" data-view-component="true" class="btn">    Cancel
+</button>
+          <button form="code-search-feedback-form" data-action="click:qbsearch-input#submitFeedback" type="submit" data-view-component="true" class="btn-primary btn">    Submit feedback
+</button>
+</div>
+</dialog></dialog-helper>
+
+    <custom-scopes data-target="qbsearch-input.customScopesManager">
+    
+<dialog-helper>
+  <dialog data-target="custom-scopes.customScopesModalDialog" data-action="close:qbsearch-input#handleDialogClose cancel:qbsearch-input#handleDialogClose" id="custom-scopes-dialog" aria-modal="true" aria-labelledby="custom-scopes-dialog-title" aria-describedby="custom-scopes-dialog-description" data-view-component="true" class="Overlay Overlay-whenNarrow Overlay--size-medium Overlay--motion-scaleFade Overlay--disableScroll">
+    <div data-view-component="true" class="Overlay-header Overlay-header--divided">
+  <div class="Overlay-headerContentWrap">
+    <div class="Overlay-titleWrap">
+      <h1 class="Overlay-title " id="custom-scopes-dialog-title">
+        Saved searches
+      </h1>
+        <h2 id="custom-scopes-dialog-description" class="Overlay-description">Use saved searches to filter your results more quickly</h2>
+    </div>
+    <div class="Overlay-actionWrap">
+      <button data-close-dialog-id="custom-scopes-dialog" aria-label="Close" aria-label="Close" type="button" data-view-component="true" class="close-button Overlay-closeButton"><svg aria-hidden="true" height="16" viewBox="0 0 16 16" version="1.1" width="16" data-view-component="true" class="octicon octicon-x">
+    <path d="M3.72 3.72a.75.75 0 0 1 1.06 0L8 6.94l3.22-3.22a.749.749 0 0 1 1.275.326.749.749 0 0 1-.215.734L9.06 8l3.22 3.22a.749.749 0 0 1-.326 1.275.749.749 0 0 1-.734-.215L8 9.06l-3.22 3.22a.751.751 0 0 1-1.042-.018.751.751 0 0 1-.018-1.042L6.94 8 3.72 4.78a.75.75 0 0 1 0-1.06Z"></path>
+</svg></button>
+    </div>
+  </div>
+  
+</div>
+      <scrollable-region data-labelled-by="custom-scopes-dialog-title">
+        <div data-view-component="true" class="Overlay-body">        <div data-target="custom-scopes.customScopesModalDialogFlash"></div>
+
+        <div hidden class="create-custom-scope-form" data-target="custom-scopes.createCustomScopeForm">
+        <!-- '"` --><!-- </textarea></xmp> --></option></form><form id="custom-scopes-dialog-form" data-turbo="false" action="/search/custom_scopes" accept-charset="UTF-8" method="post"><input type="hidden" name="authenticity_token" value="UIxz6Kq1ucwvouVmlihi7wB0jrvLf5Wsw7_H6wT4xytbxIXNxoP5IdklGsB3Wc2kDUwDVu8U9k7L396tZko4LQ" />
+          <div data-target="custom-scopes.customScopesModalDialogFlash"></div>
+
+          <input type="hidden" id="custom_scope_id" name="custom_scope_id" data-target="custom-scopes.customScopesIdField">
+
+          <div class="form-group">
+            <label for="custom_scope_name">Name</label>
+            <auto-check src="/search/custom_scopes/check_name" required>
+              <input
+                type="text"
+                name="custom_scope_name"
+                id="custom_scope_name"
+                data-target="custom-scopes.customScopesNameField"
+                class="form-control"
+                autocomplete="off"
+                placeholder="github-ruby"
+                required
+                maxlength="50">
+              <input type="hidden" value="_h__HAaWxZWV6ptBhCc8Da7HzuChCGWSblDCeVAlgaVzxmtVQd0kHMYzipN1RnruY_bQKvJ2zSxmy2eBfY66fw" data-csrf="true" />
+            </auto-check>
+          </div>
+
+          <div class="form-group">
+            <label for="custom_scope_query">Query</label>
+            <input
+              type="text"
+              name="custom_scope_query"
+              id="custom_scope_query"
+              data-target="custom-scopes.customScopesQueryField"
+              class="form-control"
+              autocomplete="off"
+              placeholder="(repo:mona/a OR repo:mona/b) AND lang:python"
+              required
+              maxlength="500">
+          </div>
+
+          <p class="text-small color-fg-muted">
+            To see all available qualifiers, see our <a class="Link--inTextBlock" href="https://docs.github.com/search-github/github-code-search/understanding-github-code-search-syntax">documentation</a>.
+          </p>
+</form>        </div>
+
+        <div data-target="custom-scopes.manageCustomScopesForm">
+          <div data-target="custom-scopes.list"></div>
+        </div>
+
+</div>
+      </scrollable-region>
+      <div data-view-component="true" class="Overlay-footer Overlay-footer--alignEnd Overlay-footer--divided">          <button data-action="click:custom-scopes#customScopesCancel" type="button" data-view-component="true" class="btn">    Cancel
+</button>
+          <button form="custom-scopes-dialog-form" data-action="click:custom-scopes#customScopesSubmit" data-target="custom-scopes.customScopesSubmitButton" type="submit" data-view-component="true" class="btn-primary btn">    Create saved search
+</button>
+</div>
+</dialog></dialog-helper>
+    </custom-scopes>
+  </div>
+</qbsearch-input>  <input type="hidden" value="qaUcCMnpZWX3qfNvsAVC4v-fDoYNPUe6E1QTIoG_av3xJcChT1JIDIuN-x8billQtgPeu7edG1M88cZ_mDqfdw" data-csrf="true" class="js-data-jump-to-suggestions-path-csrf" />
+
+
+              </div>
+
+            
+              <div class="AppHeader-CopilotChat hide-sm hide-md">
+  <div class="d-flex">
+    <react-partial-anchor>
+        <a href="/copilot" data-target="react-partial-anchor.anchor" id="copilot-chat-header-button" aria-labelledby="tooltip-3b446cd2-b11e-4e6a-801a-35215a794670" data-view-component="true" class="Button Button--iconOnly Button--secondary Button--medium AppHeader-button AppHeader-buttonLeft cursor-wait">  <svg aria-hidden="true" height="16" viewBox="0 0 16 16" version="1.1" width="16" data-view-component="true" class="octicon octicon-copilot Button-visual">
+    <path d="M7.998 15.035c-4.562 0-7.873-2.914-7.998-3.749V9.338c.085-.628.677-1.686 1.588-2.065.013-.07.024-.143.036-.218.029-.183.06-.384.126-.612-.201-.508-.254-1.084-.254-1.656 0-.87.128-1.769.693-2.484.579-.733 1.494-1.124 2.724-1.261 1.206-.134 2.262.034 2.944.765.05.053.096.108.139.165.044-.057.094-.112.143-.165.682-.731 1.738-.899 2.944-.765 1.23.137 2.145.528 2.724 1.261.566.715.693 1.614.693 2.484 0 .572-.053 1.148-.254 1.656.066.228.098.429.126.612.012.076.024.148.037.218.924.385 1.522 1.471 1.591 2.095v1.872c0 .766-3.351 3.795-8.002 3.795Zm0-1.485c2.28 0 4.584-1.11 5.002-1.433V7.862l-.023-.116c-.49.21-1.075.291-1.727.291-1.146 0-2.059-.327-2.71-.991A3.222 3.222 0 0 1 8 6.303a3.24 3.24 0 0 1-.544.743c-.65.664-1.563.991-2.71.991-.652 0-1.236-.081-1.727-.291l-.023.116v4.255c.419.323 2.722 1.433 5.002 1.433ZM6.762 2.83c-.193-.206-.637-.413-1.682-.297-1.019.113-1.479.404-1.713.7-.247.312-.369.789-.369 1.554 0 .793.129 1.171.308 1.371.162.181.519.379 1.442.379.853 0 1.339-.235 1.638-.54.315-.322.527-.827.617-1.553.117-.935-.037-1.395-.241-1.614Zm4.155-.297c-1.044-.116-1.488.091-1.681.297-.204.219-.359.679-.242 1.614.091.726.303 1.231.618 1.553.299.305.784.54 1.638.54.922 0 1.28-.198 1.442-.379.179-.2.308-.578.308-1.371 0-.765-.123-1.242-.37-1.554-.233-.296-.693-.587-1.713-.7Z"></path><path d="M6.25 9.037a.75.75 0 0 1 .75.75v1.501a.75.75 0 0 1-1.5 0V9.787a.75.75 0 0 1 .75-.75Zm4.25.75v1.501a.75.75 0 0 1-1.5 0V9.787a.75.75 0 0 1 1.5 0Z"></path>
+</svg>
+</a><tool-tip id="tooltip-3b446cd2-b11e-4e6a-801a-35215a794670" for="copilot-chat-header-button" popover="manual" data-direction="s" data-type="label" data-view-component="true" class="sr-only position-absolute">Chat with Copilot</tool-tip>
+
+      <template data-target="react-partial-anchor.template">
+        <script crossorigin="anonymous" type="application/javascript" src="https://github.githubassets.com/assets/18312-17646a9d1ca3.js" defer="defer"></script>
+<script crossorigin="anonymous" type="application/javascript" src="https://github.githubassets.com/assets/42478-4a01513b4a7e.js" defer="defer"></script>
+<script crossorigin="anonymous" type="application/javascript" src="https://github.githubassets.com/assets/347-d8794b0e68a7.js" defer="defer"></script>
+<script crossorigin="anonymous" type="application/javascript" src="https://github.githubassets.com/assets/89101-a4d3eb4b083b.js" defer="defer"></script>
+<script crossorigin="anonymous" type="application/javascript" src="https://github.githubassets.com/assets/37051-cb8690bd8a08.js" defer="defer"></script>
+<script crossorigin="anonymous" type="application/javascript" src="https://github.githubassets.com/assets/62318-1533a458c2ff.js" defer="defer"></script>
+<script crossorigin="anonymous" type="application/javascript" src="https://github.githubassets.com/assets/65863-3cf9e0bc5627.js" defer="defer"></script>
+<script crossorigin="anonymous" type="application/javascript" src="https://github.githubassets.com/assets/3025-0e441b2f6975.js" defer="defer"></script>
+<script crossorigin="anonymous" type="application/javascript" src="https://github.githubassets.com/assets/11048-7bcc0c218a96.js" defer="defer"></script>
+<script crossorigin="anonymous" type="application/javascript" src="https://github.githubassets.com/assets/37294-cf5e353219be.js" defer="defer"></script>
+<script crossorigin="anonymous" type="application/javascript" src="https://github.githubassets.com/assets/30721-5cbde854429a.js" defer="defer"></script>
+<script crossorigin="anonymous" type="application/javascript" src="https://github.githubassets.com/assets/2635-ce3f9301c5b5.js" defer="defer"></script>
+<script crossorigin="anonymous" type="application/javascript" src="https://github.githubassets.com/assets/81171-84cf062018d1.js" defer="defer"></script>
+<script crossorigin="anonymous" type="application/javascript" src="https://github.githubassets.com/assets/10306-cc918f56ab47.js" defer="defer"></script>
+<script crossorigin="anonymous" type="application/javascript" src="https://github.githubassets.com/assets/4817-3c37492d8a51.js" defer="defer"></script>
+<script crossorigin="anonymous" type="application/javascript" src="https://github.githubassets.com/assets/28902-24820f85b4f1.js" defer="defer"></script>
+<script crossorigin="anonymous" type="application/javascript" src="https://github.githubassets.com/assets/36982-210d428390ef.js" defer="defer"></script>
+<script crossorigin="anonymous" type="application/javascript" src="https://github.githubassets.com/assets/92687-49732546a117.js" defer="defer"></script>
+<script crossorigin="anonymous" type="application/javascript" src="https://github.githubassets.com/assets/34031-f02f822d5dd4.js" defer="defer"></script>
+<script crossorigin="anonymous" type="application/javascript" src="https://github.githubassets.com/assets/29405-d4e23f9779f4.js" defer="defer"></script>
+<script crossorigin="anonymous" type="application/javascript" src="https://github.githubassets.com/assets/copilot-chat-df0dba12de32.js" defer="defer"></script>
+<link crossorigin="anonymous" media="all" rel="stylesheet" href="https://github.githubassets.com/assets/primer-react.95c095f938576ec73363.module.css" />
+<link crossorigin="anonymous" media="all" rel="stylesheet" href="https://github.githubassets.com/assets/29405.8b7bba9eb72962481d6b.module.css" />
+<link crossorigin="anonymous" media="all" rel="stylesheet" href="https://github.githubassets.com/assets/copilot-chat.ac702536853b0234e424.module.css" />
+        <link crossorigin="anonymous" media="all" rel="stylesheet" href="https://github.githubassets.com/assets/copilot-markdown-rendering-ddd978d4a7c0.css" />
+        <include-fragment src="/github-copilot/chat?skip_anchor=true" data-nonce="v2:abf33aa6-6e52-b46c-7070-ed465b4a8af0" data-view-component="true">
+  
+  <div data-show-on-forbidden-error hidden>
+    <div class="Box">
+  <div class="blankslate-container">
+    <div data-view-component="true" class="blankslate blankslate-spacious color-bg-default rounded-2">
+      
+
+      <h3 data-view-component="true" class="blankslate-heading">        Uh oh!
+</h3>
+      <p data-view-component="true">        <p class="color-fg-muted my-2 mb-2 ws-normal">There was an error while loading. <a class="Link--inTextBlock" data-turbo="false" href="" aria-label="Please reload this page">Please reload this page</a>.</p>
+</p>
+
+</div>  </div>
+</div>  </div>
+</include-fragment>
+      </template>
+    </react-partial-anchor>
+    <div class="position-relative">
+      
+        <react-partial-anchor>
+          <button id="global-copilot-menu-button" data-target="react-partial-anchor.anchor" aria-expanded="false" aria-labelledby="tooltip-3ac4af01-66c2-4de7-8f4a-9a13843810ad" type="button" data-view-component="true" class="Button Button--iconOnly Button--secondary Button--medium AppHeader-button AppHeader-buttonRight">  <svg aria-hidden="true" height="16" viewBox="0 0 16 16" version="1.1" width="16" data-view-component="true" class="octicon octicon-triangle-down Button-visual">
+    <path d="m4.427 7.427 3.396 3.396a.25.25 0 0 0 .354 0l3.396-3.396A.25.25 0 0 0 11.396 7H4.604a.25.25 0 0 0-.177.427Z"></path>
+</svg>
+</button><tool-tip id="tooltip-3ac4af01-66c2-4de7-8f4a-9a13843810ad" for="global-copilot-menu-button" popover="manual" data-direction="s" data-type="label" data-view-component="true" class="sr-only position-absolute">Open Copilot…</tool-tip>
+
+          <template data-target="react-partial-anchor.template">
+            <link crossorigin="anonymous" media="all" rel="stylesheet" href="https://github.githubassets.com/assets/primer-react.95c095f938576ec73363.module.css" />
+<link crossorigin="anonymous" media="all" rel="stylesheet" href="https://github.githubassets.com/assets/global-copilot-menu.9d926f69ee309a45d0df.module.css" />
+
+<react-partial
+  partial-name="global-copilot-menu"
+  data-ssr="false"
+  data-attempted-ssr="false"
+  data-react-profiling="false"
+>
+  
+  <script type="application/json" data-target="react-partial.embeddedData">{"props":{"repository":{"id":1102294399,"name":"scripts","ownerLogin":"MarvinFS"}}}</script>
+  <div data-target="react-partial.reactRoot"></div>
+</react-partial>
+
+
+          </template>
+        </react-partial-anchor>
+    </div>
+  </div>
+</div>
+
+
+            <div class="AppHeader-actions position-relative">
+                 <react-partial-anchor>
+      <button id="global-create-menu-anchor" aria-label="Create something new" data-target="react-partial-anchor.anchor" type="button" disabled="disabled" data-view-component="true" class="AppHeader-button AppHeader-button--dropdown global-create-button cursor-wait Button--secondary Button--medium Button width-auto color-fg-muted">  <span class="Button-content">
+      <span class="Button-visual Button-leadingVisual">
+        <svg aria-hidden="true" height="16" viewBox="0 0 16 16" version="1.1" width="16" data-view-component="true" class="octicon octicon-plus">
+    <path d="M7.75 2a.75.75 0 0 1 .75.75V7h4.25a.75.75 0 0 1 0 1.5H8.5v4.25a.75.75 0 0 1-1.5 0V8.5H2.75a.75.75 0 0 1 0-1.5H7V2.75A.75.75 0 0 1 7.75 2Z"></path>
+</svg>
+      </span>
+    <span class="Button-label"><svg aria-hidden="true" height="16" viewBox="0 0 16 16" version="1.1" width="16" data-view-component="true" class="octicon octicon-triangle-down">
+    <path d="m4.427 7.427 3.396 3.396a.25.25 0 0 0 .354 0l3.396-3.396A.25.25 0 0 0 11.396 7H4.604a.25.25 0 0 0-.177.427Z"></path>
+</svg></span>
+  </span>
+</button><tool-tip id="tooltip-0462b806-aab1-4f29-8dfa-a54cb1c8e9cf" for="global-create-menu-anchor" popover="manual" data-direction="s" data-type="description" data-view-component="true" class="sr-only position-absolute">Create new…</tool-tip>
+
+      <template data-target="react-partial-anchor.template">
+        <link crossorigin="anonymous" media="all" rel="stylesheet" href="https://github.githubassets.com/assets/primer-react.95c095f938576ec73363.module.css" />
+<link crossorigin="anonymous" media="all" rel="stylesheet" href="https://github.githubassets.com/assets/global-create-menu.30736d4aa7b2b246dd6f.module.css" />
+
+<react-partial
+  partial-name="global-create-menu"
+  data-ssr="false"
+  data-attempted-ssr="false"
+  data-react-profiling="false"
+>
+  
+  <script type="application/json" data-target="react-partial.embeddedData">{"props":{"showCreateRepo":true,"showImportRepo":true,"showCodespaces":true,"showSpark":false,"showCodingAgent":false,"showGist":true,"showCreateOrg":true,"showCreateProject":false,"showCreateLegacyProject":false,"showCreateIssue":true,"createProjectUrl":"/MarvinFS?tab=projects","org":null,"owner":"MarvinFS","repo":"scripts"}}</script>
+  <div data-target="react-partial.reactRoot"></div>
+</react-partial>
+
+
+      </template>
+    </react-partial-anchor>
+
+
+                <a href="/issues" data-analytics-event="{&quot;category&quot;:&quot;Global navigation&quot;,&quot;action&quot;:&quot;ISSUES_HEADER&quot;,&quot;label&quot;:null}" id="icon-button-8873983e-2153-4ac4-83c7-c707de0bc00b" aria-labelledby="tooltip-4cb18dd8-bf40-4ca3-a20e-b800b2c9ab35" data-view-component="true" class="Button Button--iconOnly Button--secondary Button--medium AppHeader-button color-fg-muted">  <svg aria-hidden="true" height="16" viewBox="0 0 16 16" version="1.1" width="16" data-view-component="true" class="octicon octicon-issue-opened Button-visual">
+    <path d="M8 9.5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3Z"></path><path d="M8 0a8 8 0 1 1 0 16A8 8 0 0 1 8 0ZM1.5 8a6.5 6.5 0 1 0 13 0 6.5 6.5 0 0 0-13 0Z"></path>
+</svg>
+</a><tool-tip id="tooltip-4cb18dd8-bf40-4ca3-a20e-b800b2c9ab35" for="icon-button-8873983e-2153-4ac4-83c7-c707de0bc00b" popover="manual" data-direction="s" data-type="label" data-view-component="true" class="sr-only position-absolute">Your issues</tool-tip>
+
+                <a href="/pulls" data-analytics-event="{&quot;category&quot;:&quot;Global navigation&quot;,&quot;action&quot;:&quot;PULL_REQUESTS_HEADER&quot;,&quot;label&quot;:null}" id="icon-button-64182799-0826-4c43-b0d1-d0b2fb23ba69" aria-labelledby="tooltip-89be93dc-e68f-4330-b55b-fba2ce5778ee" data-view-component="true" class="Button Button--iconOnly Button--secondary Button--medium AppHeader-button color-fg-muted">  <svg aria-hidden="true" height="16" viewBox="0 0 16 16" version="1.1" width="16" data-view-component="true" class="octicon octicon-git-pull-request Button-visual">
+    <path d="M1.5 3.25a2.25 2.25 0 1 1 3 2.122v5.256a2.251 2.251 0 1 1-1.5 0V5.372A2.25 2.25 0 0 1 1.5 3.25Zm5.677-.177L9.573.677A.25.25 0 0 1 10 .854V2.5h1A2.5 2.5 0 0 1 13.5 5v5.628a2.251 2.251 0 1 1-1.5 0V5a1 1 0 0 0-1-1h-1v1.646a.25.25 0 0 1-.427.177L7.177 3.427a.25.25 0 0 1 0-.354ZM3.75 2.5a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5Zm0 9.5a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5Zm8.25.75a.75.75 0 1 0 1.5 0 .75.75 0 0 0-1.5 0Z"></path>
+</svg>
+</a><tool-tip id="tooltip-89be93dc-e68f-4330-b55b-fba2ce5778ee" for="icon-button-64182799-0826-4c43-b0d1-d0b2fb23ba69" popover="manual" data-direction="s" data-type="label" data-view-component="true" class="sr-only position-absolute">Your pull requests</tool-tip>
+
+            </div>
+
+              <notification-indicator data-channel="eyJjIjoibm90aWZpY2F0aW9uLWNoYW5nZWQ6Nzk5ODYzNiIsInQiOjE3NjM5OTI3Nzd9--3ea70cfdb8202a47ca11c0c868864245ff363d3553588c3f4e3ee796d2897d68" data-indicator-mode="none" data-tooltip-global="You have unread notifications" data-tooltip-unavailable="Notifications are unavailable at the moment." data-tooltip-none="You have no unread notifications" data-header-redesign-enabled="true" data-fetch-indicator-src="/notifications/indicator" data-fetch-indicator-enabled="true" data-view-component="true" class="js-socket-channel">
+    <a id="AppHeader-notifications-button" href="/notifications" aria-labelledby="notification-indicator-tooltip" data-hotkey="g n" data-target="notification-indicator.link" data-analytics-event="{&quot;category&quot;:&quot;Global navigation&quot;,&quot;action&quot;:&quot;NOTIFICATIONS_HEADER&quot;,&quot;label&quot;:null}" data-view-component="true" class="Button Button--iconOnly Button--secondary Button--medium AppHeader-button color-fg-muted">  <svg aria-hidden="true" height="16" viewBox="0 0 16 16" version="1.1" width="16" data-view-component="true" class="octicon octicon-inbox Button-visual">
+    <path d="M2.8 2.06A1.75 1.75 0 0 1 4.41 1h7.18c.7 0 1.333.417 1.61 1.06l2.74 6.395c.04.093.06.194.06.295v4.5A1.75 1.75 0 0 1 14.25 15H1.75A1.75 1.75 0 0 1 0 13.25v-4.5c0-.101.02-.202.06-.295Zm1.61.44a.25.25 0 0 0-.23.152L1.887 8H4.75a.75.75 0 0 1 .6.3L6.625 10h2.75l1.275-1.7a.75.75 0 0 1 .6-.3h2.863L11.82 2.652a.25.25 0 0 0-.23-.152Zm10.09 7h-2.875l-1.275 1.7a.75.75 0 0 1-.6.3h-3.5a.75.75 0 0 1-.6-.3L4.375 9.5H1.5v3.75c0 .138.112.25.25.25h12.5a.25.25 0 0 0 .25-.25Z"></path>
+</svg>
+</a>
+
+    <tool-tip id="notification-indicator-tooltip" data-target="notification-indicator.tooltip" for="AppHeader-notifications-button" popover="manual" data-direction="s" data-type="label" data-view-component="true" class="sr-only position-absolute">Notifications</tool-tip>
+</notification-indicator>
+
+            <div class="AppHeader-user">
+              <deferred-side-panel data-url="/_side-panels/user?repository_id=1102294399">
+  <include-fragment data-target="deferred-side-panel.fragment" data-nonce="v2:abf33aa6-6e52-b46c-7070-ed465b4a8af0" data-view-component="true">
+  
+    <react-partial-anchor
+  
+>
+  <button data-target="react-partial-anchor.anchor" data-login="MarvinFS" aria-label="Open user navigation menu" type="button" data-view-component="true" class="cursor-wait Button--invisible Button--medium Button Button--invisible-noVisuals color-bg-transparent p-0">  <span class="Button-content">
+    <span class="Button-label"><img src="https://avatars.githubusercontent.com/u/7998636?v=4" alt="" size="32" height="32" width="32" data-view-component="true" class="avatar circle" /></span>
+  </span>
+</button>
+  <template data-target="react-partial-anchor.template">
+    <link crossorigin="anonymous" media="all" rel="stylesheet" href="https://github.githubassets.com/assets/primer-react.95c095f938576ec73363.module.css" />
+<link crossorigin="anonymous" media="all" rel="stylesheet" href="https://github.githubassets.com/assets/global-user-nav-drawer.90949a46e3c775d67262.module.css" />
+
+<react-partial
+  partial-name="global-user-nav-drawer"
+  data-ssr="false"
+  data-attempted-ssr="false"
+  data-react-profiling="false"
+>
+  
+  <script type="application/json" data-target="react-partial.embeddedData">{"props":{"owner":{"login":"MarvinFS","name":"Vladimir","avatarUrl":"https://avatars.githubusercontent.com/u/7998636?v=4"},"drawerId":"global-user-nav-drawer","lazyLoadItemDataFetchUrl":"/_side-panels/user.json","canAddAccount":true,"addAccountPath":"/login?add_account=1\u0026return_to=https%3A%2F%2Fgithub.com%2FMarvinFS%2Fscripts%2Fblob%2Fmain%2FVSA%2520repo%2Fvsa_repo.sh","switchAccountPath":"/switch_account","loginAccountPath":"/login?add_account=1","projectsPath":"/MarvinFS?tab=projects","gistsUrl":"https://gist.github.com/mine","docsUrl":"https://docs.github.com","yourEnterpriseUrl":null,"enterpriseSettingsUrl":null,"supportUrl":"https://support.github.com","showAccountSwitcher":true,"showCopilot":true,"showEnterprises":true,"showEnterprise":false,"showGists":true,"showOrganizations":true,"showSponsors":true,"showUpgrade":true,"showFeaturesPreviews":true,"showEnterpriseSettings":false}}</script>
+  <div data-target="react-partial.reactRoot"></div>
+</react-partial>
+
+
+  </template>
+</react-partial-anchor>
+
+
+  <div data-show-on-forbidden-error hidden>
+    <div class="Box">
+  <div class="blankslate-container">
+    <div data-view-component="true" class="blankslate blankslate-spacious color-bg-default rounded-2">
+      
+
+      <h3 data-view-component="true" class="blankslate-heading">        Uh oh!
+</h3>
+      <p data-view-component="true">        <p class="color-fg-muted my-2 mb-2 ws-normal">There was an error while loading. <a class="Link--inTextBlock" data-turbo="false" href="" aria-label="Please reload this page">Please reload this page</a>.</p>
+</p>
+
+</div>  </div>
+</div>  </div>
+</include-fragment></deferred-side-panel>
+            </div>
+
+            <div class="position-absolute mt-2">
+                
+<site-header-logged-in-user-menu>
+
+</site-header-logged-in-user-menu>
+
+            </div>
+          </div>
+        </div>
+
+
+        
+            <div class="AppHeader-localBar" >
+              <nav data-pjax="#js-repo-pjax-container" aria-label="Repository" data-view-component="true" class="js-repo-nav js-sidenav-container-pjax js-responsive-underlinenav overflow-hidden UnderlineNav">
+
+  <ul data-view-component="true" class="UnderlineNav-body list-style-none">
+      <li data-view-component="true" class="d-inline-flex">
+  <a id="code-tab" href="/MarvinFS/scripts" data-tab-item="i0code-tab" data-selected-links="repo_source repo_downloads repo_commits repo_releases repo_tags repo_branches repo_packages repo_deployments repo_attestations /MarvinFS/scripts" data-pjax="#repo-content-pjax-container" data-turbo-frame="repo-content-turbo-frame" data-hotkey="g c" data-analytics-event="{&quot;category&quot;:&quot;Underline navbar&quot;,&quot;action&quot;:&quot;Click tab&quot;,&quot;label&quot;:&quot;Code&quot;,&quot;target&quot;:&quot;UNDERLINE_NAV.TAB&quot;}" data-view-component="true" class="UnderlineNav-item no-wrap js-responsive-underlinenav-item js-selected-navigation-item">
+    
+              <svg aria-hidden="true" height="16" viewBox="0 0 16 16" version="1.1" width="16" data-view-component="true" class="octicon octicon-code UnderlineNav-octicon d-none d-sm-inline">
+    <path d="m11.28 3.22 4.25 4.25a.75.75 0 0 1 0 1.06l-4.25 4.25a.749.749 0 0 1-1.275-.326.749.749 0 0 1 .215-.734L13.94 8l-3.72-3.72a.749.749 0 0 1 .326-1.275.749.749 0 0 1 .734.215Zm-6.56 0a.751.751 0 0 1 1.042.018.751.751 0 0 1 .018 1.042L2.06 8l3.72 3.72a.749.749 0 0 1-.326 1.275.749.749 0 0 1-.734-.215L.47 8.53a.75.75 0 0 1 0-1.06Z"></path>
+</svg>
+        <span data-content="Code">Code</span>
+          <span id="code-repo-tab-count" data-pjax-replace="" data-turbo-replace="" title="Not available" data-view-component="true" class="Counter"></span>
+
+
+    
+</a></li>
+      <li data-view-component="true" class="d-inline-flex">
+  <a id="issues-tab" href="/MarvinFS/scripts/issues" data-tab-item="i1issues-tab" data-selected-links="repo_issues repo_labels repo_milestones /MarvinFS/scripts/issues" data-pjax="#repo-content-pjax-container" data-turbo-frame="repo-content-turbo-frame" data-hotkey="g i" data-analytics-event="{&quot;category&quot;:&quot;Underline navbar&quot;,&quot;action&quot;:&quot;Click tab&quot;,&quot;label&quot;:&quot;Issues&quot;,&quot;target&quot;:&quot;UNDERLINE_NAV.TAB&quot;}" data-view-component="true" class="UnderlineNav-item no-wrap js-responsive-underlinenav-item js-selected-navigation-item">
+    
+              <svg aria-hidden="true" height="16" viewBox="0 0 16 16" version="1.1" width="16" data-view-component="true" class="octicon octicon-issue-opened UnderlineNav-octicon d-none d-sm-inline">
+    <path d="M8 9.5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3Z"></path><path d="M8 0a8 8 0 1 1 0 16A8 8 0 0 1 8 0ZM1.5 8a6.5 6.5 0 1 0 13 0 6.5 6.5 0 0 0-13 0Z"></path>
+</svg>
+        <span data-content="Issues">Issues</span>
+          <span id="issues-repo-tab-count" data-pjax-replace="" data-turbo-replace="" title="0" hidden="hidden" data-view-component="true" class="Counter">0</span>
+
+
+    
+</a></li>
+      <li data-view-component="true" class="d-inline-flex">
+  <a id="pull-requests-tab" href="/MarvinFS/scripts/pulls" data-tab-item="i2pull-requests-tab" data-selected-links="repo_pulls checks /MarvinFS/scripts/pulls" data-pjax="#repo-content-pjax-container" data-turbo-frame="repo-content-turbo-frame" data-hotkey="g p" data-analytics-event="{&quot;category&quot;:&quot;Underline navbar&quot;,&quot;action&quot;:&quot;Click tab&quot;,&quot;label&quot;:&quot;Pull requests&quot;,&quot;target&quot;:&quot;UNDERLINE_NAV.TAB&quot;}" data-view-component="true" class="UnderlineNav-item no-wrap js-responsive-underlinenav-item js-selected-navigation-item">
+    
+              <svg aria-hidden="true" height="16" viewBox="0 0 16 16" version="1.1" width="16" data-view-component="true" class="octicon octicon-git-pull-request UnderlineNav-octicon d-none d-sm-inline">
+    <path d="M1.5 3.25a2.25 2.25 0 1 1 3 2.122v5.256a2.251 2.251 0 1 1-1.5 0V5.372A2.25 2.25 0 0 1 1.5 3.25Zm5.677-.177L9.573.677A.25.25 0 0 1 10 .854V2.5h1A2.5 2.5 0 0 1 13.5 5v5.628a2.251 2.251 0 1 1-1.5 0V5a1 1 0 0 0-1-1h-1v1.646a.25.25 0 0 1-.427.177L7.177 3.427a.25.25 0 0 1 0-.354ZM3.75 2.5a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5Zm0 9.5a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5Zm8.25.75a.75.75 0 1 0 1.5 0 .75.75 0 0 0-1.5 0Z"></path>
+</svg>
+        <span data-content="Pull requests">Pull requests</span>
+          <span id="pull-requests-repo-tab-count" data-pjax-replace="" data-turbo-replace="" title="0" hidden="hidden" data-view-component="true" class="Counter">0</span>
+
+
+    
+</a></li>
+      <li data-view-component="true" class="d-inline-flex">
+  <a id="actions-tab" href="/MarvinFS/scripts/actions" data-tab-item="i3actions-tab" data-selected-links="repo_actions /MarvinFS/scripts/actions" data-pjax="#repo-content-pjax-container" data-turbo-frame="repo-content-turbo-frame" data-hotkey="g a" data-analytics-event="{&quot;category&quot;:&quot;Underline navbar&quot;,&quot;action&quot;:&quot;Click tab&quot;,&quot;label&quot;:&quot;Actions&quot;,&quot;target&quot;:&quot;UNDERLINE_NAV.TAB&quot;}" data-view-component="true" class="UnderlineNav-item no-wrap js-responsive-underlinenav-item js-selected-navigation-item">
+    
+              <svg aria-hidden="true" height="16" viewBox="0 0 16 16" version="1.1" width="16" data-view-component="true" class="octicon octicon-play UnderlineNav-octicon d-none d-sm-inline">
+    <path d="M8 0a8 8 0 1 1 0 16A8 8 0 0 1 8 0ZM1.5 8a6.5 6.5 0 1 0 13 0 6.5 6.5 0 0 0-13 0Zm4.879-2.773 4.264 2.559a.25.25 0 0 1 0 .428l-4.264 2.559A.25.25 0 0 1 6 10.559V5.442a.25.25 0 0 1 .379-.215Z"></path>
+</svg>
+        <span data-content="Actions">Actions</span>
+          <span id="actions-repo-tab-count" data-pjax-replace="" data-turbo-replace="" title="Not available" data-view-component="true" class="Counter"></span>
+
+
+    
+</a></li>
+      <li data-view-component="true" class="d-inline-flex">
+  <a id="projects-tab" href="/MarvinFS/scripts/projects" data-tab-item="i4projects-tab" data-selected-links="repo_projects new_repo_project repo_project /MarvinFS/scripts/projects" data-pjax="#repo-content-pjax-container" data-turbo-frame="repo-content-turbo-frame" data-hotkey="g b" data-analytics-event="{&quot;category&quot;:&quot;Underline navbar&quot;,&quot;action&quot;:&quot;Click tab&quot;,&quot;label&quot;:&quot;Projects&quot;,&quot;target&quot;:&quot;UNDERLINE_NAV.TAB&quot;}" data-view-component="true" class="UnderlineNav-item no-wrap js-responsive-underlinenav-item js-selected-navigation-item">
+    
+              <svg aria-hidden="true" height="16" viewBox="0 0 16 16" version="1.1" width="16" data-view-component="true" class="octicon octicon-table UnderlineNav-octicon d-none d-sm-inline">
+    <path d="M0 1.75C0 .784.784 0 1.75 0h12.5C15.216 0 16 .784 16 1.75v12.5A1.75 1.75 0 0 1 14.25 16H1.75A1.75 1.75 0 0 1 0 14.25ZM6.5 6.5v8h7.75a.25.25 0 0 0 .25-.25V6.5Zm8-1.5V1.75a.25.25 0 0 0-.25-.25H6.5V5Zm-13 1.5v7.75c0 .138.112.25.25.25H5v-8ZM5 5V1.5H1.75a.25.25 0 0 0-.25.25V5Z"></path>
+</svg>
+        <span data-content="Projects">Projects</span>
+          <span id="projects-repo-tab-count" data-pjax-replace="" data-turbo-replace="" title="0" hidden="hidden" data-view-component="true" class="Counter">0</span>
+
+
+    
+</a></li>
+      <li data-view-component="true" class="d-inline-flex">
+  <a id="security-tab" href="/MarvinFS/scripts/security" data-tab-item="i5security-tab" data-selected-links="security overview alerts policy token_scanning code_scanning /MarvinFS/scripts/security" data-pjax="#repo-content-pjax-container" data-turbo-frame="repo-content-turbo-frame" data-hotkey="g s" data-analytics-event="{&quot;category&quot;:&quot;Underline navbar&quot;,&quot;action&quot;:&quot;Click tab&quot;,&quot;label&quot;:&quot;Security&quot;,&quot;target&quot;:&quot;UNDERLINE_NAV.TAB&quot;}" data-view-component="true" class="UnderlineNav-item no-wrap js-responsive-underlinenav-item js-selected-navigation-item">
+    
+              <svg aria-hidden="true" height="16" viewBox="0 0 16 16" version="1.1" width="16" data-view-component="true" class="octicon octicon-shield UnderlineNav-octicon d-none d-sm-inline">
+    <path d="M7.467.133a1.748 1.748 0 0 1 1.066 0l5.25 1.68A1.75 1.75 0 0 1 15 3.48V7c0 1.566-.32 3.182-1.303 4.682-.983 1.498-2.585 2.813-5.032 3.855a1.697 1.697 0 0 1-1.33 0c-2.447-1.042-4.049-2.357-5.032-3.855C1.32 10.182 1 8.566 1 7V3.48a1.75 1.75 0 0 1 1.217-1.667Zm.61 1.429a.25.25 0 0 0-.153 0l-5.25 1.68a.25.25 0 0 0-.174.238V7c0 1.358.275 2.666 1.057 3.86.784 1.194 2.121 2.34 4.366 3.297a.196.196 0 0 0 .154 0c2.245-.956 3.582-2.104 4.366-3.298C13.225 9.666 13.5 8.36 13.5 7V3.48a.251.251 0 0 0-.174-.237l-5.25-1.68ZM8.75 4.75v3a.75.75 0 0 1-1.5 0v-3a.75.75 0 0 1 1.5 0ZM9 10.5a1 1 0 1 1-2 0 1 1 0 0 1 2 0Z"></path>
+</svg>
+        <span data-content="Security">Security</span>
+          <include-fragment src="/MarvinFS/scripts/security/overall-count" accept="text/fragment+html" data-nonce="v2:abf33aa6-6e52-b46c-7070-ed465b4a8af0" data-view-component="true">
+  
+  <div data-show-on-forbidden-error hidden>
+    <div class="Box">
+  <div class="blankslate-container">
+    <div data-view-component="true" class="blankslate blankslate-spacious color-bg-default rounded-2">
+      
+
+      <h3 data-view-component="true" class="blankslate-heading">        Uh oh!
+</h3>
+      <p data-view-component="true">        <p class="color-fg-muted my-2 mb-2 ws-normal">There was an error while loading. <a class="Link--inTextBlock" data-turbo="false" href="" aria-label="Please reload this page">Please reload this page</a>.</p>
+</p>
+
+</div>  </div>
+</div>  </div>
+</include-fragment>
+
+    
+</a></li>
+      <li data-view-component="true" class="d-inline-flex">
+  <a id="insights-tab" href="/MarvinFS/scripts/network/dependencies" data-tab-item="i6insights-tab" data-selected-links="repo_graphs repo_contributors dependency_graph dependabot_updates pulse people community /MarvinFS/scripts/network/dependencies" data-pjax="#repo-content-pjax-container" data-turbo-frame="repo-content-turbo-frame" data-analytics-event="{&quot;category&quot;:&quot;Underline navbar&quot;,&quot;action&quot;:&quot;Click tab&quot;,&quot;label&quot;:&quot;Insights&quot;,&quot;target&quot;:&quot;UNDERLINE_NAV.TAB&quot;}" data-view-component="true" class="UnderlineNav-item no-wrap js-responsive-underlinenav-item js-selected-navigation-item">
+    
+              <svg aria-hidden="true" height="16" viewBox="0 0 16 16" version="1.1" width="16" data-view-component="true" class="octicon octicon-graph UnderlineNav-octicon d-none d-sm-inline">
+    <path d="M1.5 1.75V13.5h13.75a.75.75 0 0 1 0 1.5H.75a.75.75 0 0 1-.75-.75V1.75a.75.75 0 0 1 1.5 0Zm14.28 2.53-5.25 5.25a.75.75 0 0 1-1.06 0L7 7.06 4.28 9.78a.751.751 0 0 1-1.042-.018.751.751 0 0 1-.018-1.042l3.25-3.25a.75.75 0 0 1 1.06 0L10 7.94l4.72-4.72a.751.751 0 0 1 1.042.018.751.751 0 0 1 .018 1.042Z"></path>
+</svg>
+        <span data-content="Insights">Insights</span>
+          <span id="insights-repo-tab-count" data-pjax-replace="" data-turbo-replace="" title="Not available" data-view-component="true" class="Counter"></span>
+
+
+    
+</a></li>
+      <li data-view-component="true" class="d-inline-flex">
+  <a id="settings-tab" href="/MarvinFS/scripts/settings" data-tab-item="i7settings-tab" data-selected-links="code_review_limits code_quality codespaces_repository_settings collaborators custom_tabs github_models_repo_settings hooks integration_installations interaction_limits issue_template_editor key_links_settings license_policy notifications repo_announcements repo_branch_settings repo_custom_properties repo_keys_settings repo_pages_settings repo_protected_tags_settings repo_rule_insights repo_rules_bypass_requests repo_rulesets repo_settings_copilot_coding_guidelines repo_settings_copilot_content_exclusion repo_settings_copilot_swe_agent repo_settings reported_content repository_actions_settings_add_new_runner repository_actions_settings_general repository_actions_settings_runner_details repository_actions_settings_runners repository_actions_settings repository_environments role_details secrets_settings_actions secrets_settings_codespaces secrets_settings_dependabot secrets security_analysis security_products /MarvinFS/scripts/settings" data-pjax="#repo-content-pjax-container" data-turbo-frame="repo-content-turbo-frame" data-analytics-event="{&quot;category&quot;:&quot;Underline navbar&quot;,&quot;action&quot;:&quot;Click tab&quot;,&quot;label&quot;:&quot;Settings&quot;,&quot;target&quot;:&quot;UNDERLINE_NAV.TAB&quot;}" data-view-component="true" class="UnderlineNav-item no-wrap js-responsive-underlinenav-item js-selected-navigation-item">
+    
+              <svg aria-hidden="true" height="16" viewBox="0 0 16 16" version="1.1" width="16" data-view-component="true" class="octicon octicon-gear UnderlineNav-octicon d-none d-sm-inline">
+    <path d="M8 0a8.2 8.2 0 0 1 .701.031C9.444.095 9.99.645 10.16 1.29l.288 1.107c.018.066.079.158.212.224.231.114.454.243.668.386.123.082.233.09.299.071l1.103-.303c.644-.176 1.392.021 1.82.63.27.385.506.792.704 1.218.315.675.111 1.422-.364 1.891l-.814.806c-.049.048-.098.147-.088.294.016.257.016.515 0 .772-.01.147.038.246.088.294l.814.806c.475.469.679 1.216.364 1.891a7.977 7.977 0 0 1-.704 1.217c-.428.61-1.176.807-1.82.63l-1.102-.302c-.067-.019-.177-.011-.3.071a5.909 5.909 0 0 1-.668.386c-.133.066-.194.158-.211.224l-.29 1.106c-.168.646-.715 1.196-1.458 1.26a8.006 8.006 0 0 1-1.402 0c-.743-.064-1.289-.614-1.458-1.26l-.289-1.106c-.018-.066-.079-.158-.212-.224a5.738 5.738 0 0 1-.668-.386c-.123-.082-.233-.09-.299-.071l-1.103.303c-.644.176-1.392-.021-1.82-.63a8.12 8.12 0 0 1-.704-1.218c-.315-.675-.111-1.422.363-1.891l.815-.806c.05-.048.098-.147.088-.294a6.214 6.214 0 0 1 0-.772c.01-.147-.038-.246-.088-.294l-.815-.806C.635 6.045.431 5.298.746 4.623a7.92 7.92 0 0 1 .704-1.217c.428-.61 1.176-.807 1.82-.63l1.102.302c.067.019.177.011.3-.071.214-.143.437-.272.668-.386.133-.066.194-.158.211-.224l.29-1.106C6.009.645 6.556.095 7.299.03 7.53.01 7.764 0 8 0Zm-.571 1.525c-.036.003-.108.036-.137.146l-.289 1.105c-.147.561-.549.967-.998 1.189-.173.086-.34.183-.5.29-.417.278-.97.423-1.529.27l-1.103-.303c-.109-.03-.175.016-.195.045-.22.312-.412.644-.573.99-.014.031-.021.11.059.19l.815.806c.411.406.562.957.53 1.456a4.709 4.709 0 0 0 0 .582c.032.499-.119 1.05-.53 1.456l-.815.806c-.081.08-.073.159-.059.19.162.346.353.677.573.989.02.03.085.076.195.046l1.102-.303c.56-.153 1.113-.008 1.53.27.161.107.328.204.501.29.447.222.85.629.997 1.189l.289 1.105c.029.109.101.143.137.146a6.6 6.6 0 0 0 1.142 0c.036-.003.108-.036.137-.146l.289-1.105c.147-.561.549-.967.998-1.189.173-.086.34-.183.5-.29.417-.278.97-.423 1.529-.27l1.103.303c.109.029.175-.016.195-.045.22-.313.411-.644.573-.99.014-.031.021-.11-.059-.19l-.815-.806c-.411-.406-.562-.957-.53-1.456a4.709 4.709 0 0 0 0-.582c-.032-.499.119-1.05.53-1.456l.815-.806c.081-.08.073-.159.059-.19a6.464 6.464 0 0 0-.573-.989c-.02-.03-.085-.076-.195-.046l-1.102.303c-.56.153-1.113.008-1.53-.27a4.44 4.44 0 0 0-.501-.29c-.447-.222-.85-.629-.997-1.189l-.289-1.105c-.029-.11-.101-.143-.137-.146a6.6 6.6 0 0 0-1.142 0ZM11 8a3 3 0 1 1-6 0 3 3 0 0 1 6 0ZM9.5 8a1.5 1.5 0 1 0-3.001.001A1.5 1.5 0 0 0 9.5 8Z"></path>
+</svg>
+        <span data-content="Settings">Settings</span>
+          <span id="settings-repo-tab-count" data-pjax-replace="" data-turbo-replace="" title="Not available" data-view-component="true" class="Counter"></span>
+
+
+    
+</a></li>
+</ul>
+    <div style="visibility:hidden;" data-view-component="true" class="UnderlineNav-actions js-responsive-underlinenav-overflow position-absolute pr-3 pr-md-4 pr-lg-5 right-0">      <action-menu data-select-variant="none" data-view-component="true">
+  <focus-group direction="vertical" mnemonics retain>
+    <button id="action-menu-b1d716bd-1381-4c83-938e-595b3591c685-button" popovertarget="action-menu-b1d716bd-1381-4c83-938e-595b3591c685-overlay" aria-controls="action-menu-b1d716bd-1381-4c83-938e-595b3591c685-list" aria-haspopup="true" aria-labelledby="tooltip-2c1853d3-3dbd-447f-96e2-85979b78d21b" type="button" data-view-component="true" class="Button Button--iconOnly Button--secondary Button--medium UnderlineNav-item">  <svg aria-hidden="true" height="16" viewBox="0 0 16 16" version="1.1" width="16" data-view-component="true" class="octicon octicon-kebab-horizontal Button-visual">
+    <path d="M8 9a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3ZM1.5 9a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3Zm13 0a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3Z"></path>
+</svg>
+</button><tool-tip id="tooltip-2c1853d3-3dbd-447f-96e2-85979b78d21b" for="action-menu-b1d716bd-1381-4c83-938e-595b3591c685-button" popover="manual" data-direction="s" data-type="label" data-view-component="true" class="sr-only position-absolute">Additional navigation options</tool-tip>
+
+
+<anchored-position data-target="action-menu.overlay" id="action-menu-b1d716bd-1381-4c83-938e-595b3591c685-overlay" anchor="action-menu-b1d716bd-1381-4c83-938e-595b3591c685-button" align="start" side="outside-bottom" anchor-offset="normal" popover="auto" data-view-component="true">
+  <div data-view-component="true" class="Overlay Overlay--size-auto">
+    
+      <div data-view-component="true" class="Overlay-body Overlay-body--paddingNone">          <action-list>
+  <div data-view-component="true">
+    <ul aria-labelledby="action-menu-b1d716bd-1381-4c83-938e-595b3591c685-button" id="action-menu-b1d716bd-1381-4c83-938e-595b3591c685-list" role="menu" data-view-component="true" class="ActionListWrap--inset ActionListWrap">
+        <li hidden="hidden" data-menu-item="i0code-tab" data-targets="action-list.items" role="none" data-view-component="true" class="ActionListItem">
+    
+    
+    <a tabindex="-1" id="item-ad0b5b30-8bd3-4cca-8ccd-90fc7c5fb831" href="/MarvinFS/scripts" role="menuitem" data-view-component="true" class="ActionListContent ActionListContent--visual16">
+        <span class="ActionListItem-visual ActionListItem-visual--leading">
+          <svg aria-hidden="true" height="16" viewBox="0 0 16 16" version="1.1" width="16" data-view-component="true" class="octicon octicon-code">
+    <path d="m11.28 3.22 4.25 4.25a.75.75 0 0 1 0 1.06l-4.25 4.25a.749.749 0 0 1-1.275-.326.749.749 0 0 1 .215-.734L13.94 8l-3.72-3.72a.749.749 0 0 1 .326-1.275.749.749 0 0 1 .734.215Zm-6.56 0a.751.751 0 0 1 1.042.018.751.751 0 0 1 .018 1.042L2.06 8l3.72 3.72a.749.749 0 0 1-.326 1.275.749.749 0 0 1-.734-.215L.47 8.53a.75.75 0 0 1 0-1.06Z"></path>
+</svg>
+        </span>
+      
+        <span data-view-component="true" class="ActionListItem-label">
+          Code
+</span>      
+</a>
+  
+</li>
+        <li hidden="hidden" data-menu-item="i1issues-tab" data-targets="action-list.items" role="none" data-view-component="true" class="ActionListItem">
+    
+    
+    <a tabindex="-1" id="item-651dfbf4-5c11-4d86-82fa-6e23bd6e4258" href="/MarvinFS/scripts/issues" role="menuitem" data-view-component="true" class="ActionListContent ActionListContent--visual16">
+        <span class="ActionListItem-visual ActionListItem-visual--leading">
+          <svg aria-hidden="true" height="16" viewBox="0 0 16 16" version="1.1" width="16" data-view-component="true" class="octicon octicon-issue-opened">
+    <path d="M8 9.5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3Z"></path><path d="M8 0a8 8 0 1 1 0 16A8 8 0 0 1 8 0ZM1.5 8a6.5 6.5 0 1 0 13 0 6.5 6.5 0 0 0-13 0Z"></path>
+</svg>
+        </span>
+      
+        <span data-view-component="true" class="ActionListItem-label">
+          Issues
+</span>      
+</a>
+  
+</li>
+        <li hidden="hidden" data-menu-item="i2pull-requests-tab" data-targets="action-list.items" role="none" data-view-component="true" class="ActionListItem">
+    
+    
+    <a tabindex="-1" id="item-74fbaefb-c0de-4a0e-b002-16cee2c6a65a" href="/MarvinFS/scripts/pulls" role="menuitem" data-view-component="true" class="ActionListContent ActionListContent--visual16">
+        <span class="ActionListItem-visual ActionListItem-visual--leading">
+          <svg aria-hidden="true" height="16" viewBox="0 0 16 16" version="1.1" width="16" data-view-component="true" class="octicon octicon-git-pull-request">
+    <path d="M1.5 3.25a2.25 2.25 0 1 1 3 2.122v5.256a2.251 2.251 0 1 1-1.5 0V5.372A2.25 2.25 0 0 1 1.5 3.25Zm5.677-.177L9.573.677A.25.25 0 0 1 10 .854V2.5h1A2.5 2.5 0 0 1 13.5 5v5.628a2.251 2.251 0 1 1-1.5 0V5a1 1 0 0 0-1-1h-1v1.646a.25.25 0 0 1-.427.177L7.177 3.427a.25.25 0 0 1 0-.354ZM3.75 2.5a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5Zm0 9.5a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5Zm8.25.75a.75.75 0 1 0 1.5 0 .75.75 0 0 0-1.5 0Z"></path>
+</svg>
+        </span>
+      
+        <span data-view-component="true" class="ActionListItem-label">
+          Pull requests
+</span>      
+</a>
+  
+</li>
+        <li hidden="hidden" data-menu-item="i3actions-tab" data-targets="action-list.items" role="none" data-view-component="true" class="ActionListItem">
+    
+    
+    <a tabindex="-1" id="item-e459cea9-99fc-4c7c-89d6-ee286a67e8e8" href="/MarvinFS/scripts/actions" role="menuitem" data-view-component="true" class="ActionListContent ActionListContent--visual16">
+        <span class="ActionListItem-visual ActionListItem-visual--leading">
+          <svg aria-hidden="true" height="16" viewBox="0 0 16 16" version="1.1" width="16" data-view-component="true" class="octicon octicon-play">
+    <path d="M8 0a8 8 0 1 1 0 16A8 8 0 0 1 8 0ZM1.5 8a6.5 6.5 0 1 0 13 0 6.5 6.5 0 0 0-13 0Zm4.879-2.773 4.264 2.559a.25.25 0 0 1 0 .428l-4.264 2.559A.25.25 0 0 1 6 10.559V5.442a.25.25 0 0 1 .379-.215Z"></path>
+</svg>
+        </span>
+      
+        <span data-view-component="true" class="ActionListItem-label">
+          Actions
+</span>      
+</a>
+  
+</li>
+        <li hidden="hidden" data-menu-item="i4projects-tab" data-targets="action-list.items" role="none" data-view-component="true" class="ActionListItem">
+    
+    
+    <a tabindex="-1" id="item-f8d4adc1-7666-4fb3-a4f4-9de438e62eb7" href="/MarvinFS/scripts/projects" role="menuitem" data-view-component="true" class="ActionListContent ActionListContent--visual16">
+        <span class="ActionListItem-visual ActionListItem-visual--leading">
+          <svg aria-hidden="true" height="16" viewBox="0 0 16 16" version="1.1" width="16" data-view-component="true" class="octicon octicon-table">
+    <path d="M0 1.75C0 .784.784 0 1.75 0h12.5C15.216 0 16 .784 16 1.75v12.5A1.75 1.75 0 0 1 14.25 16H1.75A1.75 1.75 0 0 1 0 14.25ZM6.5 6.5v8h7.75a.25.25 0 0 0 .25-.25V6.5Zm8-1.5V1.75a.25.25 0 0 0-.25-.25H6.5V5Zm-13 1.5v7.75c0 .138.112.25.25.25H5v-8ZM5 5V1.5H1.75a.25.25 0 0 0-.25.25V5Z"></path>
+</svg>
+        </span>
+      
+        <span data-view-component="true" class="ActionListItem-label">
+          Projects
+</span>      
+</a>
+  
+</li>
+        <li hidden="hidden" data-menu-item="i5security-tab" data-targets="action-list.items" role="none" data-view-component="true" class="ActionListItem">
+    
+    
+    <a tabindex="-1" id="item-b30b8809-024a-42f1-a8af-148e60d94014" href="/MarvinFS/scripts/security" role="menuitem" data-view-component="true" class="ActionListContent ActionListContent--visual16">
+        <span class="ActionListItem-visual ActionListItem-visual--leading">
+          <svg aria-hidden="true" height="16" viewBox="0 0 16 16" version="1.1" width="16" data-view-component="true" class="octicon octicon-shield">
+    <path d="M7.467.133a1.748 1.748 0 0 1 1.066 0l5.25 1.68A1.75 1.75 0 0 1 15 3.48V7c0 1.566-.32 3.182-1.303 4.682-.983 1.498-2.585 2.813-5.032 3.855a1.697 1.697 0 0 1-1.33 0c-2.447-1.042-4.049-2.357-5.032-3.855C1.32 10.182 1 8.566 1 7V3.48a1.75 1.75 0 0 1 1.217-1.667Zm.61 1.429a.25.25 0 0 0-.153 0l-5.25 1.68a.25.25 0 0 0-.174.238V7c0 1.358.275 2.666 1.057 3.86.784 1.194 2.121 2.34 4.366 3.297a.196.196 0 0 0 .154 0c2.245-.956 3.582-2.104 4.366-3.298C13.225 9.666 13.5 8.36 13.5 7V3.48a.251.251 0 0 0-.174-.237l-5.25-1.68ZM8.75 4.75v3a.75.75 0 0 1-1.5 0v-3a.75.75 0 0 1 1.5 0ZM9 10.5a1 1 0 1 1-2 0 1 1 0 0 1 2 0Z"></path>
+</svg>
+        </span>
+      
+        <span data-view-component="true" class="ActionListItem-label">
+          Security
+</span>      
+</a>
+  
+</li>
+        <li hidden="hidden" data-menu-item="i6insights-tab" data-targets="action-list.items" role="none" data-view-component="true" class="ActionListItem">
+    
+    
+    <a tabindex="-1" id="item-3ec0ce7c-49c1-4d1e-8bfd-767a15412861" href="/MarvinFS/scripts/network/dependencies" role="menuitem" data-view-component="true" class="ActionListContent ActionListContent--visual16">
+        <span class="ActionListItem-visual ActionListItem-visual--leading">
+          <svg aria-hidden="true" height="16" viewBox="0 0 16 16" version="1.1" width="16" data-view-component="true" class="octicon octicon-graph">
+    <path d="M1.5 1.75V13.5h13.75a.75.75 0 0 1 0 1.5H.75a.75.75 0 0 1-.75-.75V1.75a.75.75 0 0 1 1.5 0Zm14.28 2.53-5.25 5.25a.75.75 0 0 1-1.06 0L7 7.06 4.28 9.78a.751.751 0 0 1-1.042-.018.751.751 0 0 1-.018-1.042l3.25-3.25a.75.75 0 0 1 1.06 0L10 7.94l4.72-4.72a.751.751 0 0 1 1.042.018.751.751 0 0 1 .018 1.042Z"></path>
+</svg>
+        </span>
+      
+        <span data-view-component="true" class="ActionListItem-label">
+          Insights
+</span>      
+</a>
+  
+</li>
+        <li hidden="hidden" data-menu-item="i7settings-tab" data-targets="action-list.items" role="none" data-view-component="true" class="ActionListItem">
+    
+    
+    <a tabindex="-1" id="item-d7ed6f2d-f991-4b3d-a94e-c975686bce9e" href="/MarvinFS/scripts/settings" role="menuitem" data-view-component="true" class="ActionListContent ActionListContent--visual16">
+        <span class="ActionListItem-visual ActionListItem-visual--leading">
+          <svg aria-hidden="true" height="16" viewBox="0 0 16 16" version="1.1" width="16" data-view-component="true" class="octicon octicon-gear">
+    <path d="M8 0a8.2 8.2 0 0 1 .701.031C9.444.095 9.99.645 10.16 1.29l.288 1.107c.018.066.079.158.212.224.231.114.454.243.668.386.123.082.233.09.299.071l1.103-.303c.644-.176 1.392.021 1.82.63.27.385.506.792.704 1.218.315.675.111 1.422-.364 1.891l-.814.806c-.049.048-.098.147-.088.294.016.257.016.515 0 .772-.01.147.038.246.088.294l.814.806c.475.469.679 1.216.364 1.891a7.977 7.977 0 0 1-.704 1.217c-.428.61-1.176.807-1.82.63l-1.102-.302c-.067-.019-.177-.011-.3.071a5.909 5.909 0 0 1-.668.386c-.133.066-.194.158-.211.224l-.29 1.106c-.168.646-.715 1.196-1.458 1.26a8.006 8.006 0 0 1-1.402 0c-.743-.064-1.289-.614-1.458-1.26l-.289-1.106c-.018-.066-.079-.158-.212-.224a5.738 5.738 0 0 1-.668-.386c-.123-.082-.233-.09-.299-.071l-1.103.303c-.644.176-1.392-.021-1.82-.63a8.12 8.12 0 0 1-.704-1.218c-.315-.675-.111-1.422.363-1.891l.815-.806c.05-.048.098-.147.088-.294a6.214 6.214 0 0 1 0-.772c.01-.147-.038-.246-.088-.294l-.815-.806C.635 6.045.431 5.298.746 4.623a7.92 7.92 0 0 1 .704-1.217c.428-.61 1.176-.807 1.82-.63l1.102.302c.067.019.177.011.3-.071.214-.143.437-.272.668-.386.133-.066.194-.158.211-.224l.29-1.106C6.009.645 6.556.095 7.299.03 7.53.01 7.764 0 8 0Zm-.571 1.525c-.036.003-.108.036-.137.146l-.289 1.105c-.147.561-.549.967-.998 1.189-.173.086-.34.183-.5.29-.417.278-.97.423-1.529.27l-1.103-.303c-.109-.03-.175.016-.195.045-.22.312-.412.644-.573.99-.014.031-.021.11.059.19l.815.806c.411.406.562.957.53 1.456a4.709 4.709 0 0 0 0 .582c.032.499-.119 1.05-.53 1.456l-.815.806c-.081.08-.073.159-.059.19.162.346.353.677.573.989.02.03.085.076.195.046l1.102-.303c.56-.153 1.113-.008 1.53.27.161.107.328.204.501.29.447.222.85.629.997 1.189l.289 1.105c.029.109.101.143.137.146a6.6 6.6 0 0 0 1.142 0c.036-.003.108-.036.137-.146l.289-1.105c.147-.561.549-.967.998-1.189.173-.086.34-.183.5-.29.417-.278.97-.423 1.529-.27l1.103.303c.109.029.175-.016.195-.045.22-.313.411-.644.573-.99.014-.031.021-.11-.059-.19l-.815-.806c-.411-.406-.562-.957-.53-1.456a4.709 4.709 0 0 0 0-.582c-.032-.499.119-1.05.53-1.456l.815-.806c.081-.08.073-.159.059-.19a6.464 6.464 0 0 0-.573-.989c-.02-.03-.085-.076-.195-.046l-1.102.303c-.56.153-1.113.008-1.53-.27a4.44 4.44 0 0 0-.501-.29c-.447-.222-.85-.629-.997-1.189l-.289-1.105c-.029-.11-.101-.143-.137-.146a6.6 6.6 0 0 0-1.142 0ZM11 8a3 3 0 1 1-6 0 3 3 0 0 1 6 0ZM9.5 8a1.5 1.5 0 1 0-3.001.001A1.5 1.5 0 0 0 9.5 8Z"></path>
+</svg>
+        </span>
+      
+        <span data-view-component="true" class="ActionListItem-label">
+          Settings
+</span>      
+</a>
+  
+</li>
+</ul>    
+</div></action-list>
+
+
+</div>
+      
+</div></anchored-position>  </focus-group>
+</action-menu></div>
+</nav>
+              
+            </div>
+    </header>
+
+
+      <div hidden="hidden" data-view-component="true" class="js-stale-session-flash stale-session-flash flash flash-warn flash-full">
+  
+        <svg aria-hidden="true" height="16" viewBox="0 0 16 16" version="1.1" width="16" data-view-component="true" class="octicon octicon-alert">
+    <path d="M6.457 1.047c.659-1.234 2.427-1.234 3.086 0l6.082 11.378A1.75 1.75 0 0 1 14.082 15H1.918a1.75 1.75 0 0 1-1.543-2.575Zm1.763.707a.25.25 0 0 0-.44 0L1.698 13.132a.25.25 0 0 0 .22.368h12.164a.25.25 0 0 0 .22-.368Zm.53 3.996v2.5a.75.75 0 0 1-1.5 0v-2.5a.75.75 0 0 1 1.5 0ZM9 11a1 1 0 1 1-2 0 1 1 0 0 1 2 0Z"></path>
+</svg>
+        <span class="js-stale-session-flash-signed-in" hidden>You signed in with another tab or window. <a class="Link--inTextBlock" href="">Reload</a> to refresh your session.</span>
+        <span class="js-stale-session-flash-signed-out" hidden>You signed out in another tab or window. <a class="Link--inTextBlock" href="">Reload</a> to refresh your session.</span>
+        <span class="js-stale-session-flash-switched" hidden>You switched accounts on another tab or window. <a class="Link--inTextBlock" href="">Reload</a> to refresh your session.</span>
+
+    <button id="icon-button-11069a34-c809-4d96-94a0-637e257b5b1f" aria-labelledby="tooltip-346dc711-e8ce-4bd0-85d9-ce6bc7cc1088" type="button" data-view-component="true" class="Button Button--iconOnly Button--invisible Button--medium flash-close js-flash-close">  <svg aria-hidden="true" height="16" viewBox="0 0 16 16" version="1.1" width="16" data-view-component="true" class="octicon octicon-x Button-visual">
+    <path d="M3.72 3.72a.75.75 0 0 1 1.06 0L8 6.94l3.22-3.22a.749.749 0 0 1 1.275.326.749.749 0 0 1-.215.734L9.06 8l3.22 3.22a.749.749 0 0 1-.326 1.275.749.749 0 0 1-.734-.215L8 9.06l-3.22 3.22a.751.751 0 0 1-1.042-.018.751.751 0 0 1-.018-1.042L6.94 8 3.72 4.78a.75.75 0 0 1 0-1.06Z"></path>
+</svg>
+</button><tool-tip id="tooltip-346dc711-e8ce-4bd0-85d9-ce6bc7cc1088" for="icon-button-11069a34-c809-4d96-94a0-637e257b5b1f" popover="manual" data-direction="s" data-type="label" data-view-component="true" class="sr-only position-absolute">Dismiss alert</tool-tip>
+
+
+  
+</div>
+        
+          
+    </div>
+
+  <div id="start-of-content" class="show-on-focus"></div>
+
+
+
+
+
+
+
+
+    <div id="js-flash-container" class="flash-container" data-turbo-replace>
+
+
+
+
+  <template class="js-flash-template">
+    
+<div class="flash flash-full   {{ className }}">
+  <div >
+    <button autofocus class="flash-close js-flash-close" type="button" aria-label="Dismiss this message">
+      <svg aria-hidden="true" height="16" viewBox="0 0 16 16" version="1.1" width="16" data-view-component="true" class="octicon octicon-x">
+    <path d="M3.72 3.72a.75.75 0 0 1 1.06 0L8 6.94l3.22-3.22a.749.749 0 0 1 1.275.326.749.749 0 0 1-.215.734L9.06 8l3.22 3.22a.749.749 0 0 1-.326 1.275.749.749 0 0 1-.734-.215L8 9.06l-3.22 3.22a.751.751 0 0 1-1.042-.018.751.751 0 0 1-.018-1.042L6.94 8 3.72 4.78a.75.75 0 0 1 0-1.06Z"></path>
+</svg>
+    </button>
+    <div aria-atomic="true" role="alert" class="js-flash-alert">
+      
+      <div>{{ message }}</div>
+
+    </div>
+  </div>
+</div>
+  </template>
+</div>
+
+
+    
+  <notification-shelf-watcher data-base-url="https://github.com/notifications/beta/shelf" data-channel="eyJjIjoibm90aWZpY2F0aW9uLWNoYW5nZWQ6Nzk5ODYzNiIsInQiOjE3NjM5OTI3Nzd9--3ea70cfdb8202a47ca11c0c868864245ff363d3553588c3f4e3ee796d2897d68" data-view-component="true" class="js-socket-channel"></notification-shelf-watcher>
+  <div hidden data-initial data-target="notification-shelf-watcher.placeholder"></div>
+
+
+
+
+
+
+  <div
+    class="application-main "
+    data-commit-hovercards-enabled
+    data-discussion-hovercards-enabled
+    data-issue-and-pr-hovercards-enabled
+    data-project-hovercards-enabled
+  >
+        <div itemscope itemtype="http://schema.org/SoftwareSourceCode" class="">
+    <main id="js-repo-pjax-container" >
+      
+      
+
+
+
+
+
+
+    
+  <div id="repository-container-header" data-turbo-replace hidden ></div>
+
+
+
+
+<turbo-frame id="repo-content-turbo-frame" target="_top" data-turbo-action="advance" class="">
+    <div id="repo-content-pjax-container" class="repository-content " >
+      <a href="https://github.dev/" class="d-none js-github-dev-shortcut" data-hotkey=".,Mod+Alt+.">Open in github.dev</a>
+  <a href="https://github.dev/" class="d-none js-github-dev-new-tab-shortcut" data-hotkey="Shift+.,Shift+&gt;,&gt;" target="_blank" rel="noopener noreferrer">Open in a new github.dev tab</a>
+    <a class="d-none" data-hotkey=",,Mod+Alt+," target="_blank" href="/codespaces/new/MarvinFS/scripts/tree/main?resume=1">Open in codespace</a>
+
+
+
+
+    
+      
+    
+
+
+
+
+
+
+
+
+<react-app
+  app-name="react-code-view"
+  initial-path="/MarvinFS/scripts/blob/main/VSA%20repo/vsa_repo.sh"
+    style="display: block; min-height: calc(100vh - 64px);"
+  data-attempted-ssr="true"
+  data-ssr="true"
+  data-lazy="false"
+  data-alternate="false"
+  data-data-router-enabled="false"
+  data-react-profiling="false"
+>
+  
+  <script type="application/json" data-target="react-app.embeddedData">{"payload":{"allShortcutsEnabled":true,"fileTree":{"VSA repo":{"items":[{"name":"readme.md","path":"VSA repo/readme.md","contentType":"file"},{"name":"vsa_repo.sh","path":"VSA repo/vsa_repo.sh","contentType":"file"}],"totalCount":2},"":{"items":[{"name":"VSA repo","path":"VSA repo","contentType":"directory"},{"name":"LICENSE","path":"LICENSE","contentType":"file"},{"name":"git private dev plus public push.txt","path":"git private dev plus public push.txt","contentType":"file"}],"totalCount":3}},"fileTreeProcessingTime":26.96037,"foldersToFetch":[],"incompleteFileTree":false,"repo":{"id":1102294399,"defaultBranch":"main","name":"scripts","ownerLogin":"MarvinFS","currentUserCanPush":true,"isFork":false,"isEmpty":false,"createdAt":"2025-11-23T09:21:31.000+02:00","ownerAvatar":"https://avatars.githubusercontent.com/u/7998636?v=4","public":false,"private":true,"isOrgOwned":false},"codeLineWrapEnabled":false,"symbolsExpanded":true,"treeExpanded":true,"refInfo":{"name":"main","listCacheKey":"v0:1763895740.0","canEdit":true,"refType":"branch","currentOid":"a7d1ecc0c23e2c5c67530d11e1e7af86af166cb6","canEditOnDefaultBranch":true,"fileExistsOnDefault":true},"path":"VSA repo/vsa_repo.sh","currentUser":{"id":7998636,"login":"MarvinFS","userEmail":"marvinfs@soulfly.us"},"blob":{"rawLines":["#!/usr/bin/env bash","set -euo pipefail","","# ============================================================","# Veeam Software Appliance repository mirror script ","#","# This script orchestrates the complete setup of a local Veeam VSA","# package mirror infrastructure on RHEL-family systems. It:","#","#   1) Partitions and mounts a dedicated XFS filesystem on extra data disk","#   2) Installs core packages (dnf-plugins-core, curl, nginx, SELinux tools, firewalld)","#   3) Creates /etc/yum.repos.d/veeam-vsa-upstream.repo with 3 repo definitions","#   4) Generates parameterized /usr/local/sbin/veeam-vsa-reposync.sh with injected configuration","#   5) Sets up repo directory with proper ownership and permissions","#   6) Configures nginx to serve mirror on port 80","#   7) Applies SELinux contexts and firewall rules","#   8) Creates systemd service + hourly timer for automated syncing","#   9) Validates available disk space for sync operations","#   10) Tests local HTTP connectivity to mirror paths","#","# NOTE: This script sets up infrastructure only. Manual reposync trigger required:","#   sudo /usr/local/sbin/veeam-vsa-reposync.sh","#","# Supported: RHEL / Rocky / Alma / CentOS Stream 9+ (incl. Rocky 10)","# NOT SUPPORTED: Debian / Ubuntu / SUSE / anything without dnf + reposync.","#","# Created by MarvinFS wrapped up with AI assistance.","# This script is NOT officially provided by Veeam Software company or supported in any way.","# Strictly provided AS IS - use at your own discretion","# ============================================================","","# -------------------------","# CONFIG - EDIT IF NEEDED","# -------------------------","DATA_DEVICE=\"/dev/sdb\"              # disk to use for repo data (will be partitioned) I have added new drive to a VM 100GB","DATA_PARTITION=\"${DATA_DEVICE}1\"    # resulting partition ","MOUNT_POINT=\"/mnt/data\"             # mount point for XFS","","REPO_ROOT=\"${MOUNT_POINT}/repo/repository.veeam.com\"","","OS_VERSION=\"9.2\"","VBR_VERSION=\"13.0\"","","# desired hostnames and IP which NGINX serves on port 80 (no SSL used, if needed, use any reverse proxy with SSL certs)","REPO_HOSTNAME_SHORT=\"veeamrepo\"","REPO_HOSTNAME_FQDN=\"veeamrepo.test.local\"","REPO_HOST_IP=\"192.168.1.54\"","","# Paths and constants","UPSTREAM_MANDATORY_URL=\"https://repository.veeam.com/vsa/${OS_VERSION}/vbr/${VBR_VERSION}/mandatory\"","UPSTREAM_OPTIONAL_URL=\"https://repository.veeam.com/vsa/${OS_VERSION}/vbr/${VBR_VERSION}/optional\"","UPSTREAM_EXTERNAL_MANDATORY_URL=\"https://repository.veeam.com/vsa/${OS_VERSION}/external-mandatory\"","","DNF_BIN=\"/usr/bin/dnf\"","KEY_INDEX_URL=\"https://repository.veeam.com/keys/\"","KEY_LOCAL_DIR=\"/etc/veeam/rpm-gpg\"","UPSTREAM_REPO_FILE=\"/etc/yum.repos.d/veeam-vsa-upstream.repo\"","REPOSYNC_SCRIPT=\"/usr/local/sbin/veeam-vsa-reposync.sh\"","NGINX_CONF=\"/etc/nginx/conf.d/veeam-repo.conf\"","","REPOID_MANDATORY=\"veeam-vsa-mandatory\"","REPOID_OPTIONAL=\"veeam-vsa-optional\"","REPOID_EXTERNAL_MANDATORY=\"veeam-vsa-external-mandatory\"","","SYSTEMD_SERVICE=\"/etc/systemd/system/veeam-vsa-reposync.service\"","SYSTEMD_TIMER=\"/etc/systemd/system/veeam-vsa-reposync.timer\"","","# -------------------------","# LOGGING HELPERS","# -------------------------","log() {","  printf '[%(%Y-%m-%d %H:%M:%S)T] %s\\n' -1 \"$*\" \u003e\u00262","}","","fatal() {","  log \"FATAL: $*\"","  exit 1","}","","# -------------------------","# BASIC CHECKS","# -------------------------","require_root() {","  if [[ $EUID -ne 0 ]]; then","    fatal \"Must be run as root.\"","  fi","}","","check_os() {","  if [[ -r /etc/os-release ]]; then","    . /etc/os-release","  else","    fatal \"/etc/os-release not found. Unsupported OS.\"","  fi","","  case \"${ID:-unknown}\" in","    rhel|rocky|almalinux|centos)","      log \"OS detected: ${PRETTY_NAME:-$ID}\"","      ;;","    *)","      fatal \"Unsupported OS ID: ${ID:-unknown}. Only RHEL/Rocky/Alma/CentOS-family is supported.\"","      ;;","  esac","}","","check_dnf() {","  if ! command -v \"${DNF_BIN}\" \u003e/dev/null 2\u003e\u00261; then","    fatal \"dnf not found. This script requires a dnf based system.\"","  fi","}","","# -------------------------","# DISK AND FILESYSTEM SETUP","# -------------------------","prepare_disk() {","  log \"Checking data disk ${DATA_DEVICE}\"","","  if [[ ! -b \"${DATA_DEVICE}\" ]]; then","    fatal \"Device ${DATA_DEVICE} does not exist. Adjust DATA_DEVICE in script.\"","  fi","","  # If partition already exists and is XFS, assume it is fine and skip destructive steps","  if lsblk -no TYPE \"${DATA_PARTITION}\" 2\u003e/dev/null | grep -q '^part$'; then","    local fstype","    fstype=$(lsblk -no FSTYPE \"${DATA_PARTITION}\" 2\u003e/dev/null || true)","    log \"Found existing partition ${DATA_PARTITION} (FSTYPE=${fstype:-unknown}). Will NOT repartition or reformat.\"","","    if [[ \"${fstype}\" != \"xfs\" ]]; then","      log \"WARNING: ${DATA_PARTITION} is not XFS. Script expects XFS. Mount may fail.\"","    fi","    return","  fi","","  log \"No existing partition ${DATA_PARTITION} detected. Creating fresh GPT + XFS.\"","","  # Extra sanity: ensure disk is not already mounted","  if lsblk -no MOUNTPOINT \"${DATA_DEVICE}\" | grep -q '/'; then","    fatal \"${DATA_DEVICE} appears to have mounted filesystems. Refusing to wipe.\"","  fi","","  # Wipe signatures and create partition table","  log \"Wiping filesystem signatures on ${DATA_DEVICE}\"","  wipefs -a \"${DATA_DEVICE}\"","","  log \"Creating GPT and single XFS partition on ${DATA_DEVICE}\"","  parted \"${DATA_DEVICE}\" --script \\","    mklabel gpt \\","    mkpart primary xfs 0% 100%","","  # Format partition","  log \"Formatting ${DATA_PARTITION} as XFS\"","  mkfs.xfs -f \"${DATA_PARTITION}\"","","  log \"Disk preparation completed for ${DATA_PARTITION}\"","}","","ensure_mountpoint() {","  mkdir -p \"${MOUNT_POINT}\"","  chmod 0755 \"${MOUNT_POINT}\"","}","","ensure_fstab_entry() {","  log \"Ensuring /etc/fstab has PARTUUID entry for ${DATA_PARTITION}\"","","  local partuuid","  partuuid=$(blkid -o value -s PARTUUID \"${DATA_PARTITION}\" 2\u003e/dev/null || true)","  if [[ -z \"${partuuid}\" ]]; then","    fatal \"Could not read PARTUUID for ${DATA_PARTITION}. Check blkid output.\"","  fi","","  local fstab_line=\"PARTUUID=${partuuid}   ${MOUNT_POINT}   xfs   defaults,noatime   0 0\"","","  if grep -q \"PARTUUID=${partuuid}\" /etc/fstab 2\u003e/dev/null; then","    log \"fstab already contains entry for PARTUUID=${partuuid}. Skipping append.\"","  else","    log \"Adding new fstab entry: ${fstab_line}\"","    if ! printf \"\\n%s\\n\" \"${fstab_line}\" \u003e\u003e /etc/fstab; then","      fatal \"Failed to write to /etc/fstab. Check permissions and disk space.\"","    fi","  fi","}","","mount_data_fs() {","  log \"Reloading systemd daemon and mounting all filesystems.\"","  systemctl daemon-reload || true","  mount -a","","  local mp","  mp=$(lsblk -no MOUNTPOINT \"${DATA_PARTITION}\" 2\u003e/dev/null || true)","  if [[ \"${mp}\" != \"${MOUNT_POINT}\" ]]; then","    fatal \"Expected ${DATA_PARTITION} to be mounted on ${MOUNT_POINT} but got '${mp:-\u003cnone\u003e}'\"","  fi","","  log \"Mount check passed: ${DATA_PARTITION} -\u003e ${MOUNT_POINT}\"","}","","# -------------------------","# CORE PACKAGES","# -------------------------","install_core_packages() {","  log \"Installing required packages (dnf-plugins-core, curl, nginx, SELinux tools, firewalld helpers)\"","","  \"${DNF_BIN}\" install -y dnf-plugins-core curl nginx policycoreutils-python-utils selinux-policy-targeted firewalld || \\","    log \"WARNING: Some packages failed to install. If your distro variant does not use them, this may be ok.\"","","  # Make sure dnf reposync is available","  if ! \"${DNF_BIN}\" --help 2\u003e\u00261 | grep -q 'reposync'; then","    fatal \"dnf reposync plugin not available even after installing dnf-plugins-core.\"","  fi","}","","# -------------------------","# DISK SPACE VALIDATION","# -------------------------","check_disk_space() {","  log \"Checking available disk space on ${MOUNT_POINT}\"","","  local available_gb","  available_gb=$(df -B1G \"${MOUNT_POINT}\" | awk 'NR==2 {print $4}' | sed 's/G$//')","","  if [[ -z \"${available_gb}\" ]]; then","    log \"WARNING: Could not determine available disk space. Proceeding anyway.\"","    return","  fi","","  # Warn if less than 40GB available (initial sync is ~30GB + buffer)","  if (( available_gb \u003c 40 )); then","    log \"WARNING: Only ${available_gb}GB available on ${MOUNT_POINT}. Initial reposync needs ~30GB.\"","    log \"WARNING: Sync may fail if space is insufficient.\"","  else","    log \"Disk space check: ${available_gb}GB available (sufficient for initial sync).\"","  fi","}","","# -------------------------","# VEEAM UPSTREAM .repo FILE","# -------------------------","create_upstream_repo_file() {","  if [[ -f \"${UPSTREAM_REPO_FILE}\" ]]; then","    log \"Upstream repo file ${UPSTREAM_REPO_FILE} already exists. Leaving it intact.\"","    return","  fi","","  log \"Creating upstream repo definition at ${UPSTREAM_REPO_FILE}\"","","  tee \"${UPSTREAM_REPO_FILE}\" \u003e/dev/null \u003c\u003cEOF","[${REPOID_MANDATORY}]","name=Veeam VSA mandatory (upstream mirror source)","baseurl=https://repository.veeam.com/vsa/${OS_VERSION}/vbr/${VBR_VERSION}/mandatory/","enabled=0","gpgcheck=0","repo_gpgcheck=0","gpgkey=https://repository.veeam.com/keys/RPM-E6FBD664 https://repository.veeam.com/keys/RPM-EFDCEA77","","[${REPOID_OPTIONAL}]","name=Veeam VSA optional (upstream mirror source)","baseurl=https://repository.veeam.com/vsa/${OS_VERSION}/vbr/${VBR_VERSION}/optional/","enabled=0","gpgcheck=0","repo_gpgcheck=0","gpgkey=https://repository.veeam.com/keys/RPM-E6FBD664 https://repository.veeam.com/keys/RPM-EFDCEA77","","[${REPOID_EXTERNAL_MANDATORY}]","name=Veeam VSA external mandatory (upstream mirror source)","baseurl=https://repository.veeam.com/vsa/${OS_VERSION}/external-mandatory/","enabled=0","gpgcheck=0","repo_gpgcheck=0","gpgkey=https://repository.veeam.com/keys/RPM-E6FBD664 https://repository.veeam.com/keys/RPM-EFDCEA77","EOF","}","","# -------------------------","# REPOSYNC SCRIPT","# -------------------------","create_reposync_script() {","  log \"Creating reposync script at ${REPOSYNC_SCRIPT}\"","","  mkdir -p \"$(dirname \"${REPOSYNC_SCRIPT}\")\"","","  # Inject configuration variables into the embedded script","  tee \"${REPOSYNC_SCRIPT}\" \u003e/dev/null \u003c\u003cEOF","#!/usr/bin/env bash","set -euo pipefail","","# ============================================================","# VSA local mirror script using dnf reposync","# Supported: RHEL / Rocky / Alma / CentOS Stream 9+ (incl. Rocky 10)","# NOT SUPPORTED: Debian/Ubuntu or non-dnf systems.","# Created by MarvinFS ","# This script is NOT officially provided by Veeam Software company or supported in any way.","# Strictly provided AS IS - use at your own discretion","#","# NOTE:","#  - GPG checks are DISABLED on the mirror host (--nogpgcheck),","#    because external-mandatory contains packages signed by","#    multiple vendor keys (Rocky, CIQ, PGDG, etc).","#  - The VSA itself can still enforce full GPG checks (packages","#    and metadata) when using this mirror.","# ============================================================","","REPO_ROOT=\"${REPO_ROOT}\"","","REPOID_MANDATORY=\"veeam-vsa-mandatory\"","REPOID_OPTIONAL=\"veeam-vsa-optional\"","REPOID_EXTERNAL_MANDATORY=\"veeam-vsa-external-mandatory\"","","# Upstream Veeam URLs for VSA repos (metadata signatures live here)","UPSTREAM_MANDATORY_URL=\"${UPSTREAM_MANDATORY_URL}\"","UPSTREAM_OPTIONAL_URL=\"${UPSTREAM_OPTIONAL_URL}\"","UPSTREAM_EXTERNAL_MANDATORY_URL=\"${UPSTREAM_EXTERNAL_MANDATORY_URL}\"","","DNF_BIN=\"/usr/bin/dnf\"","KEY_INDEX_URL=\"https://repository.veeam.com/keys/\"","KEY_LOCAL_DIR=\"/etc/veeam/rpm-gpg\"","","log() {","  printf '[%(%Y-%m-%d %H:%M:%S)T] %s\\n' -1 \"$*\" \u003e\u00262","}","","check_os() {","  if [[ -r /etc/os-release ]]; then","    # shellcheck disable=SC1091","    . /etc/os-release","  else","    log \"ERROR: /etc/os-release not found. Unsupported OS.\"","    exit 1","  fi","","  case \"${ID:-unknown}\" in","    rhel|rocky|almalinux|centos)","      ;;","    *)","      log \"ERROR: This script supports only RHEL/Rocky/Alma/CentOS-family systems.\"","      exit 1","      ;;","  esac","}","","check_prereqs() {","  if ! command -v \"${DNF_BIN}\" \u003e/dev/null 2\u003e\u00261; then","    log \"ERROR: dnf not found. This is not a RHEL-family system.\"","    exit 1","  fi","","  if ! \"${DNF_BIN}\" --help 2\u003e\u00261 | grep -q 'reposync'; then","    log \"ERROR: dnf reposync plugin not available. Install dnf-plugins-core first:\"","    log \"       dnf install -y dnf-plugins-core\"","    exit 1","  fi","","  if ! command -v curl \u003e/dev/null 2\u003e\u00261; then","    log \"ERROR: curl not found. Install it first:\"","    log \"       dnf install -y curl\"","    exit 1","  fi","","  if [[ ! -f /etc/yum.repos.d/veeam-vsa-upstream.repo ]]; then","    log \"ERROR: /etc/yum.repos.d/veeam-vsa-upstream.repo not found.\"","    log \"       Create it before running this script.\"","    exit 1","  fi","}","","sync_veeam_keys() {","  log \"Syncing Veeam RPM GPG keys from ${KEY_INDEX_URL}\"","","  mkdir -p \"${KEY_LOCAL_DIR}\"","","  local index","  if ! index=$(curl -fsSL \"${KEY_INDEX_URL}\"); then","    log \"WARNING: Failed to download key index, skipping key sync.\"","    return","  fi","","  local keys","  keys=$(printf '%s\\n' \"${index}\" | grep -o 'RPM-[A-Za-z0-9]\\+' | sort -u || true)","","  if [[ -z \"${keys}\" ]]; then","    log \"WARNING: No RPM-* keys found in index, skipping key sync.\"","    return","  fi","","  local k","  for k in ${keys}; do","    local dst=\"${KEY_LOCAL_DIR}/${k}.gpg\"","    local url=\"${KEY_INDEX_URL}${k}\"","","    log \"  - Downloading key ${k}\"","    if curl -fsSL \"${url}\" -o \"${dst}\"; then","      rpm --import \"${dst}\" || log \"WARNING: Failed to import key ${dst}\"","    else","      log \"WARNING: Could not download key ${k}\"","    fi","  done","","  log \"Veeam RPM GPG key sync completed (some keys may be rejected by policies - this is expected).\"","}","","sync_repo_signatures() {","  local upstream_url=\"$1\"","  local target_path=\"$2\"","  local repodata_path=\"${target_path}/repodata\"","","  mkdir -p \"${repodata_path}\"","","  # We try to pull both repomd.xml.asc and repomd.xml.key.","  # If they are missing upstream, we only log a warning and continue.","  local f","  for f in repomd.xml.asc repomd.xml.key; do","    local url=\"${upstream_url}/repodata/${f}\"","    local dst=\"${repodata_path}/${f}\"","","    log \"Syncing metadata signature ${f} from ${url}\"","    if curl -fsSL \"${url}\" -o \"${dst}\"; then","      log \"  - Downloaded ${f} to ${dst}\"","    else","      log \"WARNING: Could not download ${f} from ${url} (metadata GPG for this repo may fail if repo_gpgcheck=1).\"","    fi","  done","}","","mirror_repo() {","  local repoid=\"$1\"","  local relpath=\"$2\"","  local upstream_url=\"$3\"","  local target_path=\"${REPO_ROOT}/${relpath}\"","","  mkdir -p \"${target_path}\"","","  log \"Running dnf reposync for ${repoid}\"","  log \"Target: ${target_path}\"","","  # IMPORTANT:","  #   --nogpgcheck is ONLY for this mirror host.","  #   The VSA still does GPG checks when consuming this mirror.","  \"${DNF_BIN}\" -y reposync \\","    --repoid=\"${repoid}\" \\","    --download-metadata \\","    --download-path=\"${target_path}\" \\","    --norepopath \\","    --delete \\","    --nogpgcheck","","  # After successful reposync, pull metadata signature files","  sync_repo_signatures \"${upstream_url}\" \"${target_path}\"","}","","main() {","  if [[ $EUID -ne 0 ]]; then","    log \"ERROR: Must run as root.\"","    exit 1","  fi","","  check_os","  check_prereqs","  sync_veeam_keys","","  # Mirror the three VSA repos into the expected tree","  mirror_repo \"${REPOID_MANDATORY}\"          \"vsa/${OS_VERSION}/vbr/${VBR_VERSION}/mandatory\"       \"${UPSTREAM_MANDATORY_URL}\"","  mirror_repo \"${REPOID_OPTIONAL}\"           \"vsa/${OS_VERSION}/vbr/${VBR_VERSION}/optional\"        \"${UPSTREAM_OPTIONAL_URL}\"","  mirror_repo \"${REPOID_EXTERNAL_MANDATORY}\" \"vsa/${OS_VERSION}/external-mandatory\"                 \"${UPSTREAM_EXTERNAL_MANDATORY_URL}\"","","  log \"Veeam VSA reposync completed successfully.\"","}","","main \"$@\"","EOF","","  chmod 0755 \"${REPOSYNC_SCRIPT}\"","EOF","}","","# -------------------------","# NGINX CONFIG","# -------------------------","configure_nginx() {","  log \"Enabling and starting nginx\"","  systemctl enable --now nginx || fatal \"Failed to enable or start nginx.\"","","  log \"Writing nginx repo config to ${NGINX_CONF}\"","","  tee \"${NGINX_CONF}\" \u003e/dev/null \u003c\u003cEOF","server {","    listen 80;","    server_name ${REPO_HOSTNAME_FQDN} ${REPO_HOSTNAME_SHORT} ${REPO_HOST_IP};","","    # Root of the mirrored repo","    root ${REPO_ROOT};","","    autoindex on;","    autoindex_exact_size off;","    autoindex_localtime on;","","    # Everything served read-only","    location / {","        try_files \\$uri \\$uri/ =404;","    }","}","EOF","","  log \"Testing nginx configuration\"","  nginx -t","","  log \"Reloading nginx\"","  systemctl reload nginx","}","","# -------------------------","# SELINUX CONTEXTS","# -------------------------","configure_selinux() {","  if command -v getenforce \u003e/dev/null 2\u003e\u00261; then","    local mode","    mode=$(getenforce || echo \"Unknown\")","    log \"SELinux mode: ${mode}\"","","    case \"${mode}\" in","      Enforcing|Permissive)","        log \"Applying SELinux context httpd_sys_content_t to ${MOUNT_POINT}/repo\"","        semanage fcontext -a -t httpd_sys_content_t \"${MOUNT_POINT}/repo(/.*)?\" || \\","          log \"WARNING: semanage failed. Check if policycoreutils-python-utils is installed.\"","        restorecon -Rv \"${MOUNT_POINT}/repo\" || \\","          log \"WARNING: restorecon failed. Check SELinux configuration.\"","        ;;","      *)","        log \"SELinux not enforcing or permissive. Skipping context configuration.\"","        ;;","    esac","  else","    log \"getenforce not available. Assuming SELinux not in use, skipping.\"","  fi","}","","# -------------------------","# FIREWALLD","# -------------------------","configure_firewall() {","  if systemctl is-active --quiet firewalld; then","    log \"Opening HTTP service in firewalld\"","    firewall-cmd --add-service=http --permanent || \\","      log \"WARNING: failed to add http service to firewalld.\"","    firewall-cmd --reload || \\","      log \"WARNING: failed to reload firewalld.\"","  else","    log \"firewalld is not active. Skipping firewall configuration.\"","  fi","}","","# -------------------------","# CONNECTIVITY CHECKS","# -------------------------","check_connectivity() {","  if ! command -v curl \u003e/dev/null 2\u003e\u00261; then","    log \"curl not available for connectivity checks. Skipping.\"","    return","  fi","","  log \"Checking local HTTP access to repo paths\"","","  local urls=(","    \"http://${REPO_HOSTNAME_SHORT}/vsa/${OS_VERSION}/vbr/${VBR_VERSION}/mandatory/\"","    \"http://${REPO_HOSTNAME_FQDN}/vsa/${OS_VERSION}/vbr/${VBR_VERSION}/mandatory/\"","    \"http://${REPO_HOST_IP}/vsa/${OS_VERSION}/vbr/${VBR_VERSION}/mandatory/\"","  )","","  local u","  for u in \"${urls[@]}\"; do","    log \"  - curl -I ${u}\"","    if curl -I -s \"${u}\" \u003e/dev/null; then","      log \"    OK: ${u}\"","    else","      log \"    WARNING: failed to connect to ${u}\"","    fi","  done","}","","# -------------------------","# SYSTEMD SERVICE + TIMER","# -------------------------","create_systemd_units() {","  log \"Creating systemd service at ${SYSTEMD_SERVICE}\"","","  tee \"${SYSTEMD_SERVICE}\" \u003e/dev/null \u003c\u003cEOF","[Unit]","Description=Veeam VSA repository mirror sync","Documentation=file:${REPOSYNC_SCRIPT}","Wants=network-online.target","After=network-online.target","","[Service]","Type=oneshot","ExecStart=${REPOSYNC_SCRIPT}","Nice=10","IOSchedulingClass=best-effort","IOSchedulingPriority=7","EOF","","  log \"Creating systemd timer at ${SYSTEMD_TIMER}\"","","  tee \"${SYSTEMD_TIMER}\" \u003e/dev/null \u003c\u003cEOF","[Unit]","Description=Run Veeam VSA repository mirror sync hourly","","[Timer]","OnBootSec=15min","OnUnitActiveSec=1h","Unit=veeam-vsa-reposync.service","Persistent=true","","[Install]","WantedBy=timers.target","EOF","","  log \"Reloading systemd units and enabling timer\"","  systemctl daemon-reload","  systemctl enable --now veeam-vsa-reposync.timer","}","","# -------------------------","# MAIN","# -------------------------","main() {","  require_root","  check_os","  check_dnf","","  # 1) Disk and filesystem setup","  prepare_disk","  ensure_mountpoint","  ensure_fstab_entry","  mount_data_fs","","  # 2) Package installation","  install_core_packages","","  # 3) Upstream repo configuration","  create_upstream_repo_file","","  # 4) Reposync script generation (with injected configuration)","  create_reposync_script","","  # 5) Directory preparation","  log \"Ensuring repo root directory ${REPO_ROOT}\"","  mkdir -p \"${REPO_ROOT}\"","  chown root:root \"${MOUNT_POINT}\" \"${MOUNT_POINT}/repo\" \"${REPO_ROOT}\" || true","  chmod 0755 \"${MOUNT_POINT}\" \"${MOUNT_POINT}/repo\" \"${REPO_ROOT}\" || true","","  # 6) Network and security configuration","  configure_nginx","  configure_selinux","  configure_firewall","","  # 7) Systemd automation setup","  create_systemd_units","","  # 8) Connectivity test","  check_connectivity","","  log \"============================================================\"","  log \"Veeam VSA mirror setup completed.\"","  log \"Serve URL examples:\"","  log \"  http://${REPO_HOSTNAME_SHORT}/vsa\"","  log \"  http://${REPO_HOSTNAME_FQDN}/vsa\"","  log \"  http://${REPO_HOST_IP}/vsa\"","  log \"\"","  log \"Hourly sync is handled by systemd timer: veeam-vsa-reposync.timer\"","  log \"Check status with: systemctl status veeam-vsa-reposync.timer\"","  log \"You need to run initial repo-sync (this will download ~30 GB on first run) with:\"","  log \"${REPOSYNC_SCRIPT}\"","  log \"============================================================\"","}","","main \"$@\""],"stylingDirectives":null,"colorizedLines":["\u003cspan class=\"pl-c\"\u003e\u003cspan class=\"pl-c\"\u003e#!\u003c/span\u003e/usr/bin/env bash\u003c/span\u003e","\u003cspan class=\"pl-c1\"\u003eset\u003c/span\u003e -euo pipefail","","\u003cspan class=\"pl-c\"\u003e\u003cspan class=\"pl-c\"\u003e#\u003c/span\u003e ============================================================\u003c/span\u003e","\u003cspan class=\"pl-c\"\u003e\u003cspan class=\"pl-c\"\u003e#\u003c/span\u003e Veeam Software Appliance repository mirror script \u003c/span\u003e","\u003cspan class=\"pl-c\"\u003e\u003cspan class=\"pl-c\"\u003e#\u003c/span\u003e\u003c/span\u003e","\u003cspan class=\"pl-c\"\u003e\u003cspan class=\"pl-c\"\u003e#\u003c/span\u003e This script orchestrates the complete setup of a local Veeam VSA\u003c/span\u003e","\u003cspan class=\"pl-c\"\u003e\u003cspan class=\"pl-c\"\u003e#\u003c/span\u003e package mirror infrastructure on RHEL-family systems. It:\u003c/span\u003e","\u003cspan class=\"pl-c\"\u003e\u003cspan class=\"pl-c\"\u003e#\u003c/span\u003e\u003c/span\u003e","\u003cspan class=\"pl-c\"\u003e\u003cspan class=\"pl-c\"\u003e#\u003c/span\u003e   1) Partitions and mounts a dedicated XFS filesystem on extra data disk\u003c/span\u003e","\u003cspan class=\"pl-c\"\u003e\u003cspan class=\"pl-c\"\u003e#\u003c/span\u003e   2) Installs core packages (dnf-plugins-core, curl, nginx, SELinux tools, firewalld)\u003c/span\u003e","\u003cspan class=\"pl-c\"\u003e\u003cspan class=\"pl-c\"\u003e#\u003c/span\u003e   3) Creates /etc/yum.repos.d/veeam-vsa-upstream.repo with 3 repo definitions\u003c/span\u003e","\u003cspan class=\"pl-c\"\u003e\u003cspan class=\"pl-c\"\u003e#\u003c/span\u003e   4) Generates parameterized /usr/local/sbin/veeam-vsa-reposync.sh with injected configuration\u003c/span\u003e","\u003cspan class=\"pl-c\"\u003e\u003cspan class=\"pl-c\"\u003e#\u003c/span\u003e   5) Sets up repo directory with proper ownership and permissions\u003c/span\u003e","\u003cspan class=\"pl-c\"\u003e\u003cspan class=\"pl-c\"\u003e#\u003c/span\u003e   6) Configures nginx to serve mirror on port 80\u003c/span\u003e","\u003cspan class=\"pl-c\"\u003e\u003cspan class=\"pl-c\"\u003e#\u003c/span\u003e   7) Applies SELinux contexts and firewall rules\u003c/span\u003e","\u003cspan class=\"pl-c\"\u003e\u003cspan class=\"pl-c\"\u003e#\u003c/span\u003e   8) Creates systemd service + hourly timer for automated syncing\u003c/span\u003e","\u003cspan class=\"pl-c\"\u003e\u003cspan class=\"pl-c\"\u003e#\u003c/span\u003e   9) Validates available disk space for sync operations\u003c/span\u003e","\u003cspan class=\"pl-c\"\u003e\u003cspan class=\"pl-c\"\u003e#\u003c/span\u003e   10) Tests local HTTP connectivity to mirror paths\u003c/span\u003e","\u003cspan class=\"pl-c\"\u003e\u003cspan class=\"pl-c\"\u003e#\u003c/span\u003e\u003c/span\u003e","\u003cspan class=\"pl-c\"\u003e\u003cspan class=\"pl-c\"\u003e#\u003c/span\u003e NOTE: This script sets up infrastructure only. Manual reposync trigger required:\u003c/span\u003e","\u003cspan class=\"pl-c\"\u003e\u003cspan class=\"pl-c\"\u003e#\u003c/span\u003e   sudo /usr/local/sbin/veeam-vsa-reposync.sh\u003c/span\u003e","\u003cspan class=\"pl-c\"\u003e\u003cspan class=\"pl-c\"\u003e#\u003c/span\u003e\u003c/span\u003e","\u003cspan class=\"pl-c\"\u003e\u003cspan class=\"pl-c\"\u003e#\u003c/span\u003e Supported: RHEL / Rocky / Alma / CentOS Stream 9+ (incl. Rocky 10)\u003c/span\u003e","\u003cspan class=\"pl-c\"\u003e\u003cspan class=\"pl-c\"\u003e#\u003c/span\u003e NOT SUPPORTED: Debian / Ubuntu / SUSE / anything without dnf + reposync.\u003c/span\u003e","\u003cspan class=\"pl-c\"\u003e\u003cspan class=\"pl-c\"\u003e#\u003c/span\u003e\u003c/span\u003e","\u003cspan class=\"pl-c\"\u003e\u003cspan class=\"pl-c\"\u003e#\u003c/span\u003e Created by MarvinFS wrapped up with AI assistance.\u003c/span\u003e","\u003cspan class=\"pl-c\"\u003e\u003cspan class=\"pl-c\"\u003e#\u003c/span\u003e This script is NOT officially provided by Veeam Software company or supported in any way.\u003c/span\u003e","\u003cspan class=\"pl-c\"\u003e\u003cspan class=\"pl-c\"\u003e#\u003c/span\u003e Strictly provided AS IS - use at your own discretion\u003c/span\u003e","\u003cspan class=\"pl-c\"\u003e\u003cspan class=\"pl-c\"\u003e#\u003c/span\u003e ============================================================\u003c/span\u003e","","\u003cspan class=\"pl-c\"\u003e\u003cspan class=\"pl-c\"\u003e#\u003c/span\u003e -------------------------\u003c/span\u003e","\u003cspan class=\"pl-c\"\u003e\u003cspan class=\"pl-c\"\u003e#\u003c/span\u003e CONFIG - EDIT IF NEEDED\u003c/span\u003e","\u003cspan class=\"pl-c\"\u003e\u003cspan class=\"pl-c\"\u003e#\u003c/span\u003e -------------------------\u003c/span\u003e","DATA_DEVICE=\u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e/dev/sdb\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e              \u003cspan class=\"pl-c\"\u003e\u003cspan class=\"pl-c\"\u003e#\u003c/span\u003e disk to use for repo data (will be partitioned) I have added new drive to a VM 100GB\u003c/span\u003e","DATA_PARTITION=\u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003cspan class=\"pl-smi\"\u003e${DATA_DEVICE}\u003c/span\u003e1\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e    \u003cspan class=\"pl-c\"\u003e\u003cspan class=\"pl-c\"\u003e#\u003c/span\u003e resulting partition \u003c/span\u003e","MOUNT_POINT=\u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e/mnt/data\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e             \u003cspan class=\"pl-c\"\u003e\u003cspan class=\"pl-c\"\u003e#\u003c/span\u003e mount point for XFS\u003c/span\u003e","","REPO_ROOT=\u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003cspan class=\"pl-smi\"\u003e${MOUNT_POINT}\u003c/span\u003e/repo/repository.veeam.com\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e","","OS_VERSION=\u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e9.2\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e","VBR_VERSION=\u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e13.0\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e","","\u003cspan class=\"pl-c\"\u003e\u003cspan class=\"pl-c\"\u003e#\u003c/span\u003e desired hostnames and IP which NGINX serves on port 80 (no SSL used, if needed, use any reverse proxy with SSL certs)\u003c/span\u003e","REPO_HOSTNAME_SHORT=\u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003eveeamrepo\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e","REPO_HOSTNAME_FQDN=\u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003eveeamrepo.test.local\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e","REPO_HOST_IP=\u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e192.168.1.54\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e","","\u003cspan class=\"pl-c\"\u003e\u003cspan class=\"pl-c\"\u003e#\u003c/span\u003e Paths and constants\u003c/span\u003e","UPSTREAM_MANDATORY_URL=\u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003ehttps://repository.veeam.com/vsa/\u003cspan class=\"pl-smi\"\u003e${OS_VERSION}\u003c/span\u003e/vbr/\u003cspan class=\"pl-smi\"\u003e${VBR_VERSION}\u003c/span\u003e/mandatory\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e","UPSTREAM_OPTIONAL_URL=\u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003ehttps://repository.veeam.com/vsa/\u003cspan class=\"pl-smi\"\u003e${OS_VERSION}\u003c/span\u003e/vbr/\u003cspan class=\"pl-smi\"\u003e${VBR_VERSION}\u003c/span\u003e/optional\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e","UPSTREAM_EXTERNAL_MANDATORY_URL=\u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003ehttps://repository.veeam.com/vsa/\u003cspan class=\"pl-smi\"\u003e${OS_VERSION}\u003c/span\u003e/external-mandatory\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e","","DNF_BIN=\u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e/usr/bin/dnf\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e","KEY_INDEX_URL=\u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003ehttps://repository.veeam.com/keys/\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e","KEY_LOCAL_DIR=\u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e/etc/veeam/rpm-gpg\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e","UPSTREAM_REPO_FILE=\u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e/etc/yum.repos.d/veeam-vsa-upstream.repo\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e","REPOSYNC_SCRIPT=\u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e/usr/local/sbin/veeam-vsa-reposync.sh\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e","NGINX_CONF=\u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e/etc/nginx/conf.d/veeam-repo.conf\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e","","REPOID_MANDATORY=\u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003eveeam-vsa-mandatory\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e","REPOID_OPTIONAL=\u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003eveeam-vsa-optional\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e","REPOID_EXTERNAL_MANDATORY=\u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003eveeam-vsa-external-mandatory\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e","","SYSTEMD_SERVICE=\u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e/etc/systemd/system/veeam-vsa-reposync.service\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e","SYSTEMD_TIMER=\u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e/etc/systemd/system/veeam-vsa-reposync.timer\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e","","\u003cspan class=\"pl-c\"\u003e\u003cspan class=\"pl-c\"\u003e#\u003c/span\u003e -------------------------\u003c/span\u003e","\u003cspan class=\"pl-c\"\u003e\u003cspan class=\"pl-c\"\u003e#\u003c/span\u003e LOGGING HELPERS\u003c/span\u003e","\u003cspan class=\"pl-c\"\u003e\u003cspan class=\"pl-c\"\u003e#\u003c/span\u003e -------------------------\u003c/span\u003e","\u003cspan class=\"pl-en\"\u003elog\u003c/span\u003e() {","  \u003cspan class=\"pl-c1\"\u003eprintf\u003c/span\u003e \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026#39;\u003c/span\u003e[%(%Y-%m-%d %H:%M:%S)T] %s\\n\u003cspan class=\"pl-pds\"\u003e\u0026#39;\u003c/span\u003e\u003c/span\u003e -1 \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003cspan class=\"pl-smi\"\u003e$*\u003c/span\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e \u003cspan class=\"pl-k\"\u003e\u0026gt;\u0026amp;2\u003c/span\u003e","}","","\u003cspan class=\"pl-en\"\u003efatal\u003c/span\u003e() {","  log \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003eFATAL: \u003cspan class=\"pl-smi\"\u003e$*\u003c/span\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e","  \u003cspan class=\"pl-c1\"\u003eexit\u003c/span\u003e 1","}","","\u003cspan class=\"pl-c\"\u003e\u003cspan class=\"pl-c\"\u003e#\u003c/span\u003e -------------------------\u003c/span\u003e","\u003cspan class=\"pl-c\"\u003e\u003cspan class=\"pl-c\"\u003e#\u003c/span\u003e BASIC CHECKS\u003c/span\u003e","\u003cspan class=\"pl-c\"\u003e\u003cspan class=\"pl-c\"\u003e#\u003c/span\u003e -------------------------\u003c/span\u003e","\u003cspan class=\"pl-en\"\u003erequire_root\u003c/span\u003e() {","  \u003cspan class=\"pl-k\"\u003eif\u003c/span\u003e [[ \u003cspan class=\"pl-smi\"\u003e$EUID\u003c/span\u003e \u003cspan class=\"pl-k\"\u003e-ne\u003c/span\u003e 0 ]]\u003cspan class=\"pl-k\"\u003e;\u003c/span\u003e \u003cspan class=\"pl-k\"\u003ethen\u003c/span\u003e","    fatal \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003eMust be run as root.\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e","  \u003cspan class=\"pl-k\"\u003efi\u003c/span\u003e","}","","\u003cspan class=\"pl-en\"\u003echeck_os\u003c/span\u003e() {","  \u003cspan class=\"pl-k\"\u003eif\u003c/span\u003e [[ \u003cspan class=\"pl-k\"\u003e-r\u003c/span\u003e /etc/os-release ]]\u003cspan class=\"pl-k\"\u003e;\u003c/span\u003e \u003cspan class=\"pl-k\"\u003ethen\u003c/span\u003e","    \u003cspan class=\"pl-c1\"\u003e.\u003c/span\u003e /etc/os-release","  \u003cspan class=\"pl-k\"\u003eelse\u003c/span\u003e","    fatal \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e/etc/os-release not found. Unsupported OS.\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e","  \u003cspan class=\"pl-k\"\u003efi\u003c/span\u003e","","  \u003cspan class=\"pl-k\"\u003ecase\u003c/span\u003e \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003cspan class=\"pl-smi\"\u003e${ID\u003cspan class=\"pl-k\"\u003e:-\u003c/span\u003eunknown}\u003c/span\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e \u003cspan class=\"pl-k\"\u003ein\u003c/span\u003e","    rhel|rocky|almalinux|centos)","      log \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003eOS detected: \u003cspan class=\"pl-smi\"\u003e${PRETTY_NAME\u003cspan class=\"pl-k\"\u003e:-\u003c/span\u003e\u003cspan class=\"pl-smi\"\u003e$ID\u003c/span\u003e}\u003c/span\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e","      ;;","    \u003cspan class=\"pl-k\"\u003e*\u003c/span\u003e)","      fatal \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003eUnsupported OS ID: \u003cspan class=\"pl-smi\"\u003e${ID\u003cspan class=\"pl-k\"\u003e:-\u003c/span\u003eunknown}\u003c/span\u003e. Only RHEL/Rocky/Alma/CentOS-family is supported.\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e","      ;;","  \u003cspan class=\"pl-k\"\u003eesac\u003c/span\u003e","}","","\u003cspan class=\"pl-en\"\u003echeck_dnf\u003c/span\u003e() {","  \u003cspan class=\"pl-k\"\u003eif\u003c/span\u003e \u003cspan class=\"pl-k\"\u003e!\u003c/span\u003e \u003cspan class=\"pl-c1\"\u003ecommand\u003c/span\u003e -v \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003cspan class=\"pl-smi\"\u003e${DNF_BIN}\u003c/span\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e \u003cspan class=\"pl-k\"\u003e\u0026gt;\u003c/span\u003e/dev/null \u003cspan class=\"pl-k\"\u003e2\u0026gt;\u0026amp;1\u003c/span\u003e\u003cspan class=\"pl-k\"\u003e;\u003c/span\u003e \u003cspan class=\"pl-k\"\u003ethen\u003c/span\u003e","    fatal \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003ednf not found. This script requires a dnf based system.\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e","  \u003cspan class=\"pl-k\"\u003efi\u003c/span\u003e","}","","\u003cspan class=\"pl-c\"\u003e\u003cspan class=\"pl-c\"\u003e#\u003c/span\u003e -------------------------\u003c/span\u003e","\u003cspan class=\"pl-c\"\u003e\u003cspan class=\"pl-c\"\u003e#\u003c/span\u003e DISK AND FILESYSTEM SETUP\u003c/span\u003e","\u003cspan class=\"pl-c\"\u003e\u003cspan class=\"pl-c\"\u003e#\u003c/span\u003e -------------------------\u003c/span\u003e","\u003cspan class=\"pl-en\"\u003eprepare_disk\u003c/span\u003e() {","  log \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003eChecking data disk \u003cspan class=\"pl-smi\"\u003e${DATA_DEVICE}\u003c/span\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e","","  \u003cspan class=\"pl-k\"\u003eif\u003c/span\u003e [[ \u003cspan class=\"pl-k\"\u003e!\u003c/span\u003e \u003cspan class=\"pl-k\"\u003e-b\u003c/span\u003e \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003cspan class=\"pl-smi\"\u003e${DATA_DEVICE}\u003c/span\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e ]]\u003cspan class=\"pl-k\"\u003e;\u003c/span\u003e \u003cspan class=\"pl-k\"\u003ethen\u003c/span\u003e","    fatal \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003eDevice \u003cspan class=\"pl-smi\"\u003e${DATA_DEVICE}\u003c/span\u003e does not exist. Adjust DATA_DEVICE in script.\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e","  \u003cspan class=\"pl-k\"\u003efi\u003c/span\u003e","","  \u003cspan class=\"pl-c\"\u003e\u003cspan class=\"pl-c\"\u003e#\u003c/span\u003e If partition already exists and is XFS, assume it is fine and skip destructive steps\u003c/span\u003e","  \u003cspan class=\"pl-k\"\u003eif\u003c/span\u003e lsblk -no TYPE \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003cspan class=\"pl-smi\"\u003e${DATA_PARTITION}\u003c/span\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e \u003cspan class=\"pl-k\"\u003e2\u0026gt;\u003c/span\u003e/dev/null \u003cspan class=\"pl-k\"\u003e|\u003c/span\u003e grep -q \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026#39;\u003c/span\u003e^part$\u003cspan class=\"pl-pds\"\u003e\u0026#39;\u003c/span\u003e\u003c/span\u003e\u003cspan class=\"pl-k\"\u003e;\u003c/span\u003e \u003cspan class=\"pl-k\"\u003ethen\u003c/span\u003e","    \u003cspan class=\"pl-k\"\u003elocal\u003c/span\u003e fstype","    fstype=\u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e$(\u003c/span\u003elsblk -no FSTYPE \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003cspan class=\"pl-smi\"\u003e${DATA_PARTITION}\u003c/span\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e \u003cspan class=\"pl-k\"\u003e2\u0026gt;\u003c/span\u003e/dev/null \u003cspan class=\"pl-k\"\u003e||\u003c/span\u003e true\u003cspan class=\"pl-pds\"\u003e)\u003c/span\u003e\u003c/span\u003e","    log \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003eFound existing partition \u003cspan class=\"pl-smi\"\u003e${DATA_PARTITION}\u003c/span\u003e (FSTYPE=\u003cspan class=\"pl-smi\"\u003e${fstype\u003cspan class=\"pl-k\"\u003e:-\u003c/span\u003eunknown}\u003c/span\u003e). Will NOT repartition or reformat.\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e","","    \u003cspan class=\"pl-k\"\u003eif\u003c/span\u003e [[ \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003cspan class=\"pl-smi\"\u003e${fstype}\u003c/span\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e \u003cspan class=\"pl-k\"\u003e!=\u003c/span\u003e \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003exfs\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e ]]\u003cspan class=\"pl-k\"\u003e;\u003c/span\u003e \u003cspan class=\"pl-k\"\u003ethen\u003c/span\u003e","      log \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003eWARNING: \u003cspan class=\"pl-smi\"\u003e${DATA_PARTITION}\u003c/span\u003e is not XFS. Script expects XFS. Mount may fail.\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e","    \u003cspan class=\"pl-k\"\u003efi\u003c/span\u003e","    \u003cspan class=\"pl-k\"\u003ereturn\u003c/span\u003e","  \u003cspan class=\"pl-k\"\u003efi\u003c/span\u003e","","  log \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003eNo existing partition \u003cspan class=\"pl-smi\"\u003e${DATA_PARTITION}\u003c/span\u003e detected. Creating fresh GPT + XFS.\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e","","  \u003cspan class=\"pl-c\"\u003e\u003cspan class=\"pl-c\"\u003e#\u003c/span\u003e Extra sanity: ensure disk is not already mounted\u003c/span\u003e","  \u003cspan class=\"pl-k\"\u003eif\u003c/span\u003e lsblk -no MOUNTPOINT \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003cspan class=\"pl-smi\"\u003e${DATA_DEVICE}\u003c/span\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e \u003cspan class=\"pl-k\"\u003e|\u003c/span\u003e grep -q \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026#39;\u003c/span\u003e/\u003cspan class=\"pl-pds\"\u003e\u0026#39;\u003c/span\u003e\u003c/span\u003e\u003cspan class=\"pl-k\"\u003e;\u003c/span\u003e \u003cspan class=\"pl-k\"\u003ethen\u003c/span\u003e","    fatal \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003cspan class=\"pl-smi\"\u003e${DATA_DEVICE}\u003c/span\u003e appears to have mounted filesystems. Refusing to wipe.\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e","  \u003cspan class=\"pl-k\"\u003efi\u003c/span\u003e","","  \u003cspan class=\"pl-c\"\u003e\u003cspan class=\"pl-c\"\u003e#\u003c/span\u003e Wipe signatures and create partition table\u003c/span\u003e","  log \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003eWiping filesystem signatures on \u003cspan class=\"pl-smi\"\u003e${DATA_DEVICE}\u003c/span\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e","  wipefs -a \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003cspan class=\"pl-smi\"\u003e${DATA_DEVICE}\u003c/span\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e","","  log \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003eCreating GPT and single XFS partition on \u003cspan class=\"pl-smi\"\u003e${DATA_DEVICE}\u003c/span\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e","  parted \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003cspan class=\"pl-smi\"\u003e${DATA_DEVICE}\u003c/span\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e --script \\","    mklabel gpt \\","    mkpart primary xfs 0% 100%","","  \u003cspan class=\"pl-c\"\u003e\u003cspan class=\"pl-c\"\u003e#\u003c/span\u003e Format partition\u003c/span\u003e","  log \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003eFormatting \u003cspan class=\"pl-smi\"\u003e${DATA_PARTITION}\u003c/span\u003e as XFS\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e","  mkfs.xfs -f \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003cspan class=\"pl-smi\"\u003e${DATA_PARTITION}\u003c/span\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e","","  log \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003eDisk preparation completed for \u003cspan class=\"pl-smi\"\u003e${DATA_PARTITION}\u003c/span\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e","}","","\u003cspan class=\"pl-en\"\u003eensure_mountpoint\u003c/span\u003e() {","  mkdir -p \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003cspan class=\"pl-smi\"\u003e${MOUNT_POINT}\u003c/span\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e","  chmod 0755 \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003cspan class=\"pl-smi\"\u003e${MOUNT_POINT}\u003c/span\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e","}","","\u003cspan class=\"pl-en\"\u003eensure_fstab_entry\u003c/span\u003e() {","  log \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003eEnsuring /etc/fstab has PARTUUID entry for \u003cspan class=\"pl-smi\"\u003e${DATA_PARTITION}\u003c/span\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e","","  \u003cspan class=\"pl-k\"\u003elocal\u003c/span\u003e partuuid","  partuuid=\u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e$(\u003c/span\u003eblkid -o value -s PARTUUID \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003cspan class=\"pl-smi\"\u003e${DATA_PARTITION}\u003c/span\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e \u003cspan class=\"pl-k\"\u003e2\u0026gt;\u003c/span\u003e/dev/null \u003cspan class=\"pl-k\"\u003e||\u003c/span\u003e true\u003cspan class=\"pl-pds\"\u003e)\u003c/span\u003e\u003c/span\u003e","  \u003cspan class=\"pl-k\"\u003eif\u003c/span\u003e [[ \u003cspan class=\"pl-k\"\u003e-z\u003c/span\u003e \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003cspan class=\"pl-smi\"\u003e${partuuid}\u003c/span\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e ]]\u003cspan class=\"pl-k\"\u003e;\u003c/span\u003e \u003cspan class=\"pl-k\"\u003ethen\u003c/span\u003e","    fatal \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003eCould not read PARTUUID for \u003cspan class=\"pl-smi\"\u003e${DATA_PARTITION}\u003c/span\u003e. Check blkid output.\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e","  \u003cspan class=\"pl-k\"\u003efi\u003c/span\u003e","","  \u003cspan class=\"pl-k\"\u003elocal\u003c/span\u003e fstab_line=\u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003ePARTUUID=\u003cspan class=\"pl-smi\"\u003e${partuuid}\u003c/span\u003e   \u003cspan class=\"pl-smi\"\u003e${MOUNT_POINT}\u003c/span\u003e   xfs   defaults,noatime   0 0\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e","","  \u003cspan class=\"pl-k\"\u003eif\u003c/span\u003e grep -q \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003ePARTUUID=\u003cspan class=\"pl-smi\"\u003e${partuuid}\u003c/span\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e /etc/fstab \u003cspan class=\"pl-k\"\u003e2\u0026gt;\u003c/span\u003e/dev/null\u003cspan class=\"pl-k\"\u003e;\u003c/span\u003e \u003cspan class=\"pl-k\"\u003ethen\u003c/span\u003e","    log \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003efstab already contains entry for PARTUUID=\u003cspan class=\"pl-smi\"\u003e${partuuid}\u003c/span\u003e. Skipping append.\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e","  \u003cspan class=\"pl-k\"\u003eelse\u003c/span\u003e","    log \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003eAdding new fstab entry: \u003cspan class=\"pl-smi\"\u003e${fstab_line}\u003c/span\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e","    \u003cspan class=\"pl-k\"\u003eif\u003c/span\u003e \u003cspan class=\"pl-k\"\u003e!\u003c/span\u003e \u003cspan class=\"pl-c1\"\u003eprintf\u003c/span\u003e \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\\n%s\\n\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003cspan class=\"pl-smi\"\u003e${fstab_line}\u003c/span\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e \u003cspan class=\"pl-k\"\u003e\u0026gt;\u0026gt;\u003c/span\u003e /etc/fstab\u003cspan class=\"pl-k\"\u003e;\u003c/span\u003e \u003cspan class=\"pl-k\"\u003ethen\u003c/span\u003e","      fatal \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003eFailed to write to /etc/fstab. Check permissions and disk space.\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e","    \u003cspan class=\"pl-k\"\u003efi\u003c/span\u003e","  \u003cspan class=\"pl-k\"\u003efi\u003c/span\u003e","}","","\u003cspan class=\"pl-en\"\u003emount_data_fs\u003c/span\u003e() {","  log \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003eReloading systemd daemon and mounting all filesystems.\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e","  systemctl daemon-reload \u003cspan class=\"pl-k\"\u003e||\u003c/span\u003e \u003cspan class=\"pl-c1\"\u003etrue\u003c/span\u003e","  mount -a","","  \u003cspan class=\"pl-k\"\u003elocal\u003c/span\u003e mp","  mp=\u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e$(\u003c/span\u003elsblk -no MOUNTPOINT \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003cspan class=\"pl-smi\"\u003e${DATA_PARTITION}\u003c/span\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e \u003cspan class=\"pl-k\"\u003e2\u0026gt;\u003c/span\u003e/dev/null \u003cspan class=\"pl-k\"\u003e||\u003c/span\u003e true\u003cspan class=\"pl-pds\"\u003e)\u003c/span\u003e\u003c/span\u003e","  \u003cspan class=\"pl-k\"\u003eif\u003c/span\u003e [[ \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003cspan class=\"pl-smi\"\u003e${mp}\u003c/span\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e \u003cspan class=\"pl-k\"\u003e!=\u003c/span\u003e \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003cspan class=\"pl-smi\"\u003e${MOUNT_POINT}\u003c/span\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e ]]\u003cspan class=\"pl-k\"\u003e;\u003c/span\u003e \u003cspan class=\"pl-k\"\u003ethen\u003c/span\u003e","    fatal \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003eExpected \u003cspan class=\"pl-smi\"\u003e${DATA_PARTITION}\u003c/span\u003e to be mounted on \u003cspan class=\"pl-smi\"\u003e${MOUNT_POINT}\u003c/span\u003e but got \u0026#39;\u003cspan class=\"pl-smi\"\u003e${mp\u003cspan class=\"pl-k\"\u003e:-\u003c/span\u003e\u0026lt;none\u0026gt;}\u003c/span\u003e\u0026#39;\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e","  \u003cspan class=\"pl-k\"\u003efi\u003c/span\u003e","","  log \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003eMount check passed: \u003cspan class=\"pl-smi\"\u003e${DATA_PARTITION}\u003c/span\u003e -\u0026gt; \u003cspan class=\"pl-smi\"\u003e${MOUNT_POINT}\u003c/span\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e","}","","\u003cspan class=\"pl-c\"\u003e\u003cspan class=\"pl-c\"\u003e#\u003c/span\u003e -------------------------\u003c/span\u003e","\u003cspan class=\"pl-c\"\u003e\u003cspan class=\"pl-c\"\u003e#\u003c/span\u003e CORE PACKAGES\u003c/span\u003e","\u003cspan class=\"pl-c\"\u003e\u003cspan class=\"pl-c\"\u003e#\u003c/span\u003e -------------------------\u003c/span\u003e","\u003cspan class=\"pl-en\"\u003einstall_core_packages\u003c/span\u003e() {","  log \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003eInstalling required packages (dnf-plugins-core, curl, nginx, SELinux tools, firewalld helpers)\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e","","  \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003cspan class=\"pl-smi\"\u003e${DNF_BIN}\u003c/span\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e install -y dnf-plugins-core curl nginx policycoreutils-python-utils selinux-policy-targeted firewalld \u003cspan class=\"pl-k\"\u003e||\u003c/span\u003e \\","    log \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003eWARNING: Some packages failed to install. If your distro variant does not use them, this may be ok.\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e","","  \u003cspan class=\"pl-c\"\u003e\u003cspan class=\"pl-c\"\u003e#\u003c/span\u003e Make sure dnf reposync is available\u003c/span\u003e","  \u003cspan class=\"pl-k\"\u003eif\u003c/span\u003e \u003cspan class=\"pl-k\"\u003e!\u003c/span\u003e \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003cspan class=\"pl-smi\"\u003e${DNF_BIN}\u003c/span\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e --help \u003cspan class=\"pl-k\"\u003e2\u0026gt;\u0026amp;1\u003c/span\u003e \u003cspan class=\"pl-k\"\u003e|\u003c/span\u003e grep -q \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026#39;\u003c/span\u003ereposync\u003cspan class=\"pl-pds\"\u003e\u0026#39;\u003c/span\u003e\u003c/span\u003e\u003cspan class=\"pl-k\"\u003e;\u003c/span\u003e \u003cspan class=\"pl-k\"\u003ethen\u003c/span\u003e","    fatal \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003ednf reposync plugin not available even after installing dnf-plugins-core.\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e","  \u003cspan class=\"pl-k\"\u003efi\u003c/span\u003e","}","","\u003cspan class=\"pl-c\"\u003e\u003cspan class=\"pl-c\"\u003e#\u003c/span\u003e -------------------------\u003c/span\u003e","\u003cspan class=\"pl-c\"\u003e\u003cspan class=\"pl-c\"\u003e#\u003c/span\u003e DISK SPACE VALIDATION\u003c/span\u003e","\u003cspan class=\"pl-c\"\u003e\u003cspan class=\"pl-c\"\u003e#\u003c/span\u003e -------------------------\u003c/span\u003e","\u003cspan class=\"pl-en\"\u003echeck_disk_space\u003c/span\u003e() {","  log \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003eChecking available disk space on \u003cspan class=\"pl-smi\"\u003e${MOUNT_POINT}\u003c/span\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e","","  \u003cspan class=\"pl-k\"\u003elocal\u003c/span\u003e available_gb","  available_gb=\u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e$(\u003c/span\u003edf -B1G \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003cspan class=\"pl-smi\"\u003e${MOUNT_POINT}\u003c/span\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e \u003cspan class=\"pl-k\"\u003e|\u003c/span\u003e awk \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026#39;\u003c/span\u003eNR==2 {print $4}\u003cspan class=\"pl-pds\"\u003e\u0026#39;\u003c/span\u003e\u003c/span\u003e \u003cspan class=\"pl-k\"\u003e|\u003c/span\u003e sed \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026#39;\u003c/span\u003es/G$//\u003cspan class=\"pl-pds\"\u003e\u0026#39;\u003c/span\u003e\u003c/span\u003e\u003cspan class=\"pl-pds\"\u003e)\u003c/span\u003e\u003c/span\u003e","","  \u003cspan class=\"pl-k\"\u003eif\u003c/span\u003e [[ \u003cspan class=\"pl-k\"\u003e-z\u003c/span\u003e \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003cspan class=\"pl-smi\"\u003e${available_gb}\u003c/span\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e ]]\u003cspan class=\"pl-k\"\u003e;\u003c/span\u003e \u003cspan class=\"pl-k\"\u003ethen\u003c/span\u003e","    log \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003eWARNING: Could not determine available disk space. Proceeding anyway.\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e","    \u003cspan class=\"pl-k\"\u003ereturn\u003c/span\u003e","  \u003cspan class=\"pl-k\"\u003efi\u003c/span\u003e","","  \u003cspan class=\"pl-c\"\u003e\u003cspan class=\"pl-c\"\u003e#\u003c/span\u003e Warn if less than 40GB available (initial sync is ~30GB + buffer)\u003c/span\u003e","  \u003cspan class=\"pl-k\"\u003eif\u003c/span\u003e \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e((\u003c/span\u003e available_gb \u003cspan class=\"pl-k\"\u003e\u0026lt;\u003c/span\u003e \u003cspan class=\"pl-c1\"\u003e40\u003c/span\u003e \u003cspan class=\"pl-pds\"\u003e))\u003c/span\u003e\u003c/span\u003e\u003cspan class=\"pl-k\"\u003e;\u003c/span\u003e \u003cspan class=\"pl-k\"\u003ethen\u003c/span\u003e","    log \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003eWARNING: Only \u003cspan class=\"pl-smi\"\u003e${available_gb}\u003c/span\u003eGB available on \u003cspan class=\"pl-smi\"\u003e${MOUNT_POINT}\u003c/span\u003e. Initial reposync needs ~30GB.\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e","    log \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003eWARNING: Sync may fail if space is insufficient.\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e","  \u003cspan class=\"pl-k\"\u003eelse\u003c/span\u003e","    log \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003eDisk space check: \u003cspan class=\"pl-smi\"\u003e${available_gb}\u003c/span\u003eGB available (sufficient for initial sync).\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e","  \u003cspan class=\"pl-k\"\u003efi\u003c/span\u003e","}","","\u003cspan class=\"pl-c\"\u003e\u003cspan class=\"pl-c\"\u003e#\u003c/span\u003e -------------------------\u003c/span\u003e","\u003cspan class=\"pl-c\"\u003e\u003cspan class=\"pl-c\"\u003e#\u003c/span\u003e VEEAM UPSTREAM .repo FILE\u003c/span\u003e","\u003cspan class=\"pl-c\"\u003e\u003cspan class=\"pl-c\"\u003e#\u003c/span\u003e -------------------------\u003c/span\u003e","\u003cspan class=\"pl-en\"\u003ecreate_upstream_repo_file\u003c/span\u003e() {","  \u003cspan class=\"pl-k\"\u003eif\u003c/span\u003e [[ \u003cspan class=\"pl-k\"\u003e-f\u003c/span\u003e \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003cspan class=\"pl-smi\"\u003e${UPSTREAM_REPO_FILE}\u003c/span\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e ]]\u003cspan class=\"pl-k\"\u003e;\u003c/span\u003e \u003cspan class=\"pl-k\"\u003ethen\u003c/span\u003e","    log \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003eUpstream repo file \u003cspan class=\"pl-smi\"\u003e${UPSTREAM_REPO_FILE}\u003c/span\u003e already exists. Leaving it intact.\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e","    \u003cspan class=\"pl-k\"\u003ereturn\u003c/span\u003e","  \u003cspan class=\"pl-k\"\u003efi\u003c/span\u003e","","  log \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003eCreating upstream repo definition at \u003cspan class=\"pl-smi\"\u003e${UPSTREAM_REPO_FILE}\u003c/span\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e","","  tee \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003cspan class=\"pl-smi\"\u003e${UPSTREAM_REPO_FILE}\u003c/span\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e \u003cspan class=\"pl-k\"\u003e\u0026gt;\u003c/span\u003e/dev/null \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-k\"\u003e\u0026lt;\u0026lt;\u003c/span\u003e\u003cspan class=\"pl-k\"\u003eEOF\u003c/span\u003e\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e[\u003cspan class=\"pl-smi\"\u003e${REPOID_MANDATORY}\u003c/span\u003e]\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003ename=Veeam VSA mandatory (upstream mirror source)\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003ebaseurl=https://repository.veeam.com/vsa/\u003cspan class=\"pl-smi\"\u003e${OS_VERSION}\u003c/span\u003e/vbr/\u003cspan class=\"pl-smi\"\u003e${VBR_VERSION}\u003c/span\u003e/mandatory/\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003eenabled=0\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003egpgcheck=0\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003erepo_gpgcheck=0\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003egpgkey=https://repository.veeam.com/keys/RPM-E6FBD664 https://repository.veeam.com/keys/RPM-EFDCEA77\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e[\u003cspan class=\"pl-smi\"\u003e${REPOID_OPTIONAL}\u003c/span\u003e]\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003ename=Veeam VSA optional (upstream mirror source)\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003ebaseurl=https://repository.veeam.com/vsa/\u003cspan class=\"pl-smi\"\u003e${OS_VERSION}\u003c/span\u003e/vbr/\u003cspan class=\"pl-smi\"\u003e${VBR_VERSION}\u003c/span\u003e/optional/\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003eenabled=0\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003egpgcheck=0\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003erepo_gpgcheck=0\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003egpgkey=https://repository.veeam.com/keys/RPM-E6FBD664 https://repository.veeam.com/keys/RPM-EFDCEA77\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e[\u003cspan class=\"pl-smi\"\u003e${REPOID_EXTERNAL_MANDATORY}\u003c/span\u003e]\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003ename=Veeam VSA external mandatory (upstream mirror source)\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003ebaseurl=https://repository.veeam.com/vsa/\u003cspan class=\"pl-smi\"\u003e${OS_VERSION}\u003c/span\u003e/external-mandatory/\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003eenabled=0\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003egpgcheck=0\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003erepo_gpgcheck=0\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003egpgkey=https://repository.veeam.com/keys/RPM-E6FBD664 https://repository.veeam.com/keys/RPM-EFDCEA77\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-k\"\u003eEOF\u003c/span\u003e\u003c/span\u003e","}","","\u003cspan class=\"pl-c\"\u003e\u003cspan class=\"pl-c\"\u003e#\u003c/span\u003e -------------------------\u003c/span\u003e","\u003cspan class=\"pl-c\"\u003e\u003cspan class=\"pl-c\"\u003e#\u003c/span\u003e REPOSYNC SCRIPT\u003c/span\u003e","\u003cspan class=\"pl-c\"\u003e\u003cspan class=\"pl-c\"\u003e#\u003c/span\u003e -------------------------\u003c/span\u003e","\u003cspan class=\"pl-en\"\u003ecreate_reposync_script\u003c/span\u003e() {","  log \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003eCreating reposync script at \u003cspan class=\"pl-smi\"\u003e${REPOSYNC_SCRIPT}\u003c/span\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e","","  mkdir -p \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e$(\u003c/span\u003edirname \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003cspan class=\"pl-smi\"\u003e${REPOSYNC_SCRIPT}\u003c/span\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e\u003cspan class=\"pl-pds\"\u003e)\u003c/span\u003e\u003c/span\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e","","  \u003cspan class=\"pl-c\"\u003e\u003cspan class=\"pl-c\"\u003e#\u003c/span\u003e Inject configuration variables into the embedded script\u003c/span\u003e","  tee \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003cspan class=\"pl-smi\"\u003e${REPOSYNC_SCRIPT}\u003c/span\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e \u003cspan class=\"pl-k\"\u003e\u0026gt;\u003c/span\u003e/dev/null \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-k\"\u003e\u0026lt;\u0026lt;\u003c/span\u003e\u003cspan class=\"pl-k\"\u003eEOF\u003c/span\u003e\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e#!/usr/bin/env bash\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003eset -euo pipefail\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e# ============================================================\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e# VSA local mirror script using dnf reposync\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e# Supported: RHEL / Rocky / Alma / CentOS Stream 9+ (incl. Rocky 10)\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e# NOT SUPPORTED: Debian/Ubuntu or non-dnf systems.\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e# Created by MarvinFS \u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e# This script is NOT officially provided by Veeam Software company or supported in any way.\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e# Strictly provided AS IS - use at your own discretion\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e#\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e# NOTE:\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e#  - GPG checks are DISABLED on the mirror host (--nogpgcheck),\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e#    because external-mandatory contains packages signed by\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e#    multiple vendor keys (Rocky, CIQ, PGDG, etc).\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e#  - The VSA itself can still enforce full GPG checks (packages\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e#    and metadata) when using this mirror.\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e# ============================================================\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003eREPO_ROOT=\u0026quot;\u003cspan class=\"pl-smi\"\u003e${REPO_ROOT}\u003c/span\u003e\u0026quot;\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003eREPOID_MANDATORY=\u0026quot;veeam-vsa-mandatory\u0026quot;\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003eREPOID_OPTIONAL=\u0026quot;veeam-vsa-optional\u0026quot;\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003eREPOID_EXTERNAL_MANDATORY=\u0026quot;veeam-vsa-external-mandatory\u0026quot;\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e# Upstream Veeam URLs for VSA repos (metadata signatures live here)\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003eUPSTREAM_MANDATORY_URL=\u0026quot;\u003cspan class=\"pl-smi\"\u003e${UPSTREAM_MANDATORY_URL}\u003c/span\u003e\u0026quot;\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003eUPSTREAM_OPTIONAL_URL=\u0026quot;\u003cspan class=\"pl-smi\"\u003e${UPSTREAM_OPTIONAL_URL}\u003c/span\u003e\u0026quot;\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003eUPSTREAM_EXTERNAL_MANDATORY_URL=\u0026quot;\u003cspan class=\"pl-smi\"\u003e${UPSTREAM_EXTERNAL_MANDATORY_URL}\u003c/span\u003e\u0026quot;\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003eDNF_BIN=\u0026quot;/usr/bin/dnf\u0026quot;\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003eKEY_INDEX_URL=\u0026quot;https://repository.veeam.com/keys/\u0026quot;\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003eKEY_LOCAL_DIR=\u0026quot;/etc/veeam/rpm-gpg\u0026quot;\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003elog() {\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e  printf \u0026#39;[%(%Y-%m-%d %H:%M:%S)T] %s\\n\u0026#39; -1 \u0026quot;\u003cspan class=\"pl-smi\"\u003e$*\u003c/span\u003e\u0026quot; \u0026gt;\u0026amp;2\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e}\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003echeck_os() {\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e  if [[ -r /etc/os-release ]]; then\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e    # shellcheck disable=SC1091\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e    . /etc/os-release\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e  else\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e    log \u0026quot;ERROR: /etc/os-release not found. Unsupported OS.\u0026quot;\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e    exit 1\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e  fi\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e  case \u0026quot;\u003cspan class=\"pl-smi\"\u003e${ID\u003cspan class=\"pl-k\"\u003e:-\u003c/span\u003eunknown}\u003c/span\u003e\u0026quot; in\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e    rhel|rocky|almalinux|centos)\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e      ;;\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e    *)\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e      log \u0026quot;ERROR: This script supports only RHEL/Rocky/Alma/CentOS-family systems.\u0026quot;\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e      exit 1\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e      ;;\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e  esac\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e}\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003echeck_prereqs() {\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e  if ! command -v \u0026quot;\u003cspan class=\"pl-smi\"\u003e${DNF_BIN}\u003c/span\u003e\u0026quot; \u0026gt;/dev/null 2\u0026gt;\u0026amp;1; then\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e    log \u0026quot;ERROR: dnf not found. This is not a RHEL-family system.\u0026quot;\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e    exit 1\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e  fi\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e  if ! \u0026quot;\u003cspan class=\"pl-smi\"\u003e${DNF_BIN}\u003c/span\u003e\u0026quot; --help 2\u0026gt;\u0026amp;1 | grep -q \u0026#39;reposync\u0026#39;; then\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e    log \u0026quot;ERROR: dnf reposync plugin not available. Install dnf-plugins-core first:\u0026quot;\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e    log \u0026quot;       dnf install -y dnf-plugins-core\u0026quot;\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e    exit 1\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e  fi\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e  if ! command -v curl \u0026gt;/dev/null 2\u0026gt;\u0026amp;1; then\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e    log \u0026quot;ERROR: curl not found. Install it first:\u0026quot;\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e    log \u0026quot;       dnf install -y curl\u0026quot;\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e    exit 1\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e  fi\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e  if [[ ! -f /etc/yum.repos.d/veeam-vsa-upstream.repo ]]; then\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e    log \u0026quot;ERROR: /etc/yum.repos.d/veeam-vsa-upstream.repo not found.\u0026quot;\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e    log \u0026quot;       Create it before running this script.\u0026quot;\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e    exit 1\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e  fi\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e}\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003esync_veeam_keys() {\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e  log \u0026quot;Syncing Veeam RPM GPG keys from \u003cspan class=\"pl-smi\"\u003e${KEY_INDEX_URL}\u003c/span\u003e\u0026quot;\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e  mkdir -p \u0026quot;\u003cspan class=\"pl-smi\"\u003e${KEY_LOCAL_DIR}\u003c/span\u003e\u0026quot;\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e  local index\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e  if ! index=\u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e$(\u003c/span\u003ecurl -fsSL \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003cspan class=\"pl-smi\"\u003e${KEY_INDEX_URL}\u003c/span\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e\u003cspan class=\"pl-pds\"\u003e)\u003c/span\u003e\u003c/span\u003e; then\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e    log \u0026quot;WARNING: Failed to download key index, skipping key sync.\u0026quot;\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e    return\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e  fi\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e  local keys\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e  keys=\u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e$(\u003c/span\u003eprintf \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026#39;\u003c/span\u003e%s\\n\u003cspan class=\"pl-pds\"\u003e\u0026#39;\u003c/span\u003e\u003c/span\u003e \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003cspan class=\"pl-smi\"\u003e${index}\u003c/span\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e \u003cspan class=\"pl-k\"\u003e|\u003c/span\u003e grep -o \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026#39;\u003c/span\u003eRPM-[A-Za-z0-9]\\+\u003cspan class=\"pl-pds\"\u003e\u0026#39;\u003c/span\u003e\u003c/span\u003e \u003cspan class=\"pl-k\"\u003e|\u003c/span\u003e sort -u \u003cspan class=\"pl-k\"\u003e||\u003c/span\u003e true\u003cspan class=\"pl-pds\"\u003e)\u003c/span\u003e\u003c/span\u003e\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e  if [[ -z \u0026quot;\u003cspan class=\"pl-smi\"\u003e${keys}\u003c/span\u003e\u0026quot; ]]; then\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e    log \u0026quot;WARNING: No RPM-* keys found in index, skipping key sync.\u0026quot;\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e    return\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e  fi\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e  local k\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e  for k in \u003cspan class=\"pl-smi\"\u003e${keys}\u003c/span\u003e; do\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e    local dst=\u0026quot;\u003cspan class=\"pl-smi\"\u003e${KEY_LOCAL_DIR}\u003c/span\u003e/\u003cspan class=\"pl-smi\"\u003e${k}\u003c/span\u003e.gpg\u0026quot;\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e    local url=\u0026quot;\u003cspan class=\"pl-smi\"\u003e${KEY_INDEX_URL}${k}\u003c/span\u003e\u0026quot;\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e    log \u0026quot;  - Downloading key \u003cspan class=\"pl-smi\"\u003e${k}\u003c/span\u003e\u0026quot;\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e    if curl -fsSL \u0026quot;\u003cspan class=\"pl-smi\"\u003e${url}\u003c/span\u003e\u0026quot; -o \u0026quot;\u003cspan class=\"pl-smi\"\u003e${dst}\u003c/span\u003e\u0026quot;; then\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e      rpm --import \u0026quot;\u003cspan class=\"pl-smi\"\u003e${dst}\u003c/span\u003e\u0026quot; || log \u0026quot;WARNING: Failed to import key \u003cspan class=\"pl-smi\"\u003e${dst}\u003c/span\u003e\u0026quot;\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e    else\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e      log \u0026quot;WARNING: Could not download key \u003cspan class=\"pl-smi\"\u003e${k}\u003c/span\u003e\u0026quot;\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e    fi\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e  done\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e  log \u0026quot;Veeam RPM GPG key sync completed (some keys may be rejected by policies - this is expected).\u0026quot;\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e}\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003esync_repo_signatures() {\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e  local upstream_url=\u0026quot;\u003cspan class=\"pl-smi\"\u003e$1\u003c/span\u003e\u0026quot;\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e  local target_path=\u0026quot;\u003cspan class=\"pl-smi\"\u003e$2\u003c/span\u003e\u0026quot;\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e  local repodata_path=\u0026quot;\u003cspan class=\"pl-smi\"\u003e${target_path}\u003c/span\u003e/repodata\u0026quot;\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e  mkdir -p \u0026quot;\u003cspan class=\"pl-smi\"\u003e${repodata_path}\u003c/span\u003e\u0026quot;\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e  # We try to pull both repomd.xml.asc and repomd.xml.key.\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e  # If they are missing upstream, we only log a warning and continue.\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e  local f\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e  for f in repomd.xml.asc repomd.xml.key; do\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e    local url=\u0026quot;\u003cspan class=\"pl-smi\"\u003e${upstream_url}\u003c/span\u003e/repodata/\u003cspan class=\"pl-smi\"\u003e${f}\u003c/span\u003e\u0026quot;\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e    local dst=\u0026quot;\u003cspan class=\"pl-smi\"\u003e${repodata_path}\u003c/span\u003e/\u003cspan class=\"pl-smi\"\u003e${f}\u003c/span\u003e\u0026quot;\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e    log \u0026quot;Syncing metadata signature \u003cspan class=\"pl-smi\"\u003e${f}\u003c/span\u003e from \u003cspan class=\"pl-smi\"\u003e${url}\u003c/span\u003e\u0026quot;\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e    if curl -fsSL \u0026quot;\u003cspan class=\"pl-smi\"\u003e${url}\u003c/span\u003e\u0026quot; -o \u0026quot;\u003cspan class=\"pl-smi\"\u003e${dst}\u003c/span\u003e\u0026quot;; then\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e      log \u0026quot;  - Downloaded \u003cspan class=\"pl-smi\"\u003e${f}\u003c/span\u003e to \u003cspan class=\"pl-smi\"\u003e${dst}\u003c/span\u003e\u0026quot;\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e    else\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e      log \u0026quot;WARNING: Could not download \u003cspan class=\"pl-smi\"\u003e${f}\u003c/span\u003e from \u003cspan class=\"pl-smi\"\u003e${url}\u003c/span\u003e (metadata GPG for this repo may fail if repo_gpgcheck=1).\u0026quot;\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e    fi\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e  done\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e}\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003emirror_repo() {\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e  local repoid=\u0026quot;\u003cspan class=\"pl-smi\"\u003e$1\u003c/span\u003e\u0026quot;\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e  local relpath=\u0026quot;\u003cspan class=\"pl-smi\"\u003e$2\u003c/span\u003e\u0026quot;\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e  local upstream_url=\u0026quot;\u003cspan class=\"pl-smi\"\u003e$3\u003c/span\u003e\u0026quot;\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e  local target_path=\u0026quot;\u003cspan class=\"pl-smi\"\u003e${REPO_ROOT}\u003c/span\u003e/\u003cspan class=\"pl-smi\"\u003e${relpath}\u003c/span\u003e\u0026quot;\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e  mkdir -p \u0026quot;\u003cspan class=\"pl-smi\"\u003e${target_path}\u003c/span\u003e\u0026quot;\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e  log \u0026quot;Running dnf reposync for \u003cspan class=\"pl-smi\"\u003e${repoid}\u003c/span\u003e\u0026quot;\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e  log \u0026quot;Target: \u003cspan class=\"pl-smi\"\u003e${target_path}\u003c/span\u003e\u0026quot;\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e  # IMPORTANT:\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e  #   --nogpgcheck is ONLY for this mirror host.\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e  #   The VSA still does GPG checks when consuming this mirror.\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e  \u0026quot;\u003cspan class=\"pl-smi\"\u003e${DNF_BIN}\u003c/span\u003e\u0026quot; -y reposync \u003cspan class=\"pl-cce\"\u003e\\\u003c/span\u003e\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e    --repoid=\u0026quot;\u003cspan class=\"pl-smi\"\u003e${repoid}\u003c/span\u003e\u0026quot; \u003cspan class=\"pl-cce\"\u003e\\\u003c/span\u003e\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e    --download-metadata \u003cspan class=\"pl-cce\"\u003e\\\u003c/span\u003e\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e    --download-path=\u0026quot;\u003cspan class=\"pl-smi\"\u003e${target_path}\u003c/span\u003e\u0026quot; \u003cspan class=\"pl-cce\"\u003e\\\u003c/span\u003e\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e    --norepopath \u003cspan class=\"pl-cce\"\u003e\\\u003c/span\u003e\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e    --delete \u003cspan class=\"pl-cce\"\u003e\\\u003c/span\u003e\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e    --nogpgcheck\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e  # After successful reposync, pull metadata signature files\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e  sync_repo_signatures \u0026quot;\u003cspan class=\"pl-smi\"\u003e${upstream_url}\u003c/span\u003e\u0026quot; \u0026quot;\u003cspan class=\"pl-smi\"\u003e${target_path}\u003c/span\u003e\u0026quot;\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e}\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003emain() {\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e  if [[ \u003cspan class=\"pl-smi\"\u003e$EUID\u003c/span\u003e -ne 0 ]]; then\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e    log \u0026quot;ERROR: Must run as root.\u0026quot;\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e    exit 1\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e  fi\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e  check_os\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e  check_prereqs\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e  sync_veeam_keys\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e  # Mirror the three VSA repos into the expected tree\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e  mirror_repo \u0026quot;\u003cspan class=\"pl-smi\"\u003e${REPOID_MANDATORY}\u003c/span\u003e\u0026quot;          \u0026quot;vsa/\u003cspan class=\"pl-smi\"\u003e${OS_VERSION}\u003c/span\u003e/vbr/\u003cspan class=\"pl-smi\"\u003e${VBR_VERSION}\u003c/span\u003e/mandatory\u0026quot;       \u0026quot;\u003cspan class=\"pl-smi\"\u003e${UPSTREAM_MANDATORY_URL}\u003c/span\u003e\u0026quot;\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e  mirror_repo \u0026quot;\u003cspan class=\"pl-smi\"\u003e${REPOID_OPTIONAL}\u003c/span\u003e\u0026quot;           \u0026quot;vsa/\u003cspan class=\"pl-smi\"\u003e${OS_VERSION}\u003c/span\u003e/vbr/\u003cspan class=\"pl-smi\"\u003e${VBR_VERSION}\u003c/span\u003e/optional\u0026quot;        \u0026quot;\u003cspan class=\"pl-smi\"\u003e${UPSTREAM_OPTIONAL_URL}\u003c/span\u003e\u0026quot;\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e  mirror_repo \u0026quot;\u003cspan class=\"pl-smi\"\u003e${REPOID_EXTERNAL_MANDATORY}\u003c/span\u003e\u0026quot; \u0026quot;vsa/\u003cspan class=\"pl-smi\"\u003e${OS_VERSION}\u003c/span\u003e/external-mandatory\u0026quot;                 \u0026quot;\u003cspan class=\"pl-smi\"\u003e${UPSTREAM_EXTERNAL_MANDATORY_URL}\u003c/span\u003e\u0026quot;\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e  log \u0026quot;Veeam VSA reposync completed successfully.\u0026quot;\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e}\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003emain \u0026quot;\u003cspan class=\"pl-smi\"\u003e$@\u003c/span\u003e\u0026quot;\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-k\"\u003eEOF\u003c/span\u003e\u003c/span\u003e","","  chmod 0755 \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003cspan class=\"pl-smi\"\u003e${REPOSYNC_SCRIPT}\u003c/span\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e","EOF","}","","\u003cspan class=\"pl-c\"\u003e\u003cspan class=\"pl-c\"\u003e#\u003c/span\u003e -------------------------\u003c/span\u003e","\u003cspan class=\"pl-c\"\u003e\u003cspan class=\"pl-c\"\u003e#\u003c/span\u003e NGINX CONFIG\u003c/span\u003e","\u003cspan class=\"pl-c\"\u003e\u003cspan class=\"pl-c\"\u003e#\u003c/span\u003e -------------------------\u003c/span\u003e","\u003cspan class=\"pl-en\"\u003econfigure_nginx\u003c/span\u003e() {","  log \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003eEnabling and starting nginx\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e","  systemctl \u003cspan class=\"pl-c1\"\u003eenable\u003c/span\u003e --now nginx \u003cspan class=\"pl-k\"\u003e||\u003c/span\u003e fatal \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003eFailed to enable or start nginx.\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e","","  log \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003eWriting nginx repo config to \u003cspan class=\"pl-smi\"\u003e${NGINX_CONF}\u003c/span\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e","","  tee \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003cspan class=\"pl-smi\"\u003e${NGINX_CONF}\u003c/span\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e \u003cspan class=\"pl-k\"\u003e\u0026gt;\u003c/span\u003e/dev/null \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-k\"\u003e\u0026lt;\u0026lt;\u003c/span\u003e\u003cspan class=\"pl-k\"\u003eEOF\u003c/span\u003e\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003eserver {\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e    listen 80;\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e    server_name \u003cspan class=\"pl-smi\"\u003e${REPO_HOSTNAME_FQDN}\u003c/span\u003e \u003cspan class=\"pl-smi\"\u003e${REPO_HOSTNAME_SHORT}\u003c/span\u003e \u003cspan class=\"pl-smi\"\u003e${REPO_HOST_IP}\u003c/span\u003e;\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e    # Root of the mirrored repo\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e    root \u003cspan class=\"pl-smi\"\u003e${REPO_ROOT}\u003c/span\u003e;\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e    autoindex on;\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e    autoindex_exact_size off;\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e    autoindex_localtime on;\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e    # Everything served read-only\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e    location / {\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e        try_files \u003cspan class=\"pl-cce\"\u003e\\$\u003c/span\u003euri \u003cspan class=\"pl-cce\"\u003e\\$\u003c/span\u003euri/ =404;\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e    }\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e}\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-k\"\u003eEOF\u003c/span\u003e\u003c/span\u003e","","  log \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003eTesting nginx configuration\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e","  nginx -t","","  log \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003eReloading nginx\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e","  systemctl reload nginx","}","","\u003cspan class=\"pl-c\"\u003e\u003cspan class=\"pl-c\"\u003e#\u003c/span\u003e -------------------------\u003c/span\u003e","\u003cspan class=\"pl-c\"\u003e\u003cspan class=\"pl-c\"\u003e#\u003c/span\u003e SELINUX CONTEXTS\u003c/span\u003e","\u003cspan class=\"pl-c\"\u003e\u003cspan class=\"pl-c\"\u003e#\u003c/span\u003e -------------------------\u003c/span\u003e","\u003cspan class=\"pl-en\"\u003econfigure_selinux\u003c/span\u003e() {","  \u003cspan class=\"pl-k\"\u003eif\u003c/span\u003e \u003cspan class=\"pl-c1\"\u003ecommand\u003c/span\u003e -v getenforce \u003cspan class=\"pl-k\"\u003e\u0026gt;\u003c/span\u003e/dev/null \u003cspan class=\"pl-k\"\u003e2\u0026gt;\u0026amp;1\u003c/span\u003e\u003cspan class=\"pl-k\"\u003e;\u003c/span\u003e \u003cspan class=\"pl-k\"\u003ethen\u003c/span\u003e","    \u003cspan class=\"pl-k\"\u003elocal\u003c/span\u003e mode","    mode=\u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e$(\u003c/span\u003egetenforce \u003cspan class=\"pl-k\"\u003e||\u003c/span\u003e \u003cspan class=\"pl-c1\"\u003eecho\u003c/span\u003e \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003eUnknown\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e\u003cspan class=\"pl-pds\"\u003e)\u003c/span\u003e\u003c/span\u003e","    log \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003eSELinux mode: \u003cspan class=\"pl-smi\"\u003e${mode}\u003c/span\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e","","    \u003cspan class=\"pl-k\"\u003ecase\u003c/span\u003e \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003cspan class=\"pl-smi\"\u003e${mode}\u003c/span\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e \u003cspan class=\"pl-k\"\u003ein\u003c/span\u003e","      Enforcing|Permissive)","        log \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003eApplying SELinux context httpd_sys_content_t to \u003cspan class=\"pl-smi\"\u003e${MOUNT_POINT}\u003c/span\u003e/repo\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e","        semanage fcontext -a -t httpd_sys_content_t \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003cspan class=\"pl-smi\"\u003e${MOUNT_POINT}\u003c/span\u003e/repo(/.*)?\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e \u003cspan class=\"pl-k\"\u003e||\u003c/span\u003e \\","          log \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003eWARNING: semanage failed. Check if policycoreutils-python-utils is installed.\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e","        restorecon -Rv \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003cspan class=\"pl-smi\"\u003e${MOUNT_POINT}\u003c/span\u003e/repo\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e \u003cspan class=\"pl-k\"\u003e||\u003c/span\u003e \\","          log \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003eWARNING: restorecon failed. Check SELinux configuration.\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e","        ;;","      \u003cspan class=\"pl-k\"\u003e*\u003c/span\u003e)","        log \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003eSELinux not enforcing or permissive. Skipping context configuration.\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e","        ;;","    \u003cspan class=\"pl-k\"\u003eesac\u003c/span\u003e","  \u003cspan class=\"pl-k\"\u003eelse\u003c/span\u003e","    log \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003egetenforce not available. Assuming SELinux not in use, skipping.\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e","  \u003cspan class=\"pl-k\"\u003efi\u003c/span\u003e","}","","\u003cspan class=\"pl-c\"\u003e\u003cspan class=\"pl-c\"\u003e#\u003c/span\u003e -------------------------\u003c/span\u003e","\u003cspan class=\"pl-c\"\u003e\u003cspan class=\"pl-c\"\u003e#\u003c/span\u003e FIREWALLD\u003c/span\u003e","\u003cspan class=\"pl-c\"\u003e\u003cspan class=\"pl-c\"\u003e#\u003c/span\u003e -------------------------\u003c/span\u003e","\u003cspan class=\"pl-en\"\u003econfigure_firewall\u003c/span\u003e() {","  \u003cspan class=\"pl-k\"\u003eif\u003c/span\u003e systemctl is-active --quiet firewalld\u003cspan class=\"pl-k\"\u003e;\u003c/span\u003e \u003cspan class=\"pl-k\"\u003ethen\u003c/span\u003e","    log \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003eOpening HTTP service in firewalld\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e","    firewall-cmd --add-service=http --permanent \u003cspan class=\"pl-k\"\u003e||\u003c/span\u003e \\","      log \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003eWARNING: failed to add http service to firewalld.\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e","    firewall-cmd --reload \u003cspan class=\"pl-k\"\u003e||\u003c/span\u003e \\","      log \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003eWARNING: failed to reload firewalld.\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e","  \u003cspan class=\"pl-k\"\u003eelse\u003c/span\u003e","    log \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003efirewalld is not active. Skipping firewall configuration.\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e","  \u003cspan class=\"pl-k\"\u003efi\u003c/span\u003e","}","","\u003cspan class=\"pl-c\"\u003e\u003cspan class=\"pl-c\"\u003e#\u003c/span\u003e -------------------------\u003c/span\u003e","\u003cspan class=\"pl-c\"\u003e\u003cspan class=\"pl-c\"\u003e#\u003c/span\u003e CONNECTIVITY CHECKS\u003c/span\u003e","\u003cspan class=\"pl-c\"\u003e\u003cspan class=\"pl-c\"\u003e#\u003c/span\u003e -------------------------\u003c/span\u003e","\u003cspan class=\"pl-en\"\u003echeck_connectivity\u003c/span\u003e() {","  \u003cspan class=\"pl-k\"\u003eif\u003c/span\u003e \u003cspan class=\"pl-k\"\u003e!\u003c/span\u003e \u003cspan class=\"pl-c1\"\u003ecommand\u003c/span\u003e -v curl \u003cspan class=\"pl-k\"\u003e\u0026gt;\u003c/span\u003e/dev/null \u003cspan class=\"pl-k\"\u003e2\u0026gt;\u0026amp;1\u003c/span\u003e\u003cspan class=\"pl-k\"\u003e;\u003c/span\u003e \u003cspan class=\"pl-k\"\u003ethen\u003c/span\u003e","    log \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003ecurl not available for connectivity checks. Skipping.\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e","    \u003cspan class=\"pl-k\"\u003ereturn\u003c/span\u003e","  \u003cspan class=\"pl-k\"\u003efi\u003c/span\u003e","","  log \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003eChecking local HTTP access to repo paths\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e","","  \u003cspan class=\"pl-k\"\u003elocal\u003c/span\u003e urls=(","    \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003ehttp://\u003cspan class=\"pl-smi\"\u003e${REPO_HOSTNAME_SHORT}\u003c/span\u003e/vsa/\u003cspan class=\"pl-smi\"\u003e${OS_VERSION}\u003c/span\u003e/vbr/\u003cspan class=\"pl-smi\"\u003e${VBR_VERSION}\u003c/span\u003e/mandatory/\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e","    \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003ehttp://\u003cspan class=\"pl-smi\"\u003e${REPO_HOSTNAME_FQDN}\u003c/span\u003e/vsa/\u003cspan class=\"pl-smi\"\u003e${OS_VERSION}\u003c/span\u003e/vbr/\u003cspan class=\"pl-smi\"\u003e${VBR_VERSION}\u003c/span\u003e/mandatory/\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e","    \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003ehttp://\u003cspan class=\"pl-smi\"\u003e${REPO_HOST_IP}\u003c/span\u003e/vsa/\u003cspan class=\"pl-smi\"\u003e${OS_VERSION}\u003c/span\u003e/vbr/\u003cspan class=\"pl-smi\"\u003e${VBR_VERSION}\u003c/span\u003e/mandatory/\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e","  )","","  \u003cspan class=\"pl-k\"\u003elocal\u003c/span\u003e u","  \u003cspan class=\"pl-k\"\u003efor\u003c/span\u003e \u003cspan class=\"pl-smi\"\u003eu\u003c/span\u003e \u003cspan class=\"pl-k\"\u003ein\u003c/span\u003e \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003cspan class=\"pl-smi\"\u003e${urls[@]}\u003c/span\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e\u003cspan class=\"pl-k\"\u003e;\u003c/span\u003e \u003cspan class=\"pl-k\"\u003edo\u003c/span\u003e","    log \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e  - curl -I \u003cspan class=\"pl-smi\"\u003e${u}\u003c/span\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e","    \u003cspan class=\"pl-k\"\u003eif\u003c/span\u003e curl -I -s \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003cspan class=\"pl-smi\"\u003e${u}\u003c/span\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e \u003cspan class=\"pl-k\"\u003e\u0026gt;\u003c/span\u003e/dev/null\u003cspan class=\"pl-k\"\u003e;\u003c/span\u003e \u003cspan class=\"pl-k\"\u003ethen\u003c/span\u003e","      log \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e    OK: \u003cspan class=\"pl-smi\"\u003e${u}\u003c/span\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e","    \u003cspan class=\"pl-k\"\u003eelse\u003c/span\u003e","      log \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e    WARNING: failed to connect to \u003cspan class=\"pl-smi\"\u003e${u}\u003c/span\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e","    \u003cspan class=\"pl-k\"\u003efi\u003c/span\u003e","  \u003cspan class=\"pl-k\"\u003edone\u003c/span\u003e","}","","\u003cspan class=\"pl-c\"\u003e\u003cspan class=\"pl-c\"\u003e#\u003c/span\u003e -------------------------\u003c/span\u003e","\u003cspan class=\"pl-c\"\u003e\u003cspan class=\"pl-c\"\u003e#\u003c/span\u003e SYSTEMD SERVICE + TIMER\u003c/span\u003e","\u003cspan class=\"pl-c\"\u003e\u003cspan class=\"pl-c\"\u003e#\u003c/span\u003e -------------------------\u003c/span\u003e","\u003cspan class=\"pl-en\"\u003ecreate_systemd_units\u003c/span\u003e() {","  log \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003eCreating systemd service at \u003cspan class=\"pl-smi\"\u003e${SYSTEMD_SERVICE}\u003c/span\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e","","  tee \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003cspan class=\"pl-smi\"\u003e${SYSTEMD_SERVICE}\u003c/span\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e \u003cspan class=\"pl-k\"\u003e\u0026gt;\u003c/span\u003e/dev/null \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-k\"\u003e\u0026lt;\u0026lt;\u003c/span\u003e\u003cspan class=\"pl-k\"\u003eEOF\u003c/span\u003e\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e[Unit]\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003eDescription=Veeam VSA repository mirror sync\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003eDocumentation=file:\u003cspan class=\"pl-smi\"\u003e${REPOSYNC_SCRIPT}\u003c/span\u003e\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003eWants=network-online.target\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003eAfter=network-online.target\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e[Service]\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003eType=oneshot\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003eExecStart=\u003cspan class=\"pl-smi\"\u003e${REPOSYNC_SCRIPT}\u003c/span\u003e\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003eNice=10\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003eIOSchedulingClass=best-effort\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003eIOSchedulingPriority=7\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-k\"\u003eEOF\u003c/span\u003e\u003c/span\u003e","","  log \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003eCreating systemd timer at \u003cspan class=\"pl-smi\"\u003e${SYSTEMD_TIMER}\u003c/span\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e","","  tee \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003cspan class=\"pl-smi\"\u003e${SYSTEMD_TIMER}\u003c/span\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e \u003cspan class=\"pl-k\"\u003e\u0026gt;\u003c/span\u003e/dev/null \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-k\"\u003e\u0026lt;\u0026lt;\u003c/span\u003e\u003cspan class=\"pl-k\"\u003eEOF\u003c/span\u003e\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e[Unit]\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003eDescription=Run Veeam VSA repository mirror sync hourly\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e[Timer]\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003eOnBootSec=15min\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003eOnUnitActiveSec=1h\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003eUnit=veeam-vsa-reposync.service\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003ePersistent=true\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e[Install]\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003eWantedBy=timers.target\u003c/span\u003e","\u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-k\"\u003eEOF\u003c/span\u003e\u003c/span\u003e","","  log \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003eReloading systemd units and enabling timer\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e","  systemctl daemon-reload","  systemctl \u003cspan class=\"pl-c1\"\u003eenable\u003c/span\u003e --now veeam-vsa-reposync.timer","}","","\u003cspan class=\"pl-c\"\u003e\u003cspan class=\"pl-c\"\u003e#\u003c/span\u003e -------------------------\u003c/span\u003e","\u003cspan class=\"pl-c\"\u003e\u003cspan class=\"pl-c\"\u003e#\u003c/span\u003e MAIN\u003c/span\u003e","\u003cspan class=\"pl-c\"\u003e\u003cspan class=\"pl-c\"\u003e#\u003c/span\u003e -------------------------\u003c/span\u003e","\u003cspan class=\"pl-en\"\u003emain\u003c/span\u003e() {","  require_root","  check_os","  check_dnf","","  \u003cspan class=\"pl-c\"\u003e\u003cspan class=\"pl-c\"\u003e#\u003c/span\u003e 1) Disk and filesystem setup\u003c/span\u003e","  prepare_disk","  ensure_mountpoint","  ensure_fstab_entry","  mount_data_fs","","  \u003cspan class=\"pl-c\"\u003e\u003cspan class=\"pl-c\"\u003e#\u003c/span\u003e 2) Package installation\u003c/span\u003e","  install_core_packages","","  \u003cspan class=\"pl-c\"\u003e\u003cspan class=\"pl-c\"\u003e#\u003c/span\u003e 3) Upstream repo configuration\u003c/span\u003e","  create_upstream_repo_file","","  \u003cspan class=\"pl-c\"\u003e\u003cspan class=\"pl-c\"\u003e#\u003c/span\u003e 4) Reposync script generation (with injected configuration)\u003c/span\u003e","  create_reposync_script","","  \u003cspan class=\"pl-c\"\u003e\u003cspan class=\"pl-c\"\u003e#\u003c/span\u003e 5) Directory preparation\u003c/span\u003e","  log \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003eEnsuring repo root directory \u003cspan class=\"pl-smi\"\u003e${REPO_ROOT}\u003c/span\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e","  mkdir -p \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003cspan class=\"pl-smi\"\u003e${REPO_ROOT}\u003c/span\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e","  chown root:root \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003cspan class=\"pl-smi\"\u003e${MOUNT_POINT}\u003c/span\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003cspan class=\"pl-smi\"\u003e${MOUNT_POINT}\u003c/span\u003e/repo\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003cspan class=\"pl-smi\"\u003e${REPO_ROOT}\u003c/span\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e \u003cspan class=\"pl-k\"\u003e||\u003c/span\u003e \u003cspan class=\"pl-c1\"\u003etrue\u003c/span\u003e","  chmod 0755 \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003cspan class=\"pl-smi\"\u003e${MOUNT_POINT}\u003c/span\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003cspan class=\"pl-smi\"\u003e${MOUNT_POINT}\u003c/span\u003e/repo\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003cspan class=\"pl-smi\"\u003e${REPO_ROOT}\u003c/span\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e \u003cspan class=\"pl-k\"\u003e||\u003c/span\u003e \u003cspan class=\"pl-c1\"\u003etrue\u003c/span\u003e","","  \u003cspan class=\"pl-c\"\u003e\u003cspan class=\"pl-c\"\u003e#\u003c/span\u003e 6) Network and security configuration\u003c/span\u003e","  configure_nginx","  configure_selinux","  configure_firewall","","  \u003cspan class=\"pl-c\"\u003e\u003cspan class=\"pl-c\"\u003e#\u003c/span\u003e 7) Systemd automation setup\u003c/span\u003e","  create_systemd_units","","  \u003cspan class=\"pl-c\"\u003e\u003cspan class=\"pl-c\"\u003e#\u003c/span\u003e 8) Connectivity test\u003c/span\u003e","  check_connectivity","","  log \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e============================================================\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e","  log \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003eVeeam VSA mirror setup completed.\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e","  log \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003eServe URL examples:\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e","  log \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e  http://\u003cspan class=\"pl-smi\"\u003e${REPO_HOSTNAME_SHORT}\u003c/span\u003e/vsa\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e","  log \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e  http://\u003cspan class=\"pl-smi\"\u003e${REPO_HOSTNAME_FQDN}\u003c/span\u003e/vsa\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e","  log \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e  http://\u003cspan class=\"pl-smi\"\u003e${REPO_HOST_IP}\u003c/span\u003e/vsa\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e","  log \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e","  log \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003eHourly sync is handled by systemd timer: veeam-vsa-reposync.timer\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e","  log \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003eCheck status with: systemctl status veeam-vsa-reposync.timer\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e","  log \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003eYou need to run initial repo-sync (this will download ~30 GB on first run) with:\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e","  log \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003cspan class=\"pl-smi\"\u003e${REPOSYNC_SCRIPT}\u003c/span\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e","  log \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e============================================================\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e","}","","main \u003cspan class=\"pl-s\"\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003cspan class=\"pl-smi\"\u003e$@\u003c/span\u003e\u003cspan class=\"pl-pds\"\u003e\u0026quot;\u003c/span\u003e\u003c/span\u003e"],"csv":null,"csvError":null,"copilotSWEAgentEnabled":false,"dependabotInfo":{"showConfigurationBanner":false,"configFilePath":null,"networkDependabotPath":"/MarvinFS/scripts/network/updates","dismissConfigurationNoticePath":"/settings/dismiss-notice/dependabot_configuration_notice","configurationNoticeDismissed":false},"displayName":"vsa_repo.sh","displayUrl":"https://github.com/MarvinFS/scripts/blob/main/VSA%20repo/vsa_repo.sh?raw=true","headerInfo":{"blobSize":"19.8 KB","deleteTooltip":"Delete this file","editTooltip":"Edit this file","ghDesktopPath":"https://desktop.github.com","isGitLfs":false,"onBranch":true,"shortPath":"1fe6585","siteNavLoginPath":"/login?return_to=https%3A%2F%2Fgithub.com%2FMarvinFS%2Fscripts%2Fblob%2Fmain%2FVSA%2520repo%2Fvsa_repo.sh","isCSV":false,"isRichtext":false,"toc":null,"lineInfo":{"truncatedLoc":"674","truncatedSloc":"557"},"mode":"file"},"image":false,"isCodeownersFile":null,"isPlain":false,"isValidLegacyIssueTemplate":false,"issueTemplate":null,"discussionTemplate":null,"language":"Shell","languageID":346,"large":false,"planSupportInfo":{"repoIsFork":null,"repoOwnedByCurrentUser":null,"requestFullPath":"/MarvinFS/scripts/blob/main/VSA%20repo/vsa_repo.sh","showFreeOrgGatedFeatureMessage":null,"showPlanSupportBanner":null,"upgradeDataAttributes":null,"upgradePath":null},"publishBannersInfo":{"dismissActionNoticePath":"/settings/dismiss-notice/publish_action_from_dockerfile","releasePath":"/MarvinFS/scripts/releases/new?marketplace=true","showPublishActionBanner":false},"rawBlobUrl":"https://github.com/MarvinFS/scripts/raw/refs/heads/main/VSA%20repo/vsa_repo.sh","renderImageOrRaw":false,"richText":null,"renderedFileInfo":null,"shortPath":null,"symbolsEnabled":true,"tabSize":4,"topBannersInfo":{"overridingGlobalFundingFile":false,"globalPreferredFundingPath":null,"showInvalidCitationWarning":false,"citationHelpUrl":"https://docs.github.com/github/creating-cloning-and-archiving-repositories/creating-a-repository-on-github/about-citation-files","actionsOnboardingTip":null},"truncated":false,"viewable":true,"workflowRedirectUrl":null,"symbols":{"timed_out":false,"not_analyzed":false,"symbols":[{"name":"log","kind":"function","ident_start":3090,"ident_end":3093,"extent_start":3090,"extent_end":3151,"fully_qualified_name":"log","ident_utf16":{"start":{"line_number":70,"utf16_col":0},"end":{"line_number":70,"utf16_col":3}},"extent_utf16":{"start":{"line_number":70,"utf16_col":0},"end":{"line_number":72,"utf16_col":1}}},{"name":"fatal","kind":"function","ident_start":3153,"ident_end":3158,"extent_start":3153,"extent_end":3191,"fully_qualified_name":"fatal","ident_utf16":{"start":{"line_number":74,"utf16_col":0},"end":{"line_number":74,"utf16_col":5}},"extent_utf16":{"start":{"line_number":74,"utf16_col":0},"end":{"line_number":77,"utf16_col":1}}},{"name":"require_root","kind":"function","ident_start":3264,"ident_end":3276,"extent_start":3264,"extent_end":3349,"fully_qualified_name":"require_root","ident_utf16":{"start":{"line_number":82,"utf16_col":0},"end":{"line_number":82,"utf16_col":12}},"extent_utf16":{"start":{"line_number":82,"utf16_col":0},"end":{"line_number":86,"utf16_col":1}}},{"name":"check_os","kind":"function","ident_start":3351,"ident_end":3359,"extent_start":3351,"extent_end":3726,"fully_qualified_name":"check_os","ident_utf16":{"start":{"line_number":88,"utf16_col":0},"end":{"line_number":88,"utf16_col":8}},"extent_utf16":{"start":{"line_number":88,"utf16_col":0},"end":{"line_number":103,"utf16_col":1}}},{"name":"check_dnf","kind":"function","ident_start":3728,"ident_end":3737,"extent_start":3728,"extent_end":3869,"fully_qualified_name":"check_dnf","ident_utf16":{"start":{"line_number":105,"utf16_col":0},"end":{"line_number":105,"utf16_col":9}},"extent_utf16":{"start":{"line_number":105,"utf16_col":0},"end":{"line_number":109,"utf16_col":1}}},{"name":"prepare_disk","kind":"function","ident_start":3955,"ident_end":3967,"extent_start":3955,"extent_end":5392,"fully_qualified_name":"prepare_disk","ident_utf16":{"start":{"line_number":114,"utf16_col":0},"end":{"line_number":114,"utf16_col":12}},"extent_utf16":{"start":{"line_number":114,"utf16_col":0},"end":{"line_number":154,"utf16_col":1}}},{"name":"ensure_mountpoint","kind":"function","ident_start":5394,"ident_end":5411,"extent_start":5394,"extent_end":5475,"fully_qualified_name":"ensure_mountpoint","ident_utf16":{"start":{"line_number":156,"utf16_col":0},"end":{"line_number":156,"utf16_col":17}},"extent_utf16":{"start":{"line_number":156,"utf16_col":0},"end":{"line_number":159,"utf16_col":1}}},{"name":"ensure_fstab_entry","kind":"function","ident_start":5477,"ident_end":5495,"extent_start":5477,"extent_end":6233,"fully_qualified_name":"ensure_fstab_entry","ident_utf16":{"start":{"line_number":161,"utf16_col":0},"end":{"line_number":161,"utf16_col":18}},"extent_utf16":{"start":{"line_number":161,"utf16_col":0},"end":{"line_number":180,"utf16_col":1}}},{"name":"mount_data_fs","kind":"function","ident_start":6235,"ident_end":6248,"extent_start":6235,"extent_end":6653,"fully_qualified_name":"mount_data_fs","ident_utf16":{"start":{"line_number":182,"utf16_col":0},"end":{"line_number":182,"utf16_col":13}},"extent_utf16":{"start":{"line_number":182,"utf16_col":0},"end":{"line_number":194,"utf16_col":1}}},{"name":"install_core_packages","kind":"function","ident_start":6727,"ident_end":6748,"extent_start":6727,"extent_end":7281,"fully_qualified_name":"install_core_packages","ident_utf16":{"start":{"line_number":199,"utf16_col":0},"end":{"line_number":199,"utf16_col":21}},"extent_utf16":{"start":{"line_number":199,"utf16_col":0},"end":{"line_number":209,"utf16_col":1}}},{"name":"check_disk_space","kind":"function","ident_start":7363,"ident_end":7379,"extent_start":7363,"extent_end":8046,"fully_qualified_name":"check_disk_space","ident_utf16":{"start":{"line_number":214,"utf16_col":0},"end":{"line_number":214,"utf16_col":16}},"extent_utf16":{"start":{"line_number":214,"utf16_col":0},"end":{"line_number":232,"utf16_col":1}}},{"name":"create_upstream_repo_file","kind":"function","ident_start":8132,"ident_end":8157,"extent_start":8132,"extent_end":9321,"fully_qualified_name":"create_upstream_repo_file","ident_utf16":{"start":{"line_number":237,"utf16_col":0},"end":{"line_number":237,"utf16_col":25}},"extent_utf16":{"start":{"line_number":237,"utf16_col":0},"end":{"line_number":270,"utf16_col":1}}},{"name":"create_reposync_script","kind":"function","ident_start":9397,"ident_end":9419,"extent_start":9397,"extent_end":15063,"fully_qualified_name":"create_reposync_script","ident_utf16":{"start":{"line_number":275,"utf16_col":0},"end":{"line_number":275,"utf16_col":22}},"extent_utf16":{"start":{"line_number":275,"utf16_col":0},"end":{"line_number":471,"utf16_col":1}}},{"name":"configure_nginx","kind":"function","ident_start":15136,"ident_end":15151,"extent_start":15136,"extent_end":15794,"fully_qualified_name":"configure_nginx","ident_utf16":{"start":{"line_number":476,"utf16_col":0},"end":{"line_number":476,"utf16_col":15}},"extent_utf16":{"start":{"line_number":476,"utf16_col":0},"end":{"line_number":506,"utf16_col":1}}},{"name":"configure_selinux","kind":"function","ident_start":15871,"ident_end":15888,"extent_start":15871,"extent_end":16676,"fully_qualified_name":"configure_selinux","ident_utf16":{"start":{"line_number":511,"utf16_col":0},"end":{"line_number":511,"utf16_col":17}},"extent_utf16":{"start":{"line_number":511,"utf16_col":0},"end":{"line_number":532,"utf16_col":1}}},{"name":"configure_firewall","kind":"function","ident_start":16746,"ident_end":16764,"extent_start":16746,"extent_end":17138,"fully_qualified_name":"configure_firewall","ident_utf16":{"start":{"line_number":537,"utf16_col":0},"end":{"line_number":537,"utf16_col":18}},"extent_utf16":{"start":{"line_number":537,"utf16_col":0},"end":{"line_number":547,"utf16_col":1}}},{"name":"check_connectivity","kind":"function","ident_start":17218,"ident_end":17236,"extent_start":17218,"extent_end":17888,"fully_qualified_name":"check_connectivity","ident_utf16":{"start":{"line_number":552,"utf16_col":0},"end":{"line_number":552,"utf16_col":18}},"extent_utf16":{"start":{"line_number":552,"utf16_col":0},"end":{"line_number":575,"utf16_col":1}}},{"name":"create_systemd_units","kind":"function","ident_start":17972,"ident_end":17992,"extent_start":17972,"extent_end":18778,"fully_qualified_name":"create_systemd_units","ident_utf16":{"start":{"line_number":580,"utf16_col":0},"end":{"line_number":580,"utf16_col":20}},"extent_utf16":{"start":{"line_number":580,"utf16_col":0},"end":{"line_number":617,"utf16_col":1}}},{"name":"main","kind":"function","ident_start":18843,"ident_end":18847,"extent_start":18843,"extent_end":20271,"fully_qualified_name":"main","ident_utf16":{"start":{"line_number":622,"utf16_col":0},"end":{"line_number":622,"utf16_col":4}},"extent_utf16":{"start":{"line_number":622,"utf16_col":0},"end":{"line_number":671,"utf16_col":1}}}]}},"copilotInfo":null,"copilotAccessAllowed":true,"copilotSpacesEnabled":true,"modelsAccessAllowed":false,"modelsRepoIntegrationEnabled":false,"isMarketplaceEnabled":true,"csrf_tokens":{"/MarvinFS/scripts/branches":{"post":"q5VHXsumATM_vgN_OJmKtAET9X-V764f1QkV7-PSaUylLsC6BKtqZ_I3a01NPKQBCAoaPZoWhakwqXjpIqrkew"},"/repos/preferences":{"post":"VlcZZG_xvhVm2e3rBW9ROP2xw_XItm8faN9q0O2PUUcEtbQE-D2Hpdi8OJNmSvk2H8AqKgzqOkT9oRaHun1qRA"}}},"title":"scripts/VSA repo/vsa_repo.sh at main · MarvinFS/scripts","appPayload":{"helpUrl":"https://docs.github.com","findFileWorkerPath":"/assets-cdn/worker/find-file-worker-0cea8c6113ab.js","findInFileWorkerPath":"/assets-cdn/worker/find-in-file-worker-105a4a160ddd.js","githubDevUrl":"https://github.dev/","enabled_features":{"code_nav_ui_events":false,"react_blob_overlay":true,"accessible_code_button":true}}}</script>
+  <div data-target="react-app.reactRoot"><style data-styled="true" data-styled-version="5.3.11">.jmjlbk{width:100%;}/*!sc*/
+@media screen and (min-width:544px){.jmjlbk{width:100%;}}/*!sc*/
+@media screen and (min-width:768px){.jmjlbk{width:auto;}}/*!sc*/
+.cIRiaH{max-height:100%;height:100%;display:-webkit-box;display:-webkit-flex;display:-ms-flexbox;display:flex;-webkit-flex-direction:column;-ms-flex-direction:column;flex-direction:column;}/*!sc*/
+@media screen and (max-width:768px){.cIRiaH{display:none;}}/*!sc*/
+@media screen and (min-width:768px){.cIRiaH{max-height:100vh;height:100vh;}}/*!sc*/
+.fvNWEZ{display:-webkit-box;display:-webkit-flex;display:-ms-flexbox;display:flex;width:100%;margin-bottom:16px;-webkit-align-items:center;-webkit-box-align:center;-ms-flex-align:center;align-items:center;}/*!sc*/
+@media screen and (max-width:768px){.bCYVKR{display:none;}}/*!sc*/
+.cybVuK{margin-left:auto;margin-right:auto;-webkit-flex-direction:column;-ms-flex-direction:column;flex-direction:column;padding-bottom:40px;max-width:100%;margin-top:0;}/*!sc*/
+.gSjuRy{display:inherit;}/*!sc*/
+.kfsEDb{display:-webkit-box;display:-webkit-flex;display:-ms-flexbox;display:flex;-webkit-flex-direction:row;-ms-flex-direction:row;flex-direction:row;font-size:16px;min-width:0;-webkit-flex-shrink:1;-ms-flex-negative:1;flex-shrink:1;-webkit-flex-wrap:wrap;-ms-flex-wrap:wrap;flex-wrap:wrap;max-width:100%;-webkit-align-items:center;-webkit-box-align:center;-ms-flex-align:center;align-items:center;}/*!sc*/
+.eLrlvS{max-width:100%;}/*!sc*/
+.fNzIif{max-width:100%;list-style:none;display:inline-block;}/*!sc*/
+.iRLfgU{display:inline-block;max-width:100%;}/*!sc*/
+.jyTWxL{margin-left:16px;margin-right:16px;}/*!sc*/
+.hGzGyY{display:-webkit-box;display:-webkit-flex;display:-ms-flexbox;display:flex;-webkit-flex-direction:row;-ms-flex-direction:row;flex-direction:row;}/*!sc*/
+.ekdrwn{width:100%;height:-webkit-fit-content;height:-moz-fit-content;height:fit-content;min-width:0;margin-right:16px;}/*!sc*/
+.fpyUWF{height:40px;padding-left:4px;padding-bottom:16px;}/*!sc*/
+.iafbuG{top:0px;z-index:4;background:var(--bgColor-default,var(--color-canvas-default));position:-webkit-sticky;position:sticky;}/*!sc*/
+.iNRqcN{display:none;min-width:0;padding-top:8px;padding-bottom:8px;}/*!sc*/
+.igwLyx{display:-webkit-box;display:-webkit-flex;display:-ms-flexbox;display:flex;-webkit-flex-direction:row;-ms-flex-direction:row;flex-direction:row;font-size:14px;min-width:0;-webkit-flex-shrink:1;-ms-flex-negative:1;flex-shrink:1;-webkit-flex-wrap:wrap;-ms-flex-wrap:wrap;flex-wrap:wrap;max-width:100%;-webkit-align-items:center;-webkit-box-align:center;-ms-flex-align:center;align-items:center;}/*!sc*/
+.koZdcA{border-radius:6px 6px 0px 0px;}/*!sc*/
+.dIDnLY{border:1px solid;border-top:none;border-color:var(--borderColor-default,var(--color-border-default,#30363d));border-radius:0px 0px 6px 6px;min-width:273px;}/*!sc*/
+.hhuNfn{background-color:var(--bgColor-default,var(--color-canvas-default));border:0px;border-width:0;border-radius:0px 0px 6px 6px;padding:0;min-width:0;margin-top:46px;}/*!sc*/
+.hNuvaP{display:-webkit-box;display:-webkit-flex;display:-ms-flexbox;display:flex;-webkit-flex:1;-ms-flex:1;flex:1;padding-top:8px;padding-bottom:8px;-webkit-flex-direction:column;-ms-flex-direction:column;flex-direction:column;-webkit-box-pack:justify;-webkit-justify-content:space-between;-ms-flex-pack:justify;justify-content:space-between;min-width:0;position:relative;}/*!sc*/
+.kBkfpQ{position:relative;}/*!sc*/
+.lnfLer{-webkit-flex:1;-ms-flex:1;flex:1;position:relative;min-width:0;}/*!sc*/
+.djZnHX{tab-size:4;isolation:isolate;position:relative;overflow:auto;max-width:unset;}/*!sc*/
+.gTgIBo{margin:1px 8px;position:absolute;z-index:1;}/*!sc*/
+.bzYYiL{position:absolute;}/*!sc*/
+.kuJVuq{padding-bottom:33px;}/*!sc*/
+.cxWhiL{padding-top:8px;padding-bottom:8px;padding-left:16px;padding-right:16px;}/*!sc*/
+.fHoMbg{display:-webkit-box;display:-webkit-flex;display:-ms-flexbox;display:flex;-webkit-flex-direction:row;-ms-flex-direction:row;flex-direction:row;-webkit-box-pack:justify;-webkit-justify-content:space-between;-ms-flex-pack:justify;justify-content:space-between;}/*!sc*/
+.cnoVsg{font-size:14px;-webkit-order:1;-ms-flex-order:1;order:1;display:-webkit-box;display:-webkit-flex;display:-ms-flexbox;display:flex;-webkit-flex-direction:row;-ms-flex-direction:row;flex-direction:row;-webkit-box-pack:center;-webkit-justify-content:center;-ms-flex-pack:center;justify-content:center;-webkit-align-items:center;-webkit-box-align:center;-ms-flex-align:center;align-items:center;font-weight:600;}/*!sc*/
+.bjdPSr{font-size:12px;color:var(--fgColor-muted,var(--color-fg-muted,#848d97));padding-top:8px;}/*!sc*/
+.cIntug{margin-right:6px;}/*!sc*/
+.dILSWH{margin-left:-16px;margin-bottom:-8px;}/*!sc*/
+.knbnik{margin-bottom:-8px;overflow-y:auto;max-height:calc(100vh - 237px);padding-left:16px;padding-bottom:8px;padding-top:4px;}/*!sc*/
+.iRVXIo{display:-webkit-box;display:-webkit-flex;display:-ms-flexbox;display:flex;}/*!sc*/
+.kOALiS{display:-webkit-box;display:-webkit-flex;display:-ms-flexbox;display:flex;-webkit-flex-direction:row;-ms-flex-direction:row;flex-direction:row;position:relative;margin-right:8px;}/*!sc*/
+.kxkZhe{background-color:var(--color-prettylights-syntax-entity,#d2a8ff);opacity:0.1;position:absolute;border-radius:5px;-webkit-align-items:stretch;-webkit-box-align:stretch;-ms-flex-align:stretch;align-items:stretch;display:-webkit-box;display:-webkit-flex;display:-ms-flexbox;display:flex;width:100%;height:100%;}/*!sc*/
+.eLoRjE{color:var(--color-prettylights-syntax-entity,#d2a8ff);border-radius:5px;font-weight:600;font-size:smaller;padding-left:4px;padding-right:4px;padding-top:1px;padding-bottom:1px;}/*!sc*/
+.vdPNv{position:fixed;top:0;right:0;height:100%;width:15px;-webkit-transition:-webkit-transform 0.3s;-webkit-transition:transform 0.3s;transition:transform 0.3s;z-index:1;}/*!sc*/
+.vdPNv:hover{-webkit-transform:scaleX(1.5);-ms-transform:scaleX(1.5);transform:scaleX(1.5);}/*!sc*/
+data-styled.g1[id="Box-sc-62in7e-0"]{content:"jmjlbk,cIRiaH,fvNWEZ,bCYVKR,cybVuK,gSjuRy,kfsEDb,eLrlvS,fNzIif,iRLfgU,jyTWxL,hGzGyY,ekdrwn,fpyUWF,iafbuG,iNRqcN,igwLyx,koZdcA,dIDnLY,hhuNfn,hNuvaP,kBkfpQ,lnfLer,djZnHX,gTgIBo,bzYYiL,kuJVuq,cxWhiL,fHoMbg,cnoVsg,bjdPSr,cIntug,dILSWH,knbnik,iRVXIo,kOALiS,kxkZhe,eLoRjE,vdPNv,"}/*!sc*/
+.hfSsoj[data-size="medium"][data-no-visuals]{display:none;}/*!sc*/
+data-styled.g16[id="Button__StyledButtonComponent-sc-vqy3e4-0"]{content:"hfSsoj,"}/*!sc*/
+.dWfbpP{font-size:16px;margin-left:8px;}/*!sc*/
+.hJQQvf{font-weight:600;display:inline-block;max-width:100%;font-size:16px;}/*!sc*/
+.cGzJbh{font-weight:600;display:inline-block;max-width:100%;font-size:14px;}/*!sc*/
+data-styled.g24[id="Heading-sc-1vc165i-0"]{content:"dWfbpP,hJQQvf,cGzJbh,"}/*!sc*/
+.bWhDnA[data-size="medium"][data-no-visuals]{border-top-left-radius:0;border-bottom-left-radius:0;}/*!sc*/
+.gXjFlG[data-size="small"][data-no-visuals]{border-top-left-radius:0;border-bottom-left-radius:0;}/*!sc*/
+.gRAczH[data-size="small"][data-no-visuals]:hover:not([disabled]){-webkit-text-decoration:none;text-decoration:none;}/*!sc*/
+.gRAczH[data-size="small"][data-no-visuals]:focus:not([disabled]){-webkit-text-decoration:none;text-decoration:none;}/*!sc*/
+.gRAczH[data-size="small"][data-no-visuals]:active:not([disabled]){-webkit-text-decoration:none;text-decoration:none;}/*!sc*/
+.bTccwu[data-size="medium"][data-no-visuals]{-webkit-order:3;-ms-flex-order:3;order:3;color:var(--fgColor-default,var(--color-fg-default,#e6edf3));margin-right:-8px;}/*!sc*/
+data-styled.g25[id="IconButton__StyledIconButton-sc-i53dt6-0"]{content:"bWhDnA,gXjFlG,gRAczH,bTccwu,"}/*!sc*/
+.htWjsS{font-weight:600;}/*!sc*/
+.iitCQE{font-weight:400;}/*!sc*/
+data-styled.g27[id="Link__StyledLink-sc-1syctfj-0"]{content:"htWjsS,iitCQE,"}/*!sc*/
+.iwmTUC linkButtonSx:hover:not([disabled]){-webkit-text-decoration:none;text-decoration:none;}/*!sc*/
+.iwmTUC linkButtonSx:focus:not([disabled]){-webkit-text-decoration:none;text-decoration:none;}/*!sc*/
+.iwmTUC linkButtonSx:active:not([disabled]){-webkit-text-decoration:none;text-decoration:none;}/*!sc*/
+data-styled.g28[id="LinkButton-sc-1v6zkmg-0"]{content:"iwmTUC,"}/*!sc*/
+.xsVwu{padding-left:4px;padding-right:4px;font-weight:400;color:var(--fgColor-muted,var(--color-fg-muted,#848d97));font-size:16px;}/*!sc*/
+.iHrMHQ{padding-left:4px;padding-right:4px;font-weight:400;color:var(--fgColor-muted,var(--color-fg-muted,#848d97));font-size:14px;}/*!sc*/
+data-styled.g38[id="Text__StyledText-sc-1klmep6-0"]{content:"xsVwu,iHrMHQ,"}/*!sc*/
+.bLATi{margin-top:8px;border-radius:6px;}/*!sc*/
+data-styled.g40[id="TextInput__StyledTextInput-sc-ttxlvl-0"]{content:"bLATi,"}/*!sc*/
+.bkmqFA{max-width:180px;display:block;}/*!sc*/
+data-styled.g43[id="Truncate-sc-x3i4it-0"]{content:"bkmqFA,"}/*!sc*/
+</style><meta name="github-code-view-meta-stats" id="github-code-view-meta-stats" data-hydrostats="publish"/> <!-- --> <!-- --> <button hidden="" data-testid="header-permalink-button" data-hotkey-scope="read-only-cursor-text-area"></button><button hidden=""></button><div><div style="--spacing:var(--spacing-none)" class="prc-PageLayout-PageLayoutRoot-1zlEO"><div class="prc-PageLayout-PageLayoutWrapper-s2ao4" data-width="full"><div class="prc-PageLayout-PageLayoutContent-jzDMn"><div tabindex="0" class="Box-sc-62in7e-0 jmjlbk"><div class="prc-PageLayout-PaneWrapper-nGO0U ReposFileTreePane-module__Pane--D26Sw ReposFileTreePane-module__HidePaneWithTreeOverlay--CJn2n" style="--offset-header:0px;--spacing-row:var(--spacing-none);--spacing-column:var(--spacing-none)" data-is-hidden="false" data-position="start" data-sticky="true"><div class="prc-PageLayout-HorizontalDivider-CYLp5 prc-PageLayout-PaneHorizontalDivider-4exOb" data-variant-regular="none" data-variant-narrow="none" data-position="start" style="--spacing-divider:var(--spacing-none);--spacing:var(--spacing-none)"></div><div class="prc-PageLayout-Pane-Vl5LI" data-resizable="true" style="--spacing:var(--spacing-none);--pane-min-width:256px;--pane-max-width:calc(100vw - var(--pane-max-width-diff));--pane-width-size:var(--pane-width-large);--pane-width:320px"><div class="react-tree-pane-contents-3-panel"><div id="repos-file-tree" class="Box-sc-62in7e-0 cIRiaH"><div class="ReposFileTreePane-module__Box_1--ZT_4S"><div class="Box-sc-62in7e-0 fvNWEZ"><h2 class="use-tree-pane-module__Heading--iI_ad prc-Heading-Heading-6CmGO"><button type="button" aria-label="Expand file tree" data-testid="expand-file-tree-button-mobile" class="prc-Button-ButtonBase-c50BI ExpandFileTreeButton-module__Button_1--g8F6Q" data-loading="false" data-size="medium" data-variant="invisible" aria-describedby=":Rl6mplab:-loading-announcement"><span data-component="buttonContent" data-align="center" class="prc-Button-ButtonContent-HKbr-"><span data-component="leadingVisual" class="prc-Button-Visual-2epfX prc-Button-VisualWrap-Db-eB"><svg aria-hidden="true" focusable="false" class="octicon octicon-arrow-left" viewBox="0 0 16 16" width="16" height="16" fill="currentColor" display="inline-block" overflow="visible" style="vertical-align:text-bottom"><path d="M7.78 12.53a.75.75 0 0 1-1.06 0L2.47 8.28a.75.75 0 0 1 0-1.06l4.25-4.25a.751.751 0 0 1 1.042.018.751.751 0 0 1 .018 1.042L4.81 7h7.44a.75.75 0 0 1 0 1.5H4.81l2.97 2.97a.75.75 0 0 1 0 1.06Z"></path></svg></span><span data-component="text" class="prc-Button-Label-pTQ3x">Files</span></span></button><button data-component="IconButton" type="button" data-testid="collapse-file-tree-button" aria-expanded="true" aria-controls="repos-file-tree" class="prc-Button-ButtonBase-c50BI position-relative ExpandFileTreeButton-module__expandButton--oKI1R ExpandFileTreeButton-module__filesButtonBreakpoint--03FKA fgColor-muted prc-Button-IconButton-szpyj" data-loading="false" data-no-visuals="true" data-size="medium" data-variant="invisible" aria-describedby=":R756mplab:-loading-announcement" aria-labelledby=":R156mplab:"><svg aria-hidden="true" focusable="false" class="octicon octicon-sidebar-expand" viewBox="0 0 16 16" width="16" height="16" fill="currentColor" display="inline-block" overflow="visible" style="vertical-align:text-bottom"><path d="m4.177 7.823 2.396-2.396A.25.25 0 0 1 7 5.604v4.792a.25.25 0 0 1-.427.177L4.177 8.177a.25.25 0 0 1 0-.354Z"></path><path d="M0 1.75C0 .784.784 0 1.75 0h12.5C15.216 0 16 .784 16 1.75v12.5A1.75 1.75 0 0 1 14.25 16H1.75A1.75 1.75 0 0 1 0 14.25Zm1.75-.25a.25.25 0 0 0-.25.25v12.5c0 .138.112.25.25.25H9.5v-13Zm12.5 13a.25.25 0 0 0 .25-.25V1.75a.25.25 0 0 0-.25-.25H11v13Z"></path></svg></button><span class="prc-TooltipV2-Tooltip-cYMVY" data-direction="se" aria-hidden="true" id=":R156mplab:">Collapse file tree</span><button hidden="" data-testid="" data-hotkey-scope="read-only-cursor-text-area"></button></h2><h2 class="Heading-sc-1vc165i-0 dWfbpP">Files</h2></div><div class="ReposFileTreePane-module__Box_2--RgzGf"><div class="ReposFileTreePane-module__Box_3--XDLn8"><button type="button" aria-haspopup="true" aria-expanded="false" tabindex="0" style="min-width:0" aria-label="main branch" data-testid="anchor-button" class="prc-Button-ButtonBase-c50BI react-repos-tree-pane-ref-selector width-full ref-selector-class RefSelectorAnchoredOverlay-module__RefSelectorOverlayBtn--D34zl" data-loading="false" data-size="medium" data-variant="default" aria-describedby="ref-picker-repos-header-ref-selector-loading-announcement" id="ref-picker-repos-header-ref-selector"><span data-component="buttonContent" data-align="center" class="prc-Button-ButtonContent-HKbr-"><span data-component="text" class="prc-Button-Label-pTQ3x"><div class="RefSelectorAnchoredOverlay-module__RefSelectorOverlayContainer--mCbv8"><div class="RefSelectorAnchoredOverlay-module__RefSelectorOverlayHeader--D4cnZ"><svg aria-hidden="true" focusable="false" class="octicon octicon-git-branch" viewBox="0 0 16 16" width="16" height="16" fill="currentColor" display="inline-block" overflow="visible" style="vertical-align:text-bottom"><path d="M9.5 3.25a2.25 2.25 0 1 1 3 2.122V6A2.5 2.5 0 0 1 10 8.5H6a1 1 0 0 0-1 1v1.128a2.251 2.251 0 1 1-1.5 0V5.372a2.25 2.25 0 1 1 1.5 0v1.836A2.493 2.493 0 0 1 6 7h4a1 1 0 0 0 1-1v-.628A2.25 2.25 0 0 1 9.5 3.25Zm-6 0a.75.75 0 1 0 1.5 0 .75.75 0 0 0-1.5 0Zm8.25-.75a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5ZM4.25 12a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5Z"></path></svg></div><div class="ref-selector-button-text-container RefSelectorAnchoredOverlay-module__RefSelectorBtnTextContainer--yO402"><span class="RefSelectorAnchoredOverlay-module__RefSelectorText--bxVhQ"> <!-- -->main</span></div></div></span><span data-component="trailingVisual" class="prc-Button-Visual-2epfX prc-Button-VisualWrap-Db-eB"><svg aria-hidden="true" focusable="false" class="octicon octicon-triangle-down" viewBox="0 0 16 16" width="16" height="16" fill="currentColor" display="inline-block" overflow="visible" style="vertical-align:text-bottom"><path d="m4.427 7.427 3.396 3.396a.25.25 0 0 0 .354 0l3.396-3.396A.25.25 0 0 0 11.396 7H4.604a.25.25 0 0 0-.177.427Z"></path></svg></span></span></button><button hidden="" data-testid="ref-selector-hotkey-button" data-hotkey-scope="read-only-cursor-text-area"></button></div><div class="ReposFileTreePane-module__Box_4--TLAAU"><a data-component="IconButton" type="button" class="prc-Button-ButtonBase-c50BI ReposFileTreePane-module__IconButton--fpuBk prc-Button-IconButton-szpyj" data-loading="false" data-no-visuals="true" data-size="medium" data-variant="default" aria-describedby=":R6q6mplab:-loading-announcement" aria-labelledby=":Rq6mplab:" href="/MarvinFS/scripts/new/main/VSA%20repo" data-discover="true"><svg aria-hidden="true" focusable="false" class="octicon octicon-plus" viewBox="0 0 16 16" width="16" height="16" fill="currentColor" display="inline-block" overflow="visible" style="vertical-align:text-bottom"><path d="M7.75 2a.75.75 0 0 1 .75.75V7h4.25a.75.75 0 0 1 0 1.5H8.5v4.25a.75.75 0 0 1-1.5 0V8.5H2.75a.75.75 0 0 1 0-1.5H7V2.75A.75.75 0 0 1 7.75 2Z"></path></svg></a><span class="prc-TooltipV2-Tooltip-cYMVY" data-direction="n" aria-hidden="true" id=":Rq6mplab:">Add file</span><button data-component="IconButton" type="button" class="prc-Button-ButtonBase-c50BI IconButton__StyledIconButton-sc-i53dt6-0 bWhDnA SearchButton-module__IconButton--kxA3Q prc-Button-IconButton-szpyj" data-loading="false" data-no-visuals="true" data-size="medium" data-variant="default" aria-describedby=":Rra6mplab:-loading-announcement" aria-labelledby=":R3a6mplab:"><svg aria-hidden="true" focusable="false" class="octicon octicon-search" viewBox="0 0 16 16" width="16" height="16" fill="currentColor" display="inline-block" overflow="visible" style="vertical-align:text-bottom"><path d="M10.68 11.74a6 6 0 0 1-7.922-8.982 6 6 0 0 1 8.982 7.922l3.04 3.04a.749.749 0 0 1-.326 1.275.749.749 0 0 1-.734-.215ZM11.5 7a4.499 4.499 0 1 0-8.997 0A4.499 4.499 0 0 0 11.5 7Z"></path></svg></button><span class="prc-TooltipV2-Tooltip-cYMVY" data-direction="nw" aria-hidden="true" id=":R3a6mplab:">Search this repository</span><button hidden="" data-testid="" data-hotkey-scope="read-only-cursor-text-area"></button></div></div></div><div class="Box-sc-62in7e-0 bCYVKR ReposFileTreePane-module__FileResultsList--YEf_n"><span class="TextInput__StyledTextInput-sc-ttxlvl-0 d-flex FileResultsList-module__FilesSearchBox--fSAh3 TextInput-wrapper prc-components-TextInputWrapper-i1ofR prc-components-TextInputBaseWrapper-ueK9q" data-leading-visual="true" data-trailing-visual="true" aria-busy="false"><span class="TextInput-icon" id=":R5amplab:" aria-hidden="true"><svg aria-hidden="true" focusable="false" class="octicon octicon-search" viewBox="0 0 16 16" width="16" height="16" fill="currentColor" display="inline-block" overflow="visible" style="vertical-align:text-bottom"><path d="M10.68 11.74a6 6 0 0 1-7.922-8.982 6 6 0 0 1 8.982 7.922l3.04 3.04a.749.749 0 0 1-.326 1.275.749.749 0 0 1-.734-.215ZM11.5 7a4.499 4.499 0 1 0-8.997 0A4.499 4.499 0 0 0 11.5 7Z"></path></svg></span><input type="text" aria-label="Go to file" role="combobox" aria-controls="file-results-list" aria-expanded="false" aria-haspopup="dialog" autoCorrect="off" spellcheck="false" placeholder="Go to file" aria-describedby=":R5amplab: :R5amplabH1:" data-component="input" class="prc-components-Input-Ic-y8" value=""/><span class="TextInput-icon" id=":R5amplabH1:" aria-hidden="true"><kbd>t</kbd></span></span></div><button hidden="" data-testid="" data-hotkey-scope="read-only-cursor-text-area"></button><button hidden=""></button><div class="Box-sc-62in7e-0 bCYVKR ReposFileTreePane-module__Box_5--cckih"><div class="react-tree-show-tree-items"><div class="ReposFileTreeView-module__Box--bDodO" data-testid="repos-file-tree-container"><nav aria-label="File Tree Navigation"><span class="prc-src-InternalVisuallyHidden-nlR9R" role="status" aria-live="polite" aria-atomic="true"></span><ul role="tree" aria-label="Files" data-truncate-text="true" class="prc-TreeView-TreeViewRootUlStyles-eZtxW"><li class="PRIVATE_TreeView-item prc-TreeView-TreeViewItem-ShJr0" tabindex="0" id="VSA repo-item" role="treeitem" aria-labelledby=":R3pimplab:" aria-describedby=":R3pimplabH1:" aria-level="1" aria-expanded="true" aria-selected="false"><div class="PRIVATE_TreeView-item-container prc-TreeView-TreeViewItemContainer--2Rkn" style="--level:1;content-visibility:auto;contain-intrinsic-size:auto 2rem"><div style="grid-area:spacer;display:flex"><div style="width:100%;display:flex"></div></div><div class="PRIVATE_TreeView-item-toggle PRIVATE_TreeView-item-toggle--hover PRIVATE_TreeView-item-toggle--end prc-TreeView-TreeViewItemToggle-gWUdE prc-TreeView-TreeViewItemToggleHover-nEgP- prc-TreeView-TreeViewItemToggleEnd-t-AEB"><svg aria-hidden="true" focusable="false" class="octicon octicon-chevron-down" viewBox="0 0 12 12" width="12" height="12" fill="currentColor" display="inline-block" overflow="visible" style="vertical-align:text-bottom"><path d="M6 8.825c-.2 0-.4-.1-.5-.2l-3.3-3.3c-.3-.3-.3-.8 0-1.1.3-.3.8-.3 1.1 0l2.7 2.7 2.7-2.7c.3-.3.8-.3 1.1 0 .3.3.3.8 0 1.1l-3.2 3.2c-.2.2-.4.3-.6.3Z"></path></svg></div><div id=":R3pimplab:" class="PRIVATE_TreeView-item-content prc-TreeView-TreeViewItemContent-f0r0b"><div class="PRIVATE_VisuallyHidden prc-TreeView-TreeViewVisuallyHidden-4-mPv" aria-hidden="true" id=":R3pimplabH1:"></div><div class="PRIVATE_TreeView-item-visual prc-TreeView-TreeViewItemVisual-dRlGq" aria-hidden="true"><div class="PRIVATE_TreeView-directory-icon prc-TreeView-TreeViewDirectoryIcon-PHbeP"><svg aria-hidden="true" focusable="false" class="octicon octicon-file-directory-open-fill" viewBox="0 0 16 16" width="16" height="16" fill="currentColor" display="inline-block" overflow="visible" style="vertical-align:text-bottom"><path d="M.513 1.513A1.75 1.75 0 0 1 1.75 1h3.5c.55 0 1.07.26 1.4.7l.9 1.2a.25.25 0 0 0 .2.1H13a1 1 0 0 1 1 1v.5H2.75a.75.75 0 0 0 0 1.5h11.978a1 1 0 0 1 .994 1.117L15 13.25A1.75 1.75 0 0 1 13.25 15H1.75A1.75 1.75 0 0 1 0 13.25V2.75c0-.464.184-.91.513-1.237Z"></path></svg></div></div><span class="PRIVATE_TreeView-item-content-text prc-TreeView-TreeViewItemContentText-smZM-"><span>VSA repo</span></span></div></div><ul role="group" style="list-style:none;padding:0;margin:0" aria-label=""><li class="PRIVATE_TreeView-item prc-TreeView-TreeViewItem-ShJr0" tabindex="0" id="VSA repo/readme.md-item" role="treeitem" aria-labelledby=":R1bbpimplab:" aria-describedby=":R1bbpimplabH1:" aria-level="2" aria-selected="false"><div class="PRIVATE_TreeView-item-container prc-TreeView-TreeViewItemContainer--2Rkn" style="--level:2;content-visibility:auto;contain-intrinsic-size:auto 2rem"><div style="grid-area:spacer;display:flex"><div style="width:100%;display:flex"><div class="PRIVATE_TreeView-item-level-line prc-TreeView-TreeViewItemLevelLine-KPSSL"></div></div></div><div id=":R1bbpimplab:" class="PRIVATE_TreeView-item-content prc-TreeView-TreeViewItemContent-f0r0b"><div class="PRIVATE_VisuallyHidden prc-TreeView-TreeViewVisuallyHidden-4-mPv" aria-hidden="true" id=":R1bbpimplabH1:"></div><div class="PRIVATE_TreeView-item-visual prc-TreeView-TreeViewItemVisual-dRlGq" aria-hidden="true"><svg aria-hidden="true" focusable="false" class="octicon octicon-file" viewBox="0 0 16 16" width="16" height="16" fill="currentColor" display="inline-block" overflow="visible" style="vertical-align:text-bottom"><path d="M2 1.75C2 .784 2.784 0 3.75 0h6.586c.464 0 .909.184 1.237.513l2.914 2.914c.329.328.513.773.513 1.237v9.586A1.75 1.75 0 0 1 13.25 16h-9.5A1.75 1.75 0 0 1 2 14.25Zm1.75-.25a.25.25 0 0 0-.25.25v12.5c0 .138.112.25.25.25h9.5a.25.25 0 0 0 .25-.25V6h-2.75A1.75 1.75 0 0 1 9 4.25V1.5Zm6.75.062V4.25c0 .138.112.25.25.25h2.688l-.011-.013-2.914-2.914-.013-.011Z"></path></svg></div><span class="PRIVATE_TreeView-item-content-text prc-TreeView-TreeViewItemContentText-smZM-"><span>readme.md</span></span></div></div></li><li class="PRIVATE_TreeView-item prc-TreeView-TreeViewItem-ShJr0" tabindex="0" id="VSA repo/vsa_repo.sh-item" role="treeitem" aria-labelledby=":R2bbpimplab:" aria-describedby=":R2bbpimplabH1:" aria-level="2" aria-current="true" aria-selected="false"><div class="PRIVATE_TreeView-item-container prc-TreeView-TreeViewItemContainer--2Rkn" style="--level:2"><div style="grid-area:spacer;display:flex"><div style="width:100%;display:flex"><div class="PRIVATE_TreeView-item-level-line prc-TreeView-TreeViewItemLevelLine-KPSSL"></div></div></div><div id=":R2bbpimplab:" class="PRIVATE_TreeView-item-content prc-TreeView-TreeViewItemContent-f0r0b"><div class="PRIVATE_VisuallyHidden prc-TreeView-TreeViewVisuallyHidden-4-mPv" aria-hidden="true" id=":R2bbpimplabH1:"></div><div class="PRIVATE_TreeView-item-visual prc-TreeView-TreeViewItemVisual-dRlGq" aria-hidden="true"><svg aria-hidden="true" focusable="false" class="octicon octicon-file" viewBox="0 0 16 16" width="16" height="16" fill="currentColor" display="inline-block" overflow="visible" style="vertical-align:text-bottom"><path d="M2 1.75C2 .784 2.784 0 3.75 0h6.586c.464 0 .909.184 1.237.513l2.914 2.914c.329.328.513.773.513 1.237v9.586A1.75 1.75 0 0 1 13.25 16h-9.5A1.75 1.75 0 0 1 2 14.25Zm1.75-.25a.25.25 0 0 0-.25.25v12.5c0 .138.112.25.25.25h9.5a.25.25 0 0 0 .25-.25V6h-2.75A1.75 1.75 0 0 1 9 4.25V1.5Zm6.75.062V4.25c0 .138.112.25.25.25h2.688l-.011-.013-2.914-2.914-.013-.011Z"></path></svg></div><span class="PRIVATE_TreeView-item-content-text prc-TreeView-TreeViewItemContentText-smZM-"><span>vsa_repo.sh</span></span></div></div></li></ul></li><li class="PRIVATE_TreeView-item prc-TreeView-TreeViewItem-ShJr0" tabindex="0" id="LICENSE-item" role="treeitem" aria-labelledby=":R5pimplab:" aria-describedby=":R5pimplabH1:" aria-level="1" aria-selected="false"><div class="PRIVATE_TreeView-item-container prc-TreeView-TreeViewItemContainer--2Rkn" style="--level:1;content-visibility:auto;contain-intrinsic-size:auto 2rem"><div style="grid-area:spacer;display:flex"><div style="width:100%;display:flex"></div></div><div id=":R5pimplab:" class="PRIVATE_TreeView-item-content prc-TreeView-TreeViewItemContent-f0r0b"><div class="PRIVATE_VisuallyHidden prc-TreeView-TreeViewVisuallyHidden-4-mPv" aria-hidden="true" id=":R5pimplabH1:"></div><div class="PRIVATE_TreeView-item-visual prc-TreeView-TreeViewItemVisual-dRlGq" aria-hidden="true"><svg aria-hidden="true" focusable="false" class="octicon octicon-file" viewBox="0 0 16 16" width="16" height="16" fill="currentColor" display="inline-block" overflow="visible" style="vertical-align:text-bottom"><path d="M2 1.75C2 .784 2.784 0 3.75 0h6.586c.464 0 .909.184 1.237.513l2.914 2.914c.329.328.513.773.513 1.237v9.586A1.75 1.75 0 0 1 13.25 16h-9.5A1.75 1.75 0 0 1 2 14.25Zm1.75-.25a.25.25 0 0 0-.25.25v12.5c0 .138.112.25.25.25h9.5a.25.25 0 0 0 .25-.25V6h-2.75A1.75 1.75 0 0 1 9 4.25V1.5Zm6.75.062V4.25c0 .138.112.25.25.25h2.688l-.011-.013-2.914-2.914-.013-.011Z"></path></svg></div><span class="PRIVATE_TreeView-item-content-text prc-TreeView-TreeViewItemContentText-smZM-"><span>LICENSE</span></span></div></div></li><li class="PRIVATE_TreeView-item prc-TreeView-TreeViewItem-ShJr0" tabindex="0" id="git private dev plus public push.txt-item" role="treeitem" aria-labelledby=":R7pimplab:" aria-describedby=":R7pimplabH1:" aria-level="1" aria-selected="false"><div class="PRIVATE_TreeView-item-container prc-TreeView-TreeViewItemContainer--2Rkn" style="--level:1;content-visibility:auto;contain-intrinsic-size:auto 2rem"><div style="grid-area:spacer;display:flex"><div style="width:100%;display:flex"></div></div><div id=":R7pimplab:" class="PRIVATE_TreeView-item-content prc-TreeView-TreeViewItemContent-f0r0b"><div class="PRIVATE_VisuallyHidden prc-TreeView-TreeViewVisuallyHidden-4-mPv" aria-hidden="true" id=":R7pimplabH1:"></div><div class="PRIVATE_TreeView-item-visual prc-TreeView-TreeViewItemVisual-dRlGq" aria-hidden="true"><svg aria-hidden="true" focusable="false" class="octicon octicon-file" viewBox="0 0 16 16" width="16" height="16" fill="currentColor" display="inline-block" overflow="visible" style="vertical-align:text-bottom"><path d="M2 1.75C2 .784 2.784 0 3.75 0h6.586c.464 0 .909.184 1.237.513l2.914 2.914c.329.328.513.773.513 1.237v9.586A1.75 1.75 0 0 1 13.25 16h-9.5A1.75 1.75 0 0 1 2 14.25Zm1.75-.25a.25.25 0 0 0-.25.25v12.5c0 .138.112.25.25.25h9.5a.25.25 0 0 0 .25-.25V6h-2.75A1.75 1.75 0 0 1 9 4.25V1.5Zm6.75.062V4.25c0 .138.112.25.25.25h2.688l-.011-.013-2.914-2.914-.013-.011Z"></path></svg></div><span class="PRIVATE_TreeView-item-content-text prc-TreeView-TreeViewItemContentText-smZM-"><span>git private dev plus public push.txt</span></span></div></div></li></ul></nav></div></div></div></div></div></div><div class="prc-PageLayout-VerticalDivider-4A4Qm prc-PageLayout-PaneVerticalDivider-1c9vy" data-variant-narrow="none" data-variant-regular="line" data-variant-wide="line" data-position="start" style="--spacing:var(--spacing-none)"><div class="prc-PageLayout-DraggableHandle-zPw82" data-dragging="false" role="slider" aria-label="Draggable pane splitter" aria-valuemin="0" aria-valuemax="0" aria-valuenow="0" aria-valuetext="Pane width 0 pixels" tabindex="0"></div></div></div></div><div class="prc-PageLayout-ContentWrapper-b-QRo CodeView-module__SplitPageLayout_Content--qxR1C" data-is-hidden-narrow="true"><div class="prc-PageLayout-Content--F7-I" data-width="full" style="--spacing:var(--spacing-none)"><div data-selector="repos-split-pane-content" tabindex="0" class="Box-sc-62in7e-0 cybVuK"><div class="Box-sc-62in7e-0 gSjuRy"><div class="container CodeViewHeader-module__Box--PofRM"><div class="px-3 pt-3 pb-0" id="StickyHeader"><div class="CodeViewHeader-module__Box_1--KpLzV"><div class="CodeViewHeader-module__Box_2--xzDOt"><div class="CodeViewHeader-module__Box_6--iStzT"><div class="Box-sc-62in7e-0 kfsEDb"><nav data-testid="breadcrumbs" aria-labelledby="repos-header-breadcrumb--wide-heading" id="repos-header-breadcrumb--wide" class="Box-sc-62in7e-0 eLrlvS"><h2 class="sr-only ScreenReaderHeading-module__userSelectNone--vlUbc prc-Heading-Heading-6CmGO" data-testid="screen-reader-heading" id="repos-header-breadcrumb--wide-heading">Breadcrumbs</h2><ol class="Box-sc-62in7e-0 fNzIif"><li class="Box-sc-62in7e-0 iRLfgU"><a class="Link__StyledLink-sc-1syctfj-0 htWjsS prc-Link-Link-85e08" data-testid="breadcrumbs-repo-link" href="/MarvinFS/scripts/tree/main" data-discover="true">scripts</a></li><li class="Box-sc-62in7e-0 iRLfgU"><span class="Text__StyledText-sc-1klmep6-0 xsVwu prc-Text-Text-0ima0" aria-hidden="true">/</span><a class="Link__StyledLink-sc-1syctfj-0 iitCQE prc-Link-Link-85e08" href="/MarvinFS/scripts/tree/main/VSA%20repo" data-discover="true">VSA repo</a></li></ol></nav><div data-testid="breadcrumbs-filename" class="Box-sc-62in7e-0 iRLfgU"><span class="Text__StyledText-sc-1klmep6-0 xsVwu prc-Text-Text-0ima0" aria-hidden="true">/</span><h1 tabindex="-1" id="file-name-id-wide" class="Heading-sc-1vc165i-0 hJQQvf">vsa_repo.sh</h1></div><button data-component="IconButton" type="button" class="prc-Button-ButtonBase-c50BI ml-2 prc-Button-IconButton-szpyj" data-loading="false" data-no-visuals="true" data-size="small" data-variant="invisible" aria-describedby=":R3nb9lab:-loading-announcement" aria-labelledby=":R3b9lab:"><svg aria-hidden="true" focusable="false" class="octicon octicon-copy" viewBox="0 0 16 16" width="16" height="16" fill="currentColor" display="inline-block" overflow="visible" style="vertical-align:text-bottom"><path d="M0 6.75C0 5.784.784 5 1.75 5h1.5a.75.75 0 0 1 0 1.5h-1.5a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-1.5a.75.75 0 0 1 1.5 0v1.5A1.75 1.75 0 0 1 9.25 16h-7.5A1.75 1.75 0 0 1 0 14.25Z"></path><path d="M5 1.75C5 .784 5.784 0 6.75 0h7.5C15.216 0 16 .784 16 1.75v7.5A1.75 1.75 0 0 1 14.25 11h-7.5A1.75 1.75 0 0 1 5 9.25Zm1.75-.25a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-7.5a.25.25 0 0 0-.25-.25Z"></path></svg></button><span class="Box-sc-62in7e-0 CopyToClipboardButton-module__tooltip--HDUYz prc-TooltipV2-Tooltip-cYMVY" data-direction="nw" aria-label="Copy path" aria-hidden="true" id=":R3b9lab:">Copy path</span></div></div><div class="react-code-view-header-element--wide"><div class="CodeViewHeader-module__Box_7--FZfkg"><div class="d-flex gap-2"> <button hidden="" data-testid="" data-hotkey-scope="read-only-cursor-text-area"></button><button hidden=""></button><button hidden="" data-testid="" data-hotkey-scope="read-only-cursor-text-area"></button><button hidden=""></button><button type="button" class="prc-Button-ButtonBase-c50BI Button__StyledButtonComponent-sc-vqy3e4-0 hfSsoj NavigationMenu-module__Button--SJihq" data-loading="false" data-no-visuals="true" data-size="medium" data-variant="default" aria-describedby=":R1ahj9lab:-loading-announcement"><span data-component="buttonContent" data-align="center" class="prc-Button-ButtonContent-HKbr-"><span data-component="text" class="prc-Button-Label-pTQ3x">Blame</span></span></button><button hidden="" data-testid="" data-hotkey-scope="read-only-cursor-text-area"></button><button data-component="IconButton" type="button" data-testid="more-file-actions-button-nav-menu-wide" aria-haspopup="true" aria-expanded="false" tabindex="0" class="prc-Button-ButtonBase-c50BI js-blob-dropdown-click NavigationMenu-module__IconButton--NqJ_L prc-Button-IconButton-szpyj" data-loading="false" data-no-visuals="true" data-size="medium" data-variant="default" aria-describedby=":Rihj9lab:-loading-announcement" aria-labelledby=":Rfihj9lab:" id=":Rihj9lab:"><svg aria-hidden="true" focusable="false" class="octicon octicon-kebab-horizontal" viewBox="0 0 16 16" width="16" height="16" fill="currentColor" display="inline-block" overflow="visible" style="vertical-align:text-bottom"><path d="M8 9a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3ZM1.5 9a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3Zm13 0a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3Z"></path></svg></button><span class="prc-TooltipV2-Tooltip-cYMVY" data-direction="nw" aria-hidden="true" id=":Rfihj9lab:">More file actions</span> </div></div></div><div class="react-code-view-header-element--narrow"><div class="CodeViewHeader-module__Box_7--FZfkg"><div class="d-flex gap-2"> <button hidden="" data-testid="" data-hotkey-scope="read-only-cursor-text-area"></button><button hidden=""></button><button hidden="" data-testid="" data-hotkey-scope="read-only-cursor-text-area"></button><button hidden=""></button><button type="button" class="prc-Button-ButtonBase-c50BI Button__StyledButtonComponent-sc-vqy3e4-0 hfSsoj NavigationMenu-module__Button--SJihq" data-loading="false" data-no-visuals="true" data-size="medium" data-variant="default" aria-describedby=":R1ahr9lab:-loading-announcement"><span data-component="buttonContent" data-align="center" class="prc-Button-ButtonContent-HKbr-"><span data-component="text" class="prc-Button-Label-pTQ3x">Blame</span></span></button><button hidden="" data-testid="" data-hotkey-scope="read-only-cursor-text-area"></button><button data-component="IconButton" type="button" data-testid="more-file-actions-button-nav-menu-narrow" aria-haspopup="true" aria-expanded="false" tabindex="0" class="prc-Button-ButtonBase-c50BI js-blob-dropdown-click NavigationMenu-module__IconButton--NqJ_L prc-Button-IconButton-szpyj" data-loading="false" data-no-visuals="true" data-size="medium" data-variant="default" aria-describedby=":Rihr9lab:-loading-announcement" aria-labelledby=":Rfihr9lab:" id=":Rihr9lab:"><svg aria-hidden="true" focusable="false" class="octicon octicon-kebab-horizontal" viewBox="0 0 16 16" width="16" height="16" fill="currentColor" display="inline-block" overflow="visible" style="vertical-align:text-bottom"><path d="M8 9a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3ZM1.5 9a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3Zm13 0a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3Z"></path></svg></button><span class="prc-TooltipV2-Tooltip-cYMVY" data-direction="nw" aria-hidden="true" id=":Rfihr9lab:">More file actions</span> </div></div></div></div></div></div></div></div><div class="Box-sc-62in7e-0 jyTWxL react-code-view-bottom-padding"> <div class="BlobTopBanners-module__Box--g_bGk"></div> <!-- --> <!-- --> </div><div class="Box-sc-62in7e-0 jyTWxL"> <!-- --> <!-- --> <button hidden="" data-testid="" data-hotkey-scope="read-only-cursor-text-area"></button><button hidden=""></button><div class="d-flex flex-column border rounded-2 mb-3 pl-1"><div class="LatestCommit-module__Box--Fimpo"><h2 class="sr-only ScreenReaderHeading-module__userSelectNone--vlUbc prc-Heading-Heading-6CmGO" data-testid="screen-reader-heading">Latest commit</h2><div style="width:120px" class="Skeleton Skeleton--text" data-testid="loading"> </div><div class="d-flex flex-shrink-0 gap-2"><div data-testid="latest-commit-details" class="d-none d-sm-flex flex-items-center"></div><div class="d-flex gap-2"><h2 class="sr-only ScreenReaderHeading-module__userSelectNone--vlUbc prc-Heading-Heading-6CmGO" data-testid="screen-reader-heading">History</h2><a href="/MarvinFS/scripts/commits/main/VSA%20repo/vsa_repo.sh" class="prc-Button-ButtonBase-c50BI d-none d-lg-flex LinkButton-module__code-view-link-button--thtqc flex-items-center fgColor-default" data-loading="false" data-size="small" data-variant="invisible" aria-describedby=":R2mlal9lab:-loading-announcement"><span data-component="buttonContent" data-align="center" class="prc-Button-ButtonContent-HKbr-"><span data-component="leadingVisual" class="prc-Button-Visual-2epfX prc-Button-VisualWrap-Db-eB"><svg aria-hidden="true" focusable="false" class="octicon octicon-history" viewBox="0 0 16 16" width="16" height="16" fill="currentColor" display="inline-block" overflow="visible" style="vertical-align:text-bottom"><path d="m.427 1.927 1.215 1.215a8.002 8.002 0 1 1-1.6 5.685.75.75 0 1 1 1.493-.154 6.5 6.5 0 1 0 1.18-4.458l1.358 1.358A.25.25 0 0 1 3.896 6H.25A.25.25 0 0 1 0 5.75V2.104a.25.25 0 0 1 .427-.177ZM7.75 4a.75.75 0 0 1 .75.75v2.992l2.028.812a.75.75 0 0 1-.557 1.392l-2.5-1A.751.751 0 0 1 7 8.25v-3.5A.75.75 0 0 1 7.75 4Z"></path></svg></span><span data-component="text" class="prc-Button-Label-pTQ3x"><span class="fgColor-default">History</span></span></span></a><div class="d-sm-none"></div><div class="d-flex d-lg-none"><span role="tooltip" aria-label="History" id="history-icon-button-tooltip" class="prc-Tooltip-Tooltip--1XZX prc-Tooltip-Tooltip--n-BOOzB tooltipped-n"><a aria-label="View commit history for this file." href="/MarvinFS/scripts/commits/main/VSA%20repo/vsa_repo.sh" class="prc-Button-ButtonBase-c50BI LinkButton-module__code-view-link-button--thtqc flex-items-center fgColor-default" data-loading="false" data-size="small" data-variant="invisible" aria-describedby=":Rcmlal9lab:-loading-announcement history-icon-button-tooltip"><span data-component="buttonContent" data-align="center" class="prc-Button-ButtonContent-HKbr-"><span data-component="leadingVisual" class="prc-Button-Visual-2epfX prc-Button-VisualWrap-Db-eB"><svg aria-hidden="true" focusable="false" class="octicon octicon-history" viewBox="0 0 16 16" width="16" height="16" fill="currentColor" display="inline-block" overflow="visible" style="vertical-align:text-bottom"><path d="m.427 1.927 1.215 1.215a8.002 8.002 0 1 1-1.6 5.685.75.75 0 1 1 1.493-.154 6.5 6.5 0 1 0 1.18-4.458l1.358 1.358A.25.25 0 0 1 3.896 6H.25A.25.25 0 0 1 0 5.75V2.104a.25.25 0 0 1 .427-.177ZM7.75 4a.75.75 0 0 1 .75.75v2.992l2.028.812a.75.75 0 0 1-.557 1.392l-2.5-1A.751.751 0 0 1 7 8.25v-3.5A.75.75 0 0 1 7.75 4Z"></path></svg></span></span></a></span></div></div></div></div></div><div class="Box-sc-62in7e-0 hGzGyY"><div class="Box-sc-62in7e-0 ekdrwn container"><div class="Box-sc-62in7e-0 fpyUWF react-code-size-details-banner"><div class="react-code-size-details-banner CodeSizeDetails-module__Box--QdxnQ"><div class="text-mono CodeSizeDetails-module__Box_1--_uFDs"><div data-testid="blob-size" class="CodeSizeDetails-module__Truncate_1--er0Uk prc-Truncate-Truncate-A9Wn6" data-inline="true" title="19.8 KB" style="--truncate-max-width:100%"><span>674 lines (557 loc) · 19.8 KB</span></div></div></div></div><div class="Box-sc-62in7e-0 iafbuG react-blob-view-header-sticky" id="repos-sticky-header"><div class="BlobViewHeader-module__Box--pvsIA"><div class="react-blob-sticky-header"><div class="Box-sc-62in7e-0 iNRqcN"><div class="FileNameStickyHeader-module__Box_5--xBJ2J"><div class="Box-sc-62in7e-0 igwLyx"><nav data-testid="breadcrumbs" aria-labelledby="sticky-breadcrumb-heading" id="sticky-breadcrumb" class="Box-sc-62in7e-0 eLrlvS"><h2 class="sr-only ScreenReaderHeading-module__userSelectNone--vlUbc prc-Heading-Heading-6CmGO" data-testid="screen-reader-heading" id="sticky-breadcrumb-heading">Breadcrumbs</h2><ol class="Box-sc-62in7e-0 fNzIif"><li class="Box-sc-62in7e-0 iRLfgU"><a class="Link__StyledLink-sc-1syctfj-0 htWjsS prc-Link-Link-85e08" data-testid="breadcrumbs-repo-link" href="/MarvinFS/scripts/tree/main" data-discover="true">scripts</a></li><li class="Box-sc-62in7e-0 iRLfgU"><span class="Text__StyledText-sc-1klmep6-0 iHrMHQ prc-Text-Text-0ima0" aria-hidden="true">/</span><a class="Link__StyledLink-sc-1syctfj-0 iitCQE prc-Link-Link-85e08" href="/MarvinFS/scripts/tree/main/VSA%20repo" data-discover="true">VSA repo</a></li></ol></nav><div data-testid="breadcrumbs-filename" class="Box-sc-62in7e-0 iRLfgU"><span class="Text__StyledText-sc-1klmep6-0 iHrMHQ prc-Text-Text-0ima0" aria-hidden="true">/</span><h1 tabindex="-1" id="sticky-file-name-id" class="Heading-sc-1vc165i-0 cGzJbh">vsa_repo.sh</h1></div></div><button type="button" class="prc-Button-ButtonBase-c50BI Button__StyledButtonComponent-sc-vqy3e4-0 FileNameStickyHeader-module__Button--SaiiH FileNameStickyHeader-module__GoToTopButton--9lB4x" data-loading="false" data-size="small" data-variant="invisible" aria-describedby=":R9cpal9lab:-loading-announcement"><span data-component="buttonContent" data-align="center" class="prc-Button-ButtonContent-HKbr-"><span data-component="leadingVisual" class="prc-Button-Visual-2epfX prc-Button-VisualWrap-Db-eB"><svg aria-hidden="true" focusable="false" class="octicon octicon-arrow-up" viewBox="0 0 16 16" width="16" height="16" fill="currentColor" display="inline-block" overflow="visible" style="vertical-align:text-bottom"><path d="M3.47 7.78a.75.75 0 0 1 0-1.06l4.25-4.25a.75.75 0 0 1 1.06 0l4.25 4.25a.751.751 0 0 1-.018 1.042.751.751 0 0 1-1.042.018L9 4.81v7.44a.75.75 0 0 1-1.5 0V4.81L4.53 7.78a.75.75 0 0 1-1.06 0Z"></path></svg></span><span data-component="text" class="prc-Button-Label-pTQ3x">Top</span></span></button></div></div></div><div class="Box-sc-62in7e-0 koZdcA BlobViewHeader-module__Box_1--PPihg"><h2 class="sr-only ScreenReaderHeading-module__userSelectNone--vlUbc prc-Heading-Heading-6CmGO" data-testid="screen-reader-heading">File metadata and controls</h2><div class="BlobViewHeader-module__Box_2--G_jCG"><ul aria-label="File view" class="prc-SegmentedControl-SegmentedControl-e7570 BlobTabButtons-module__SegmentedControl--JMGov" data-size="small"><li class="prc-SegmentedControl-Item-7Aq6h" data-selected=""><button aria-current="true" class="prc-SegmentedControl-Button-ojWXD" type="button" style="--separator-color:transparent"><span class="prc-SegmentedControl-Content-gnQ4n segmentedControl-content"><div class="prc-SegmentedControl-Text-c5gSh segmentedControl-text" data-text="Code">Code</div></span></button></li><li class="prc-SegmentedControl-Item-7Aq6h"><button aria-current="false" class="prc-SegmentedControl-Button-ojWXD" type="button" style="--separator-color:var(--borderColor-default)"><span class="prc-SegmentedControl-Content-gnQ4n segmentedControl-content"><div class="prc-SegmentedControl-Text-c5gSh segmentedControl-text" data-text="Blame">Blame</div></span></button></li></ul><button hidden="" data-testid="" data-hotkey-scope="read-only-cursor-text-area"></button><button hidden="" data-testid="" data-hotkey-scope="read-only-cursor-text-area"></button><div class="react-code-size-details-in-header CodeSizeDetails-module__Box--QdxnQ"><div class="text-mono CodeSizeDetails-module__Box_1--_uFDs"><div data-testid="blob-size" class="CodeSizeDetails-module__Truncate_1--er0Uk prc-Truncate-Truncate-A9Wn6" data-inline="true" title="19.8 KB" style="--truncate-max-width:100%"><span>674 lines (557 loc) · 19.8 KB</span></div></div></div></div><div class="BlobViewHeader-module__Box_3--Kvpex"><button data-component="IconButton" type="button" data-testid="copilot-ask-menu" class="prc-Button-ButtonBase-c50BI prc-Button-IconButton-szpyj" data-loading="false" data-no-visuals="true" data-size="small" data-variant="default" aria-describedby="blob-view-header-copilot-icon-loading-announcement" aria-labelledby=":R2ecpal9lab:" id="blob-view-header-copilot-icon"><svg aria-hidden="true" focusable="false" class="octicon octicon-copilot" viewBox="0 0 16 16" width="16" height="16" fill="currentColor" display="inline-block" overflow="visible" style="vertical-align:text-bottom"><path d="M7.998 15.035c-4.562 0-7.873-2.914-7.998-3.749V9.338c.085-.628.677-1.686 1.588-2.065.013-.07.024-.143.036-.218.029-.183.06-.384.126-.612-.201-.508-.254-1.084-.254-1.656 0-.87.128-1.769.693-2.484.579-.733 1.494-1.124 2.724-1.261 1.206-.134 2.262.034 2.944.765.05.053.096.108.139.165.044-.057.094-.112.143-.165.682-.731 1.738-.899 2.944-.765 1.23.137 2.145.528 2.724 1.261.566.715.693 1.614.693 2.484 0 .572-.053 1.148-.254 1.656.066.228.098.429.126.612.012.076.024.148.037.218.924.385 1.522 1.471 1.591 2.095v1.872c0 .766-3.351 3.795-8.002 3.795Zm0-1.485c2.28 0 4.584-1.11 5.002-1.433V7.862l-.023-.116c-.49.21-1.075.291-1.727.291-1.146 0-2.059-.327-2.71-.991A3.222 3.222 0 0 1 8 6.303a3.24 3.24 0 0 1-.544.743c-.65.664-1.563.991-2.71.991-.652 0-1.236-.081-1.727-.291l-.023.116v4.255c.419.323 2.722 1.433 5.002 1.433ZM6.762 2.83c-.193-.206-.637-.413-1.682-.297-1.019.113-1.479.404-1.713.7-.247.312-.369.789-.369 1.554 0 .793.129 1.171.308 1.371.162.181.519.379 1.442.379.853 0 1.339-.235 1.638-.54.315-.322.527-.827.617-1.553.117-.935-.037-1.395-.241-1.614Zm4.155-.297c-1.044-.116-1.488.091-1.681.297-.204.219-.359.679-.242 1.614.091.726.303 1.231.618 1.553.299.305.784.54 1.638.54.922 0 1.28-.198 1.442-.379.179-.2.308-.578.308-1.371 0-.765-.123-1.242-.37-1.554-.233-.296-.693-.587-1.713-.7Z"></path><path d="M6.25 9.037a.75.75 0 0 1 .75.75v1.501a.75.75 0 0 1-1.5 0V9.787a.75.75 0 0 1 .75-.75Zm4.25.75v1.501a.75.75 0 0 1-1.5 0V9.787a.75.75 0 0 1 1.5 0Z"></path></svg></button><span class="prc-TooltipV2-Tooltip-cYMVY" data-direction="n" aria-hidden="true" id=":R2ecpal9lab:">Ask Copilot about this file</span><div class="react-blob-header-edit-and-raw-actions BlobViewHeader-module__Box_4--vFP89"><div class="prc-ButtonGroup-ButtonGroup-vcMeG"><div><a href="https://github.com/MarvinFS/scripts/raw/refs/heads/main/VSA%20repo/vsa_repo.sh" data-testid="raw-button" class="prc-Button-ButtonBase-c50BI LinkButton-sc-1v6zkmg-0 iwmTUC BlobViewHeader-module__LinkButton--DMph4" data-loading="false" data-no-visuals="true" data-size="small" data-variant="default" aria-describedby=":R5becpal9lab:-loading-announcement"><span data-component="buttonContent" data-align="center" class="prc-Button-ButtonContent-HKbr-"><span data-component="text" class="prc-Button-Label-pTQ3x">Raw</span></span></a></div><div><button data-component="IconButton" type="button" data-testid="copy-raw-button" class="prc-Button-ButtonBase-c50BI IconButton__StyledIconButton-sc-i53dt6-0 prc-Button-IconButton-szpyj" data-loading="false" data-no-visuals="true" data-size="small" data-variant="default" aria-describedby=":R6pbecpal9lab:-loading-announcement" aria-labelledby=":Rpbecpal9lab:"><svg aria-hidden="true" focusable="false" class="octicon octicon-copy" viewBox="0 0 16 16" width="16" height="16" fill="currentColor" display="inline-block" overflow="visible" style="vertical-align:text-bottom"><path d="M0 6.75C0 5.784.784 5 1.75 5h1.5a.75.75 0 0 1 0 1.5h-1.5a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-1.5a.75.75 0 0 1 1.5 0v1.5A1.75 1.75 0 0 1 9.25 16h-7.5A1.75 1.75 0 0 1 0 14.25Z"></path><path d="M5 1.75C5 .784 5.784 0 6.75 0h7.5C15.216 0 16 .784 16 1.75v7.5A1.75 1.75 0 0 1 14.25 11h-7.5A1.75 1.75 0 0 1 5 9.25Zm1.75-.25a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-7.5a.25.25 0 0 0-.25-.25Z"></path></svg></button><span class="prc-TooltipV2-Tooltip-cYMVY" data-direction="n" aria-hidden="true" id=":Rpbecpal9lab:">Copy raw file</span></div><div><button data-component="IconButton" type="button" data-testid="download-raw-button" class="prc-Button-ButtonBase-c50BI IconButton__StyledIconButton-sc-i53dt6-0 gXjFlG prc-Button-IconButton-szpyj" data-loading="false" data-no-visuals="true" data-size="small" data-variant="default" aria-describedby=":R1tbecpal9lab:-loading-announcement" aria-labelledby=":Rdbecpal9lab:"><svg aria-hidden="true" focusable="false" class="octicon octicon-download" viewBox="0 0 16 16" width="16" height="16" fill="currentColor" display="inline-block" overflow="visible" style="vertical-align:text-bottom"><path d="M2.75 14A1.75 1.75 0 0 1 1 12.25v-2.5a.75.75 0 0 1 1.5 0v2.5c0 .138.112.25.25.25h10.5a.25.25 0 0 0 .25-.25v-2.5a.75.75 0 0 1 1.5 0v2.5A1.75 1.75 0 0 1 13.25 14Z"></path><path d="M7.25 7.689V2a.75.75 0 0 1 1.5 0v5.689l1.97-1.969a.749.749 0 1 1 1.06 1.06l-3.25 3.25a.749.749 0 0 1-1.06 0L4.22 6.78a.749.749 0 1 1 1.06-1.06l1.97 1.969Z"></path></svg></button><span class="prc-TooltipV2-Tooltip-cYMVY" data-direction="n" aria-hidden="true" id=":Rdbecpal9lab:">Download raw file</span></div></div><button hidden="" data-testid="raw-button-shortcut" data-hotkey-scope="read-only-cursor-text-area"></button><button hidden="" data-testid="copy-raw-button-shortcut" data-hotkey-scope="read-only-cursor-text-area"></button><button hidden="" data-testid="download-raw-button-shortcut" data-hotkey-scope="read-only-cursor-text-area"></button><a class="js-github-dev-shortcut d-none prc-Link-Link-85e08" href="https://github.dev/"></a><button hidden="" data-testid="" data-hotkey-scope="read-only-cursor-text-area"></button><a class="js-github-dev-new-tab-shortcut d-none prc-Link-Link-85e08" href="https://github.dev/" target="_blank"></a><button hidden="" data-testid="" data-hotkey-scope="read-only-cursor-text-area"></button><div class="prc-ButtonGroup-ButtonGroup-vcMeG"><div><a data-component="IconButton" type="button" data-testid="edit-button" class="prc-Button-ButtonBase-c50BI IconButton__StyledIconButton-sc-i53dt6-0 gRAczH prc-Button-IconButton-szpyj" data-loading="false" data-no-visuals="true" data-size="small" data-variant="default" aria-describedby=":R1mjecpal9lab:-loading-announcement" aria-labelledby=":R6jecpal9lab:" href="/MarvinFS/scripts/edit/main/VSA%20repo/vsa_repo.sh" data-discover="true"><svg aria-hidden="true" focusable="false" class="octicon octicon-pencil" viewBox="0 0 16 16" width="16" height="16" fill="currentColor" display="inline-block" overflow="visible" style="vertical-align:text-bottom"><path d="M11.013 1.427a1.75 1.75 0 0 1 2.474 0l1.086 1.086a1.75 1.75 0 0 1 0 2.474l-8.61 8.61c-.21.21-.47.364-.756.445l-3.251.93a.75.75 0 0 1-.927-.928l.929-3.25c.081-.286.235-.547.445-.758l8.61-8.61Zm.176 4.823L9.75 4.81l-6.286 6.287a.253.253 0 0 0-.064.108l-.558 1.953 1.953-.558a.253.253 0 0 0 .108-.064Zm1.238-3.763a.25.25 0 0 0-.354 0L10.811 3.75l1.439 1.44 1.263-1.263a.25.25 0 0 0 0-.354Z"></path></svg></a><span class="prc-TooltipV2-Tooltip-cYMVY" data-direction="nw" aria-hidden="true" id=":R6jecpal9lab:">Edit this file</span></div><div><button data-component="IconButton" type="button" data-testid="more-edit-button" aria-haspopup="true" aria-expanded="false" tabindex="0" class="prc-Button-ButtonBase-c50BI IconButton__StyledIconButton-sc-i53dt6-0 prc-Button-IconButton-szpyj" data-loading="false" data-no-visuals="true" data-size="small" data-variant="default" aria-describedby=":Rajecpal9lab:-loading-announcement" aria-labelledby=":R7qjecpal9lab:" id=":Rajecpal9lab:"><svg aria-hidden="true" focusable="false" class="octicon octicon-triangle-down" viewBox="0 0 16 16" width="16" height="16" fill="currentColor" display="inline-block" overflow="visible" style="vertical-align:text-bottom"><path d="m4.427 7.427 3.396 3.396a.25.25 0 0 0 .354 0l3.396-3.396A.25.25 0 0 0 11.396 7H4.604a.25.25 0 0 0-.177.427Z"></path></svg></button><span class="prc-TooltipV2-Tooltip-cYMVY" data-direction="nw" aria-hidden="true" id=":R7qjecpal9lab:">More edit options</span></div></div><button hidden="" data-testid="" data-hotkey="e,Shift+E" data-hotkey-scope="read-only-cursor-text-area"></button></div><button data-component="IconButton" type="button" aria-pressed="true" aria-expanded="true" aria-controls="symbols-pane" data-testid="symbols-button" class="prc-Button-ButtonBase-c50BI IconButton__StyledIconButton-sc-i53dt6-0 BlobViewHeader-module__IconButton_2--KDy6i prc-Button-IconButton-szpyj" data-loading="false" data-no-visuals="true" data-size="small" data-variant="invisible" aria-describedby="symbols-button-loading-announcement" aria-labelledby=":R3ucpal9lab:" id="symbols-button"><svg aria-hidden="true" focusable="false" class="octicon octicon-code-square" viewBox="0 0 16 16" width="16" height="16" fill="currentColor" display="inline-block" overflow="visible" style="vertical-align:text-bottom"><path d="M0 1.75C0 .784.784 0 1.75 0h12.5C15.216 0 16 .784 16 1.75v12.5A1.75 1.75 0 0 1 14.25 16H1.75A1.75 1.75 0 0 1 0 14.25Zm1.75-.25a.25.25 0 0 0-.25.25v12.5c0 .138.112.25.25.25h12.5a.25.25 0 0 0 .25-.25V1.75a.25.25 0 0 0-.25-.25Zm7.47 3.97a.75.75 0 0 1 1.06 0l2 2a.75.75 0 0 1 0 1.06l-2 2a.749.749 0 0 1-1.275-.326.749.749 0 0 1 .215-.734L10.69 8 9.22 6.53a.75.75 0 0 1 0-1.06ZM6.78 6.53 5.31 8l1.47 1.47a.749.749 0 0 1-.326 1.275.749.749 0 0 1-.734-.215l-2-2a.75.75 0 0 1 0-1.06l2-2a.751.751 0 0 1 1.042.018.751.751 0 0 1 .018 1.042Z"></path></svg></button><span class="prc-TooltipV2-Tooltip-cYMVY" data-direction="nw" aria-hidden="true" id=":R3ucpal9lab:">Close symbols panel</span><div class="react-blob-header-edit-and-raw-actions-combined"><button data-component="IconButton" type="button" title="More file actions" data-testid="more-file-actions-button" aria-haspopup="true" aria-expanded="false" tabindex="0" class="prc-Button-ButtonBase-c50BI IconButton__StyledIconButton-sc-i53dt6-0 js-blob-dropdown-click BlobViewHeader-module__IconButton--uO1fA prc-Button-IconButton-szpyj" data-loading="false" data-no-visuals="true" data-size="small" data-variant="invisible" aria-describedby=":Rkucpal9lab:-loading-announcement" aria-labelledby=":Rfkucpal9lab:" id=":Rkucpal9lab:"><svg aria-hidden="true" focusable="false" class="octicon octicon-kebab-horizontal" viewBox="0 0 16 16" width="16" height="16" fill="currentColor" display="inline-block" overflow="visible" style="vertical-align:text-bottom"><path d="M8 9a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3ZM1.5 9a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3Zm13 0a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3Z"></path></svg></button><span class="prc-TooltipV2-Tooltip-cYMVY" data-direction="nw" aria-hidden="true" id=":Rfkucpal9lab:">Edit and raw actions</span></div></div></div></div><div></div></div><div class="Box-sc-62in7e-0 dIDnLY"><section aria-labelledby="file-name-id-wide file-name-id-mobile" class="Box-sc-62in7e-0 hhuNfn"><div class="Box-sc-62in7e-0 hNuvaP"><div id="highlighted-line-menu-positioner" class="position-relative"><div id="copilot-button-positioner" class="Box-sc-62in7e-0 kBkfpQ"><div class="Box-sc-62in7e-0 lnfLer"><div class="Box-sc-62in7e-0 djZnHX react-code-file-contents" role="presentation" aria-hidden="true" data-tab-size="4" data-paste-markdown-skip="true" data-hpc="true"><div class="react-line-numbers-no-virtualization" style="pointer-events:auto;position:relative;z-index:2"><div class="react-no-virtualization-wrapper-lines-ssr"><div data-line-number="1" class="react-line-number react-code-text" style="padding-right:16px">1</div><div data-line-number="2" class="react-line-number react-code-text" style="padding-right:16px">2</div><div data-line-number="3" class="react-line-number react-code-text" style="padding-right:16px">3</div><div data-line-number="4" class="react-line-number react-code-text" style="padding-right:16px">4</div><div data-line-number="5" class="react-line-number react-code-text" style="padding-right:16px">5</div><div data-line-number="6" class="react-line-number react-code-text" style="padding-right:16px">6</div><div data-line-number="7" class="react-line-number react-code-text" style="padding-right:16px">7</div><div data-line-number="8" class="react-line-number react-code-text" style="padding-right:16px">8</div><div data-line-number="9" class="react-line-number react-code-text" style="padding-right:16px">9</div><div data-line-number="10" class="react-line-number react-code-text" style="padding-right:16px">10</div><div data-line-number="11" class="react-line-number react-code-text" style="padding-right:16px">11</div><div data-line-number="12" class="react-line-number react-code-text" style="padding-right:16px">12</div><div data-line-number="13" class="react-line-number react-code-text" style="padding-right:16px">13</div><div data-line-number="14" class="react-line-number react-code-text" style="padding-right:16px">14</div><div data-line-number="15" class="react-line-number react-code-text" style="padding-right:16px">15</div><div data-line-number="16" class="react-line-number react-code-text" style="padding-right:16px">16</div><div data-line-number="17" class="react-line-number react-code-text" style="padding-right:16px">17</div><div data-line-number="18" class="react-line-number react-code-text" style="padding-right:16px">18</div><div data-line-number="19" class="react-line-number react-code-text" style="padding-right:16px">19</div><div data-line-number="20" class="react-line-number react-code-text" style="padding-right:16px">20</div><div data-line-number="21" class="react-line-number react-code-text" style="padding-right:16px">21</div><div data-line-number="22" class="react-line-number react-code-text" style="padding-right:16px">22</div><div data-line-number="23" class="react-line-number react-code-text" style="padding-right:16px">23</div><div data-line-number="24" class="react-line-number react-code-text" style="padding-right:16px">24</div><div data-line-number="25" class="react-line-number react-code-text" style="padding-right:16px">25</div><div data-line-number="26" class="react-line-number react-code-text" style="padding-right:16px">26</div><div data-line-number="27" class="react-line-number react-code-text" style="padding-right:16px">27</div><div data-line-number="28" class="react-line-number react-code-text" style="padding-right:16px">28</div><div data-line-number="29" class="react-line-number react-code-text" style="padding-right:16px">29</div><div data-line-number="30" class="react-line-number react-code-text" style="padding-right:16px">30</div><div data-line-number="31" class="react-line-number react-code-text" style="padding-right:16px">31</div><div data-line-number="32" class="react-line-number react-code-text" style="padding-right:16px">32</div><div data-line-number="33" class="react-line-number react-code-text" style="padding-right:16px">33</div><div data-line-number="34" class="react-line-number react-code-text" style="padding-right:16px">34</div><div data-line-number="35" class="react-line-number react-code-text" style="padding-right:16px">35</div><div data-line-number="36" class="react-line-number react-code-text" style="padding-right:16px">36</div><div data-line-number="37" class="react-line-number react-code-text" style="padding-right:16px">37</div><div data-line-number="38" class="react-line-number react-code-text" style="padding-right:16px">38</div><div data-line-number="39" class="react-line-number react-code-text" style="padding-right:16px">39</div><div data-line-number="40" class="react-line-number react-code-text" style="padding-right:16px">40</div><div data-line-number="41" class="react-line-number react-code-text" style="padding-right:16px">41</div><div data-line-number="42" class="react-line-number react-code-text" style="padding-right:16px">42</div><div data-line-number="43" class="react-line-number react-code-text" style="padding-right:16px">43</div><div data-line-number="44" class="react-line-number react-code-text" style="padding-right:16px">44</div><div data-line-number="45" class="react-line-number react-code-text" style="padding-right:16px">45</div><div data-line-number="46" class="react-line-number react-code-text" style="padding-right:16px">46</div><div data-line-number="47" class="react-line-number react-code-text" style="padding-right:16px">47</div><div data-line-number="48" class="react-line-number react-code-text" style="padding-right:16px">48</div><div data-line-number="49" class="react-line-number react-code-text" style="padding-right:16px">49</div><div data-line-number="50" class="react-line-number react-code-text" style="padding-right:16px">50</div><div data-line-number="51" class="react-line-number react-code-text" style="padding-right:16px">51</div><div data-line-number="52" class="react-line-number react-code-text" style="padding-right:16px">52</div><div data-line-number="53" class="react-line-number react-code-text" style="padding-right:16px">53</div><div data-line-number="54" class="react-line-number react-code-text" style="padding-right:16px">54</div><div data-line-number="55" class="react-line-number react-code-text" style="padding-right:16px">55</div><div data-line-number="56" class="react-line-number react-code-text" style="padding-right:16px">56</div><div data-line-number="57" class="react-line-number react-code-text" style="padding-right:16px">57</div><div data-line-number="58" class="react-line-number react-code-text" style="padding-right:16px">58</div><div data-line-number="59" class="react-line-number react-code-text" style="padding-right:16px">59</div><div data-line-number="60" class="react-line-number react-code-text" style="padding-right:16px">60</div></div><div class="react-no-virtualization-wrapper-lines-ssr"><div data-line-number="61" class="react-line-number react-code-text" style="padding-right:16px">61</div><div data-line-number="62" class="react-line-number react-code-text" style="padding-right:16px">62</div><div data-line-number="63" class="react-line-number react-code-text" style="padding-right:16px">63</div><div data-line-number="64" class="react-line-number react-code-text" style="padding-right:16px">64</div><div data-line-number="65" class="react-line-number react-code-text" style="padding-right:16px">65</div><div data-line-number="66" class="react-line-number react-code-text" style="padding-right:16px">66</div><div data-line-number="67" class="react-line-number react-code-text" style="padding-right:16px">67</div><div data-line-number="68" class="react-line-number react-code-text" style="padding-right:16px">68</div><div data-line-number="69" class="react-line-number react-code-text" style="padding-right:16px">69</div><div data-line-number="70" class="react-line-number react-code-text" style="padding-right:16px">70</div><div data-line-number="71" class="react-line-number react-code-text" style="padding-right:16px">71</div><div data-line-number="72" class="react-line-number react-code-text" style="padding-right:16px">72</div><div data-line-number="73" class="react-line-number react-code-text" style="padding-right:16px">73</div><div data-line-number="74" class="react-line-number react-code-text" style="padding-right:16px">74</div><div data-line-number="75" class="react-line-number react-code-text" style="padding-right:16px">75</div><div data-line-number="76" class="react-line-number react-code-text" style="padding-right:16px">76</div><div data-line-number="77" class="react-line-number react-code-text" style="padding-right:16px">77</div><div data-line-number="78" class="react-line-number react-code-text" style="padding-right:16px">78</div><div data-line-number="79" class="react-line-number react-code-text" style="padding-right:16px">79</div><div data-line-number="80" class="react-line-number react-code-text" style="padding-right:16px">80</div><div data-line-number="81" class="react-line-number react-code-text" style="padding-right:16px">81</div><div data-line-number="82" class="react-line-number react-code-text" style="padding-right:16px">82</div><div data-line-number="83" class="react-line-number react-code-text" style="padding-right:16px">83<span class="Box-sc-62in7e-0 gTgIBo"><div aria-label="Collapse code section" role="button" class="Box-sc-62in7e-0 bzYYiL"><svg aria-hidden="true" focusable="false" class="octicon octicon-chevron-down" viewBox="0 0 16 16" width="16" height="16" fill="currentColor" display="inline-block" overflow="visible" style="vertical-align:text-bottom"><path d="M12.78 5.22a.749.749 0 0 1 0 1.06l-4.25 4.25a.749.749 0 0 1-1.06 0L3.22 6.28a.749.749 0 1 1 1.06-1.06L8 8.939l3.72-3.719a.749.749 0 0 1 1.06 0Z"></path></svg></div></span></div><div data-line-number="84" class="child-of-line-82  react-line-number react-code-text" style="padding-right:16px">84</div><div data-line-number="85" class="child-of-line-82  react-line-number react-code-text" style="padding-right:16px">85</div><div data-line-number="86" class="child-of-line-82  react-line-number react-code-text" style="padding-right:16px">86</div><div data-line-number="87" class="react-line-number react-code-text" style="padding-right:16px">87</div><div data-line-number="88" class="react-line-number react-code-text" style="padding-right:16px">88</div><div data-line-number="89" class="react-line-number react-code-text" style="padding-right:16px">89<span class="Box-sc-62in7e-0 gTgIBo"><div aria-label="Collapse code section" role="button" class="Box-sc-62in7e-0 bzYYiL"><svg aria-hidden="true" focusable="false" class="octicon octicon-chevron-down" viewBox="0 0 16 16" width="16" height="16" fill="currentColor" display="inline-block" overflow="visible" style="vertical-align:text-bottom"><path d="M12.78 5.22a.749.749 0 0 1 0 1.06l-4.25 4.25a.749.749 0 0 1-1.06 0L3.22 6.28a.749.749 0 1 1 1.06-1.06L8 8.939l3.72-3.719a.749.749 0 0 1 1.06 0Z"></path></svg></div></span></div><div data-line-number="90" class="child-of-line-88  react-line-number react-code-text" style="padding-right:16px">90</div><div data-line-number="91" class="child-of-line-88  react-line-number react-code-text" style="padding-right:16px">91</div><div data-line-number="92" class="child-of-line-88  react-line-number react-code-text" style="padding-right:16px">92</div><div data-line-number="93" class="child-of-line-88  react-line-number react-code-text" style="padding-right:16px">93</div><div data-line-number="94" class="child-of-line-88  react-line-number react-code-text" style="padding-right:16px">94</div><div data-line-number="95" class="child-of-line-88  react-line-number react-code-text" style="padding-right:16px">95</div><div data-line-number="96" class="child-of-line-88  react-line-number react-code-text" style="padding-right:16px">96</div><div data-line-number="97" class="child-of-line-88  react-line-number react-code-text" style="padding-right:16px">97</div><div data-line-number="98" class="child-of-line-88  react-line-number react-code-text" style="padding-right:16px">98</div><div data-line-number="99" class="child-of-line-88  react-line-number react-code-text" style="padding-right:16px">99</div><div data-line-number="100" class="child-of-line-88  react-line-number react-code-text" style="padding-right:16px">100</div><div data-line-number="101" class="child-of-line-88  react-line-number react-code-text" style="padding-right:16px">101</div><div data-line-number="102" class="child-of-line-88  react-line-number react-code-text" style="padding-right:16px">102</div><div data-line-number="103" class="child-of-line-88  react-line-number react-code-text" style="padding-right:16px">103</div><div data-line-number="104" class="react-line-number react-code-text" style="padding-right:16px">104</div><div data-line-number="105" class="react-line-number react-code-text" style="padding-right:16px">105</div><div data-line-number="106" class="react-line-number react-code-text" style="padding-right:16px">106<span class="Box-sc-62in7e-0 gTgIBo"><div aria-label="Collapse code section" role="button" class="Box-sc-62in7e-0 bzYYiL"><svg aria-hidden="true" focusable="false" class="octicon octicon-chevron-down" viewBox="0 0 16 16" width="16" height="16" fill="currentColor" display="inline-block" overflow="visible" style="vertical-align:text-bottom"><path d="M12.78 5.22a.749.749 0 0 1 0 1.06l-4.25 4.25a.749.749 0 0 1-1.06 0L3.22 6.28a.749.749 0 1 1 1.06-1.06L8 8.939l3.72-3.719a.749.749 0 0 1 1.06 0Z"></path></svg></div></span></div><div data-line-number="107" class="child-of-line-105  react-line-number react-code-text" style="padding-right:16px">107</div><div data-line-number="108" class="child-of-line-105  react-line-number react-code-text" style="padding-right:16px">108</div><div data-line-number="109" class="child-of-line-105  react-line-number react-code-text" style="padding-right:16px">109</div><div data-line-number="110" class="react-line-number react-code-text" style="padding-right:16px">110</div><div data-line-number="111" class="react-line-number react-code-text" style="padding-right:16px">111</div><div data-line-number="112" class="react-line-number react-code-text" style="padding-right:16px">112</div><div data-line-number="113" class="react-line-number react-code-text" style="padding-right:16px">113</div><div data-line-number="114" class="react-line-number react-code-text" style="padding-right:16px">114</div><div data-line-number="115" class="react-line-number react-code-text" style="padding-right:16px">115<span class="Box-sc-62in7e-0 gTgIBo"><div aria-label="Collapse code section" role="button" class="Box-sc-62in7e-0 bzYYiL"><svg aria-hidden="true" focusable="false" class="octicon octicon-chevron-down" viewBox="0 0 16 16" width="16" height="16" fill="currentColor" display="inline-block" overflow="visible" style="vertical-align:text-bottom"><path d="M12.78 5.22a.749.749 0 0 1 0 1.06l-4.25 4.25a.749.749 0 0 1-1.06 0L3.22 6.28a.749.749 0 1 1 1.06-1.06L8 8.939l3.72-3.719a.749.749 0 0 1 1.06 0Z"></path></svg></div></span></div><div data-line-number="116" class="child-of-line-114  react-line-number react-code-text" style="padding-right:16px">116</div><div data-line-number="117" class="child-of-line-114  react-line-number react-code-text" style="padding-right:16px">117</div><div data-line-number="118" class="child-of-line-114  react-line-number react-code-text" style="padding-right:16px">118</div><div data-line-number="119" class="child-of-line-114  react-line-number react-code-text" style="padding-right:16px">119</div><div data-line-number="120" class="child-of-line-114  react-line-number react-code-text" style="padding-right:16px">120</div></div><div class="react-no-virtualization-wrapper-lines-ssr"><div data-line-number="121" class="child-of-line-114  react-line-number react-code-text" style="padding-right:16px">121</div><div data-line-number="122" class="child-of-line-114  react-line-number react-code-text" style="padding-right:16px">122</div><div data-line-number="123" class="child-of-line-114  react-line-number react-code-text" style="padding-right:16px">123</div><div data-line-number="124" class="child-of-line-114  react-line-number react-code-text" style="padding-right:16px">124</div><div data-line-number="125" class="child-of-line-114  react-line-number react-code-text" style="padding-right:16px">125</div><div data-line-number="126" class="child-of-line-114  react-line-number react-code-text" style="padding-right:16px">126</div><div data-line-number="127" class="child-of-line-114  react-line-number react-code-text" style="padding-right:16px">127</div><div data-line-number="128" class="child-of-line-114  react-line-number react-code-text" style="padding-right:16px">128</div><div data-line-number="129" class="child-of-line-114  react-line-number react-code-text" style="padding-right:16px">129</div><div data-line-number="130" class="child-of-line-114  react-line-number react-code-text" style="padding-right:16px">130</div><div data-line-number="131" class="child-of-line-114  react-line-number react-code-text" style="padding-right:16px">131</div><div data-line-number="132" class="child-of-line-114  react-line-number react-code-text" style="padding-right:16px">132</div><div data-line-number="133" class="child-of-line-114  react-line-number react-code-text" style="padding-right:16px">133</div><div data-line-number="134" class="child-of-line-114  react-line-number react-code-text" style="padding-right:16px">134</div><div data-line-number="135" class="child-of-line-114  react-line-number react-code-text" style="padding-right:16px">135</div><div data-line-number="136" class="child-of-line-114  react-line-number react-code-text" style="padding-right:16px">136</div><div data-line-number="137" class="child-of-line-114  react-line-number react-code-text" style="padding-right:16px">137</div><div data-line-number="138" class="child-of-line-114  react-line-number react-code-text" style="padding-right:16px">138</div><div data-line-number="139" class="child-of-line-114  react-line-number react-code-text" style="padding-right:16px">139</div><div data-line-number="140" class="child-of-line-114  react-line-number react-code-text" style="padding-right:16px">140</div><div data-line-number="141" class="child-of-line-114  react-line-number react-code-text" style="padding-right:16px">141</div><div data-line-number="142" class="child-of-line-114  react-line-number react-code-text" style="padding-right:16px">142</div><div data-line-number="143" class="child-of-line-114  react-line-number react-code-text" style="padding-right:16px">143</div><div data-line-number="144" class="child-of-line-114  react-line-number react-code-text" style="padding-right:16px">144</div><div data-line-number="145" class="child-of-line-114  react-line-number react-code-text" style="padding-right:16px">145</div><div data-line-number="146" class="child-of-line-114  react-line-number react-code-text" style="padding-right:16px">146</div><div data-line-number="147" class="child-of-line-114  react-line-number react-code-text" style="padding-right:16px">147</div><div data-line-number="148" class="child-of-line-114  react-line-number react-code-text" style="padding-right:16px">148</div><div data-line-number="149" class="child-of-line-114  react-line-number react-code-text" style="padding-right:16px">149</div><div data-line-number="150" class="child-of-line-114  react-line-number react-code-text" style="padding-right:16px">150</div><div data-line-number="151" class="child-of-line-114  react-line-number react-code-text" style="padding-right:16px">151</div><div data-line-number="152" class="child-of-line-114  react-line-number react-code-text" style="padding-right:16px">152</div><div data-line-number="153" class="child-of-line-114  react-line-number react-code-text" style="padding-right:16px">153</div><div data-line-number="154" class="child-of-line-114  react-line-number react-code-text" style="padding-right:16px">154</div><div data-line-number="155" class="react-line-number react-code-text" style="padding-right:16px">155</div><div data-line-number="156" class="react-line-number react-code-text" style="padding-right:16px">156</div><div data-line-number="157" class="react-line-number react-code-text" style="padding-right:16px">157</div><div data-line-number="158" class="react-line-number react-code-text" style="padding-right:16px">158</div><div data-line-number="159" class="react-line-number react-code-text" style="padding-right:16px">159</div><div data-line-number="160" class="react-line-number react-code-text" style="padding-right:16px">160</div><div data-line-number="161" class="react-line-number react-code-text" style="padding-right:16px">161</div><div data-line-number="162" class="react-line-number react-code-text" style="padding-right:16px">162<span class="Box-sc-62in7e-0 gTgIBo"><div aria-label="Collapse code section" role="button" class="Box-sc-62in7e-0 bzYYiL"><svg aria-hidden="true" focusable="false" class="octicon octicon-chevron-down" viewBox="0 0 16 16" width="16" height="16" fill="currentColor" display="inline-block" overflow="visible" style="vertical-align:text-bottom"><path d="M12.78 5.22a.749.749 0 0 1 0 1.06l-4.25 4.25a.749.749 0 0 1-1.06 0L3.22 6.28a.749.749 0 1 1 1.06-1.06L8 8.939l3.72-3.719a.749.749 0 0 1 1.06 0Z"></path></svg></div></span></div><div data-line-number="163" class="child-of-line-161  react-line-number react-code-text" style="padding-right:16px">163</div><div data-line-number="164" class="child-of-line-161  react-line-number react-code-text" style="padding-right:16px">164</div><div data-line-number="165" class="child-of-line-161  react-line-number react-code-text" style="padding-right:16px">165</div><div data-line-number="166" class="child-of-line-161  react-line-number react-code-text" style="padding-right:16px">166</div><div data-line-number="167" class="child-of-line-161  react-line-number react-code-text" style="padding-right:16px">167</div><div data-line-number="168" class="child-of-line-161  react-line-number react-code-text" style="padding-right:16px">168</div><div data-line-number="169" class="child-of-line-161  react-line-number react-code-text" style="padding-right:16px">169</div><div data-line-number="170" class="child-of-line-161  react-line-number react-code-text" style="padding-right:16px">170</div><div data-line-number="171" class="child-of-line-161  react-line-number react-code-text" style="padding-right:16px">171</div><div data-line-number="172" class="child-of-line-161  react-line-number react-code-text" style="padding-right:16px">172</div><div data-line-number="173" class="child-of-line-161  react-line-number react-code-text" style="padding-right:16px">173</div><div data-line-number="174" class="child-of-line-161  react-line-number react-code-text" style="padding-right:16px">174</div><div data-line-number="175" class="child-of-line-161  react-line-number react-code-text" style="padding-right:16px">175</div><div data-line-number="176" class="child-of-line-161  react-line-number react-code-text" style="padding-right:16px">176</div><div data-line-number="177" class="child-of-line-161  react-line-number react-code-text" style="padding-right:16px">177</div><div data-line-number="178" class="child-of-line-161  react-line-number react-code-text" style="padding-right:16px">178</div><div data-line-number="179" class="child-of-line-161  react-line-number react-code-text" style="padding-right:16px">179</div><div data-line-number="180" class="child-of-line-161  react-line-number react-code-text" style="padding-right:16px">180</div></div><div class="react-no-virtualization-wrapper-lines-ssr"><div data-line-number="181" class="react-line-number react-code-text" style="padding-right:16px">181</div><div data-line-number="182" class="react-line-number react-code-text" style="padding-right:16px">182</div><div data-line-number="183" class="react-line-number react-code-text" style="padding-right:16px">183<span class="Box-sc-62in7e-0 gTgIBo"><div aria-label="Collapse code section" role="button" class="Box-sc-62in7e-0 bzYYiL"><svg aria-hidden="true" focusable="false" class="octicon octicon-chevron-down" viewBox="0 0 16 16" width="16" height="16" fill="currentColor" display="inline-block" overflow="visible" style="vertical-align:text-bottom"><path d="M12.78 5.22a.749.749 0 0 1 0 1.06l-4.25 4.25a.749.749 0 0 1-1.06 0L3.22 6.28a.749.749 0 1 1 1.06-1.06L8 8.939l3.72-3.719a.749.749 0 0 1 1.06 0Z"></path></svg></div></span></div><div data-line-number="184" class="child-of-line-182  react-line-number react-code-text" style="padding-right:16px">184</div><div data-line-number="185" class="child-of-line-182  react-line-number react-code-text" style="padding-right:16px">185</div><div data-line-number="186" class="child-of-line-182  react-line-number react-code-text" style="padding-right:16px">186</div><div data-line-number="187" class="child-of-line-182  react-line-number react-code-text" style="padding-right:16px">187</div><div data-line-number="188" class="child-of-line-182  react-line-number react-code-text" style="padding-right:16px">188</div><div data-line-number="189" class="child-of-line-182  react-line-number react-code-text" style="padding-right:16px">189</div><div data-line-number="190" class="child-of-line-182  react-line-number react-code-text" style="padding-right:16px">190</div><div data-line-number="191" class="child-of-line-182  react-line-number react-code-text" style="padding-right:16px">191</div><div data-line-number="192" class="child-of-line-182  react-line-number react-code-text" style="padding-right:16px">192</div><div data-line-number="193" class="child-of-line-182  react-line-number react-code-text" style="padding-right:16px">193</div><div data-line-number="194" class="child-of-line-182  react-line-number react-code-text" style="padding-right:16px">194</div><div data-line-number="195" class="react-line-number react-code-text" style="padding-right:16px">195</div><div data-line-number="196" class="react-line-number react-code-text" style="padding-right:16px">196</div><div data-line-number="197" class="react-line-number react-code-text" style="padding-right:16px">197</div><div data-line-number="198" class="react-line-number react-code-text" style="padding-right:16px">198</div><div data-line-number="199" class="react-line-number react-code-text" style="padding-right:16px">199</div><div data-line-number="200" class="react-line-number react-code-text" style="padding-right:16px">200<span class="Box-sc-62in7e-0 gTgIBo"><div aria-label="Collapse code section" role="button" class="Box-sc-62in7e-0 bzYYiL"><svg aria-hidden="true" focusable="false" class="octicon octicon-chevron-down" viewBox="0 0 16 16" width="16" height="16" fill="currentColor" display="inline-block" overflow="visible" style="vertical-align:text-bottom"><path d="M12.78 5.22a.749.749 0 0 1 0 1.06l-4.25 4.25a.749.749 0 0 1-1.06 0L3.22 6.28a.749.749 0 1 1 1.06-1.06L8 8.939l3.72-3.719a.749.749 0 0 1 1.06 0Z"></path></svg></div></span></div><div data-line-number="201" class="child-of-line-199  react-line-number react-code-text" style="padding-right:16px">201</div><div data-line-number="202" class="child-of-line-199  react-line-number react-code-text" style="padding-right:16px">202</div><div data-line-number="203" class="child-of-line-199  react-line-number react-code-text" style="padding-right:16px">203</div><div data-line-number="204" class="child-of-line-199  react-line-number react-code-text" style="padding-right:16px">204</div><div data-line-number="205" class="child-of-line-199  react-line-number react-code-text" style="padding-right:16px">205</div><div data-line-number="206" class="child-of-line-199  react-line-number react-code-text" style="padding-right:16px">206</div><div data-line-number="207" class="child-of-line-199  react-line-number react-code-text" style="padding-right:16px">207</div><div data-line-number="208" class="child-of-line-199  react-line-number react-code-text" style="padding-right:16px">208</div><div data-line-number="209" class="child-of-line-199  react-line-number react-code-text" style="padding-right:16px">209</div><div data-line-number="210" class="react-line-number react-code-text" style="padding-right:16px">210</div><div data-line-number="211" class="react-line-number react-code-text" style="padding-right:16px">211</div><div data-line-number="212" class="react-line-number react-code-text" style="padding-right:16px">212</div><div data-line-number="213" class="react-line-number react-code-text" style="padding-right:16px">213</div><div data-line-number="214" class="react-line-number react-code-text" style="padding-right:16px">214</div><div data-line-number="215" class="react-line-number react-code-text" style="padding-right:16px">215<span class="Box-sc-62in7e-0 gTgIBo"><div aria-label="Collapse code section" role="button" class="Box-sc-62in7e-0 bzYYiL"><svg aria-hidden="true" focusable="false" class="octicon octicon-chevron-down" viewBox="0 0 16 16" width="16" height="16" fill="currentColor" display="inline-block" overflow="visible" style="vertical-align:text-bottom"><path d="M12.78 5.22a.749.749 0 0 1 0 1.06l-4.25 4.25a.749.749 0 0 1-1.06 0L3.22 6.28a.749.749 0 1 1 1.06-1.06L8 8.939l3.72-3.719a.749.749 0 0 1 1.06 0Z"></path></svg></div></span></div><div data-line-number="216" class="child-of-line-214  react-line-number react-code-text" style="padding-right:16px">216</div><div data-line-number="217" class="child-of-line-214  react-line-number react-code-text" style="padding-right:16px">217</div><div data-line-number="218" class="child-of-line-214  react-line-number react-code-text" style="padding-right:16px">218</div><div data-line-number="219" class="child-of-line-214  react-line-number react-code-text" style="padding-right:16px">219</div><div data-line-number="220" class="child-of-line-214  react-line-number react-code-text" style="padding-right:16px">220</div><div data-line-number="221" class="child-of-line-214  react-line-number react-code-text" style="padding-right:16px">221</div><div data-line-number="222" class="child-of-line-214  react-line-number react-code-text" style="padding-right:16px">222</div><div data-line-number="223" class="child-of-line-214  react-line-number react-code-text" style="padding-right:16px">223</div><div data-line-number="224" class="child-of-line-214  react-line-number react-code-text" style="padding-right:16px">224</div><div data-line-number="225" class="child-of-line-214  react-line-number react-code-text" style="padding-right:16px">225</div><div data-line-number="226" class="child-of-line-214  react-line-number react-code-text" style="padding-right:16px">226</div><div data-line-number="227" class="child-of-line-214  react-line-number react-code-text" style="padding-right:16px">227</div><div data-line-number="228" class="child-of-line-214  react-line-number react-code-text" style="padding-right:16px">228</div><div data-line-number="229" class="child-of-line-214  react-line-number react-code-text" style="padding-right:16px">229</div><div data-line-number="230" class="child-of-line-214  react-line-number react-code-text" style="padding-right:16px">230</div><div data-line-number="231" class="child-of-line-214  react-line-number react-code-text" style="padding-right:16px">231</div><div data-line-number="232" class="child-of-line-214  react-line-number react-code-text" style="padding-right:16px">232</div><div data-line-number="233" class="react-line-number react-code-text" style="padding-right:16px">233</div><div data-line-number="234" class="react-line-number react-code-text" style="padding-right:16px">234</div><div data-line-number="235" class="react-line-number react-code-text" style="padding-right:16px">235</div><div data-line-number="236" class="react-line-number react-code-text" style="padding-right:16px">236</div><div data-line-number="237" class="react-line-number react-code-text" style="padding-right:16px">237</div><div data-line-number="238" class="react-line-number react-code-text" style="padding-right:16px">238<span class="Box-sc-62in7e-0 gTgIBo"><div aria-label="Collapse code section" role="button" class="Box-sc-62in7e-0 bzYYiL"><svg aria-hidden="true" focusable="false" class="octicon octicon-chevron-down" viewBox="0 0 16 16" width="16" height="16" fill="currentColor" display="inline-block" overflow="visible" style="vertical-align:text-bottom"><path d="M12.78 5.22a.749.749 0 0 1 0 1.06l-4.25 4.25a.749.749 0 0 1-1.06 0L3.22 6.28a.749.749 0 1 1 1.06-1.06L8 8.939l3.72-3.719a.749.749 0 0 1 1.06 0Z"></path></svg></div></span></div><div data-line-number="239" class="child-of-line-237  react-line-number react-code-text" style="padding-right:16px">239</div><div data-line-number="240" class="child-of-line-237  react-line-number react-code-text" style="padding-right:16px">240</div></div><div class="react-no-virtualization-wrapper-lines-ssr"><div data-line-number="241" class="child-of-line-237  react-line-number react-code-text" style="padding-right:16px">241</div><div data-line-number="242" class="child-of-line-237  react-line-number react-code-text" style="padding-right:16px">242</div><div data-line-number="243" class="child-of-line-237  react-line-number react-code-text" style="padding-right:16px">243</div><div data-line-number="244" class="child-of-line-237  react-line-number react-code-text" style="padding-right:16px">244</div><div data-line-number="245" class="child-of-line-237  react-line-number react-code-text" style="padding-right:16px">245</div><div data-line-number="246" class="child-of-line-237  react-line-number react-code-text" style="padding-right:16px">246</div><div data-line-number="247" class="child-of-line-237  react-line-number react-code-text" style="padding-right:16px">247</div><div data-line-number="248" class="child-of-line-237  react-line-number react-code-text" style="padding-right:16px">248</div><div data-line-number="249" class="child-of-line-237  react-line-number react-code-text" style="padding-right:16px">249</div><div data-line-number="250" class="child-of-line-237  react-line-number react-code-text" style="padding-right:16px">250</div><div data-line-number="251" class="child-of-line-237  react-line-number react-code-text" style="padding-right:16px">251</div><div data-line-number="252" class="child-of-line-237  react-line-number react-code-text" style="padding-right:16px">252</div><div data-line-number="253" class="child-of-line-237  react-line-number react-code-text" style="padding-right:16px">253</div><div data-line-number="254" class="child-of-line-237  react-line-number react-code-text" style="padding-right:16px">254</div><div data-line-number="255" class="child-of-line-237  react-line-number react-code-text" style="padding-right:16px">255</div><div data-line-number="256" class="child-of-line-237  react-line-number react-code-text" style="padding-right:16px">256</div><div data-line-number="257" class="child-of-line-237  react-line-number react-code-text" style="padding-right:16px">257</div><div data-line-number="258" class="child-of-line-237  react-line-number react-code-text" style="padding-right:16px">258</div><div data-line-number="259" class="child-of-line-237  react-line-number react-code-text" style="padding-right:16px">259</div><div data-line-number="260" class="child-of-line-237  react-line-number react-code-text" style="padding-right:16px">260</div><div data-line-number="261" class="child-of-line-237  react-line-number react-code-text" style="padding-right:16px">261</div><div data-line-number="262" class="child-of-line-237  react-line-number react-code-text" style="padding-right:16px">262</div><div data-line-number="263" class="child-of-line-237  react-line-number react-code-text" style="padding-right:16px">263</div><div data-line-number="264" class="child-of-line-237  react-line-number react-code-text" style="padding-right:16px">264</div><div data-line-number="265" class="child-of-line-237  react-line-number react-code-text" style="padding-right:16px">265</div><div data-line-number="266" class="child-of-line-237  react-line-number react-code-text" style="padding-right:16px">266</div><div data-line-number="267" class="child-of-line-237  react-line-number react-code-text" style="padding-right:16px">267</div><div data-line-number="268" class="child-of-line-237  react-line-number react-code-text" style="padding-right:16px">268</div><div data-line-number="269" class="child-of-line-237  react-line-number react-code-text" style="padding-right:16px">269</div><div data-line-number="270" class="child-of-line-237  react-line-number react-code-text" style="padding-right:16px">270</div><div data-line-number="271" class="react-line-number react-code-text" style="padding-right:16px">271</div><div data-line-number="272" class="react-line-number react-code-text" style="padding-right:16px">272</div><div data-line-number="273" class="react-line-number react-code-text" style="padding-right:16px">273</div><div data-line-number="274" class="react-line-number react-code-text" style="padding-right:16px">274</div><div data-line-number="275" class="react-line-number react-code-text" style="padding-right:16px">275</div><div data-line-number="276" class="react-line-number react-code-text" style="padding-right:16px">276<span class="Box-sc-62in7e-0 gTgIBo"><div aria-label="Collapse code section" role="button" class="Box-sc-62in7e-0 bzYYiL"><svg aria-hidden="true" focusable="false" class="octicon octicon-chevron-down" viewBox="0 0 16 16" width="16" height="16" fill="currentColor" display="inline-block" overflow="visible" style="vertical-align:text-bottom"><path d="M12.78 5.22a.749.749 0 0 1 0 1.06l-4.25 4.25a.749.749 0 0 1-1.06 0L3.22 6.28a.749.749 0 1 1 1.06-1.06L8 8.939l3.72-3.719a.749.749 0 0 1 1.06 0Z"></path></svg></div></span></div><div data-line-number="277" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">277</div><div data-line-number="278" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">278</div><div data-line-number="279" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">279</div><div data-line-number="280" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">280</div><div data-line-number="281" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">281</div><div data-line-number="282" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">282</div><div data-line-number="283" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">283</div><div data-line-number="284" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">284</div><div data-line-number="285" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">285</div><div data-line-number="286" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">286</div><div data-line-number="287" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">287</div><div data-line-number="288" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">288</div><div data-line-number="289" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">289</div><div data-line-number="290" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">290</div><div data-line-number="291" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">291</div><div data-line-number="292" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">292</div><div data-line-number="293" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">293</div><div data-line-number="294" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">294</div><div data-line-number="295" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">295</div><div data-line-number="296" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">296</div><div data-line-number="297" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">297</div><div data-line-number="298" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">298</div><div data-line-number="299" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">299</div><div data-line-number="300" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">300</div></div><div class="react-no-virtualization-wrapper-lines-ssr"><div data-line-number="301" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">301</div><div data-line-number="302" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">302</div><div data-line-number="303" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">303</div><div data-line-number="304" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">304</div><div data-line-number="305" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">305</div><div data-line-number="306" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">306</div><div data-line-number="307" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">307</div><div data-line-number="308" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">308</div><div data-line-number="309" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">309</div><div data-line-number="310" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">310</div><div data-line-number="311" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">311</div><div data-line-number="312" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">312</div><div data-line-number="313" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">313</div><div data-line-number="314" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">314</div><div data-line-number="315" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">315</div><div data-line-number="316" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">316</div><div data-line-number="317" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">317</div><div data-line-number="318" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">318</div><div data-line-number="319" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">319</div><div data-line-number="320" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">320</div><div data-line-number="321" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">321</div><div data-line-number="322" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">322</div><div data-line-number="323" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">323</div><div data-line-number="324" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">324</div><div data-line-number="325" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">325</div><div data-line-number="326" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">326</div><div data-line-number="327" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">327</div><div data-line-number="328" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">328</div><div data-line-number="329" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">329</div><div data-line-number="330" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">330</div><div data-line-number="331" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">331</div><div data-line-number="332" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">332</div><div data-line-number="333" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">333</div><div data-line-number="334" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">334</div><div data-line-number="335" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">335</div><div data-line-number="336" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">336</div><div data-line-number="337" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">337</div><div data-line-number="338" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">338</div><div data-line-number="339" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">339</div><div data-line-number="340" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">340</div><div data-line-number="341" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">341</div><div data-line-number="342" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">342</div><div data-line-number="343" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">343</div><div data-line-number="344" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">344</div><div data-line-number="345" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">345</div><div data-line-number="346" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">346</div><div data-line-number="347" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">347</div><div data-line-number="348" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">348</div><div data-line-number="349" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">349</div><div data-line-number="350" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">350</div><div data-line-number="351" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">351</div><div data-line-number="352" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">352</div><div data-line-number="353" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">353</div><div data-line-number="354" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">354</div><div data-line-number="355" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">355</div><div data-line-number="356" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">356</div><div data-line-number="357" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">357</div><div data-line-number="358" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">358</div><div data-line-number="359" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">359</div><div data-line-number="360" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">360</div></div><div class="react-no-virtualization-wrapper-lines-ssr"><div data-line-number="361" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">361</div><div data-line-number="362" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">362</div><div data-line-number="363" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">363</div><div data-line-number="364" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">364</div><div data-line-number="365" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">365</div><div data-line-number="366" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">366</div><div data-line-number="367" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">367</div><div data-line-number="368" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">368</div><div data-line-number="369" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">369</div><div data-line-number="370" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">370</div><div data-line-number="371" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">371</div><div data-line-number="372" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">372</div><div data-line-number="373" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">373</div><div data-line-number="374" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">374</div><div data-line-number="375" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">375</div><div data-line-number="376" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">376</div><div data-line-number="377" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">377</div><div data-line-number="378" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">378</div><div data-line-number="379" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">379</div><div data-line-number="380" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">380</div><div data-line-number="381" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">381</div><div data-line-number="382" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">382</div><div data-line-number="383" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">383</div><div data-line-number="384" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">384</div><div data-line-number="385" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">385</div><div data-line-number="386" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">386</div><div data-line-number="387" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">387</div><div data-line-number="388" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">388</div><div data-line-number="389" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">389</div><div data-line-number="390" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">390</div><div data-line-number="391" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">391</div><div data-line-number="392" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">392</div><div data-line-number="393" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">393</div><div data-line-number="394" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">394</div><div data-line-number="395" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">395</div><div data-line-number="396" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">396</div><div data-line-number="397" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">397</div><div data-line-number="398" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">398</div><div data-line-number="399" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">399</div><div data-line-number="400" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">400</div><div data-line-number="401" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">401</div><div data-line-number="402" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">402</div><div data-line-number="403" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">403</div><div data-line-number="404" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">404</div><div data-line-number="405" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">405</div><div data-line-number="406" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">406</div><div data-line-number="407" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">407</div><div data-line-number="408" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">408</div><div data-line-number="409" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">409</div><div data-line-number="410" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">410</div><div data-line-number="411" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">411</div><div data-line-number="412" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">412</div><div data-line-number="413" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">413</div><div data-line-number="414" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">414</div><div data-line-number="415" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">415</div><div data-line-number="416" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">416</div><div data-line-number="417" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">417</div><div data-line-number="418" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">418</div><div data-line-number="419" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">419</div><div data-line-number="420" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">420</div></div><div class="react-no-virtualization-wrapper-lines-ssr"><div data-line-number="421" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">421</div><div data-line-number="422" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">422</div><div data-line-number="423" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">423</div><div data-line-number="424" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">424</div><div data-line-number="425" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">425</div><div data-line-number="426" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">426</div><div data-line-number="427" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">427</div><div data-line-number="428" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">428</div><div data-line-number="429" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">429</div><div data-line-number="430" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">430</div><div data-line-number="431" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">431</div><div data-line-number="432" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">432</div><div data-line-number="433" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">433</div><div data-line-number="434" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">434</div><div data-line-number="435" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">435</div><div data-line-number="436" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">436</div><div data-line-number="437" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">437</div><div data-line-number="438" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">438</div><div data-line-number="439" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">439</div><div data-line-number="440" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">440</div><div data-line-number="441" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">441</div><div data-line-number="442" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">442</div><div data-line-number="443" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">443</div><div data-line-number="444" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">444</div><div data-line-number="445" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">445</div><div data-line-number="446" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">446</div><div data-line-number="447" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">447</div><div data-line-number="448" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">448</div><div data-line-number="449" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">449</div><div data-line-number="450" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">450</div><div data-line-number="451" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">451</div><div data-line-number="452" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">452</div><div data-line-number="453" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">453</div><div data-line-number="454" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">454</div><div data-line-number="455" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">455</div><div data-line-number="456" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">456</div><div data-line-number="457" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">457</div><div data-line-number="458" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">458</div><div data-line-number="459" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">459</div><div data-line-number="460" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">460</div><div data-line-number="461" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">461</div><div data-line-number="462" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">462</div><div data-line-number="463" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">463</div><div data-line-number="464" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">464</div><div data-line-number="465" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">465</div><div data-line-number="466" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">466</div><div data-line-number="467" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">467</div><div data-line-number="468" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">468</div><div data-line-number="469" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">469</div><div data-line-number="470" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">470</div><div data-line-number="471" class="child-of-line-275  react-line-number react-code-text" style="padding-right:16px">471</div><div data-line-number="472" class="react-line-number react-code-text" style="padding-right:16px">472</div><div data-line-number="473" class="react-line-number react-code-text" style="padding-right:16px">473</div><div data-line-number="474" class="react-line-number react-code-text" style="padding-right:16px">474</div><div data-line-number="475" class="react-line-number react-code-text" style="padding-right:16px">475</div><div data-line-number="476" class="react-line-number react-code-text" style="padding-right:16px">476</div><div data-line-number="477" class="react-line-number react-code-text" style="padding-right:16px">477<span class="Box-sc-62in7e-0 gTgIBo"><div aria-label="Collapse code section" role="button" class="Box-sc-62in7e-0 bzYYiL"><svg aria-hidden="true" focusable="false" class="octicon octicon-chevron-down" viewBox="0 0 16 16" width="16" height="16" fill="currentColor" display="inline-block" overflow="visible" style="vertical-align:text-bottom"><path d="M12.78 5.22a.749.749 0 0 1 0 1.06l-4.25 4.25a.749.749 0 0 1-1.06 0L3.22 6.28a.749.749 0 1 1 1.06-1.06L8 8.939l3.72-3.719a.749.749 0 0 1 1.06 0Z"></path></svg></div></span></div><div data-line-number="478" class="child-of-line-476  react-line-number react-code-text" style="padding-right:16px">478</div><div data-line-number="479" class="child-of-line-476  react-line-number react-code-text" style="padding-right:16px">479</div><div data-line-number="480" class="child-of-line-476  react-line-number react-code-text" style="padding-right:16px">480</div></div><div class="react-no-virtualization-wrapper-lines-ssr"><div data-line-number="481" class="child-of-line-476  react-line-number react-code-text" style="padding-right:16px">481</div><div data-line-number="482" class="child-of-line-476  react-line-number react-code-text" style="padding-right:16px">482</div><div data-line-number="483" class="child-of-line-476  react-line-number react-code-text" style="padding-right:16px">483</div><div data-line-number="484" class="child-of-line-476  react-line-number react-code-text" style="padding-right:16px">484</div><div data-line-number="485" class="child-of-line-476  react-line-number react-code-text" style="padding-right:16px">485</div><div data-line-number="486" class="child-of-line-476  react-line-number react-code-text" style="padding-right:16px">486</div><div data-line-number="487" class="child-of-line-476  react-line-number react-code-text" style="padding-right:16px">487</div><div data-line-number="488" class="child-of-line-476  react-line-number react-code-text" style="padding-right:16px">488</div><div data-line-number="489" class="child-of-line-476  react-line-number react-code-text" style="padding-right:16px">489</div><div data-line-number="490" class="child-of-line-476  react-line-number react-code-text" style="padding-right:16px">490</div><div data-line-number="491" class="child-of-line-476  react-line-number react-code-text" style="padding-right:16px">491</div><div data-line-number="492" class="child-of-line-476  react-line-number react-code-text" style="padding-right:16px">492</div><div data-line-number="493" class="child-of-line-476  react-line-number react-code-text" style="padding-right:16px">493</div><div data-line-number="494" class="child-of-line-476  react-line-number react-code-text" style="padding-right:16px">494</div><div data-line-number="495" class="child-of-line-476  react-line-number react-code-text" style="padding-right:16px">495</div><div data-line-number="496" class="child-of-line-476  react-line-number react-code-text" style="padding-right:16px">496</div><div data-line-number="497" class="child-of-line-476  react-line-number react-code-text" style="padding-right:16px">497</div><div data-line-number="498" class="child-of-line-476  react-line-number react-code-text" style="padding-right:16px">498</div><div data-line-number="499" class="child-of-line-476  react-line-number react-code-text" style="padding-right:16px">499</div><div data-line-number="500" class="child-of-line-476  react-line-number react-code-text" style="padding-right:16px">500</div><div data-line-number="501" class="child-of-line-476  react-line-number react-code-text" style="padding-right:16px">501</div><div data-line-number="502" class="child-of-line-476  react-line-number react-code-text" style="padding-right:16px">502</div><div data-line-number="503" class="child-of-line-476  react-line-number react-code-text" style="padding-right:16px">503</div><div data-line-number="504" class="child-of-line-476  react-line-number react-code-text" style="padding-right:16px">504</div><div data-line-number="505" class="child-of-line-476  react-line-number react-code-text" style="padding-right:16px">505</div><div data-line-number="506" class="child-of-line-476  react-line-number react-code-text" style="padding-right:16px">506</div><div data-line-number="507" class="react-line-number react-code-text" style="padding-right:16px">507</div><div data-line-number="508" class="react-line-number react-code-text" style="padding-right:16px">508</div><div data-line-number="509" class="react-line-number react-code-text" style="padding-right:16px">509</div><div data-line-number="510" class="react-line-number react-code-text" style="padding-right:16px">510</div><div data-line-number="511" class="react-line-number react-code-text" style="padding-right:16px">511</div><div data-line-number="512" class="react-line-number react-code-text" style="padding-right:16px">512<span class="Box-sc-62in7e-0 gTgIBo"><div aria-label="Collapse code section" role="button" class="Box-sc-62in7e-0 bzYYiL"><svg aria-hidden="true" focusable="false" class="octicon octicon-chevron-down" viewBox="0 0 16 16" width="16" height="16" fill="currentColor" display="inline-block" overflow="visible" style="vertical-align:text-bottom"><path d="M12.78 5.22a.749.749 0 0 1 0 1.06l-4.25 4.25a.749.749 0 0 1-1.06 0L3.22 6.28a.749.749 0 1 1 1.06-1.06L8 8.939l3.72-3.719a.749.749 0 0 1 1.06 0Z"></path></svg></div></span></div><div data-line-number="513" class="child-of-line-511  react-line-number react-code-text" style="padding-right:16px">513</div><div data-line-number="514" class="child-of-line-511  react-line-number react-code-text" style="padding-right:16px">514</div><div data-line-number="515" class="child-of-line-511  react-line-number react-code-text" style="padding-right:16px">515</div><div data-line-number="516" class="child-of-line-511  react-line-number react-code-text" style="padding-right:16px">516</div><div data-line-number="517" class="child-of-line-511  react-line-number react-code-text" style="padding-right:16px">517</div><div data-line-number="518" class="child-of-line-511  react-line-number react-code-text" style="padding-right:16px">518</div><div data-line-number="519" class="child-of-line-511  react-line-number react-code-text" style="padding-right:16px">519</div><div data-line-number="520" class="child-of-line-511  react-line-number react-code-text" style="padding-right:16px">520</div><div data-line-number="521" class="child-of-line-511  react-line-number react-code-text" style="padding-right:16px">521</div><div data-line-number="522" class="child-of-line-511  react-line-number react-code-text" style="padding-right:16px">522</div><div data-line-number="523" class="child-of-line-511  react-line-number react-code-text" style="padding-right:16px">523</div><div data-line-number="524" class="child-of-line-511  react-line-number react-code-text" style="padding-right:16px">524</div><div data-line-number="525" class="child-of-line-511  react-line-number react-code-text" style="padding-right:16px">525</div><div data-line-number="526" class="child-of-line-511  react-line-number react-code-text" style="padding-right:16px">526</div><div data-line-number="527" class="child-of-line-511  react-line-number react-code-text" style="padding-right:16px">527</div><div data-line-number="528" class="child-of-line-511  react-line-number react-code-text" style="padding-right:16px">528</div><div data-line-number="529" class="child-of-line-511  react-line-number react-code-text" style="padding-right:16px">529</div><div data-line-number="530" class="child-of-line-511  react-line-number react-code-text" style="padding-right:16px">530</div><div data-line-number="531" class="child-of-line-511  react-line-number react-code-text" style="padding-right:16px">531</div><div data-line-number="532" class="child-of-line-511  react-line-number react-code-text" style="padding-right:16px">532</div><div data-line-number="533" class="react-line-number react-code-text" style="padding-right:16px">533</div><div data-line-number="534" class="react-line-number react-code-text" style="padding-right:16px">534</div><div data-line-number="535" class="react-line-number react-code-text" style="padding-right:16px">535</div><div data-line-number="536" class="react-line-number react-code-text" style="padding-right:16px">536</div><div data-line-number="537" class="react-line-number react-code-text" style="padding-right:16px">537</div><div data-line-number="538" class="react-line-number react-code-text" style="padding-right:16px">538<span class="Box-sc-62in7e-0 gTgIBo"><div aria-label="Collapse code section" role="button" class="Box-sc-62in7e-0 bzYYiL"><svg aria-hidden="true" focusable="false" class="octicon octicon-chevron-down" viewBox="0 0 16 16" width="16" height="16" fill="currentColor" display="inline-block" overflow="visible" style="vertical-align:text-bottom"><path d="M12.78 5.22a.749.749 0 0 1 0 1.06l-4.25 4.25a.749.749 0 0 1-1.06 0L3.22 6.28a.749.749 0 1 1 1.06-1.06L8 8.939l3.72-3.719a.749.749 0 0 1 1.06 0Z"></path></svg></div></span></div><div data-line-number="539" class="child-of-line-537  react-line-number react-code-text" style="padding-right:16px">539</div><div data-line-number="540" class="child-of-line-537  react-line-number react-code-text" style="padding-right:16px">540</div></div><div class="react-no-virtualization-wrapper-lines-ssr"><div data-line-number="541" class="child-of-line-537  react-line-number react-code-text" style="padding-right:16px">541</div><div data-line-number="542" class="child-of-line-537  react-line-number react-code-text" style="padding-right:16px">542</div><div data-line-number="543" class="child-of-line-537  react-line-number react-code-text" style="padding-right:16px">543</div><div data-line-number="544" class="child-of-line-537  react-line-number react-code-text" style="padding-right:16px">544</div><div data-line-number="545" class="child-of-line-537  react-line-number react-code-text" style="padding-right:16px">545</div><div data-line-number="546" class="child-of-line-537  react-line-number react-code-text" style="padding-right:16px">546</div><div data-line-number="547" class="child-of-line-537  react-line-number react-code-text" style="padding-right:16px">547</div><div data-line-number="548" class="react-line-number react-code-text" style="padding-right:16px">548</div><div data-line-number="549" class="react-line-number react-code-text" style="padding-right:16px">549</div><div data-line-number="550" class="react-line-number react-code-text" style="padding-right:16px">550</div><div data-line-number="551" class="react-line-number react-code-text" style="padding-right:16px">551</div><div data-line-number="552" class="react-line-number react-code-text" style="padding-right:16px">552</div><div data-line-number="553" class="react-line-number react-code-text" style="padding-right:16px">553<span class="Box-sc-62in7e-0 gTgIBo"><div aria-label="Collapse code section" role="button" class="Box-sc-62in7e-0 bzYYiL"><svg aria-hidden="true" focusable="false" class="octicon octicon-chevron-down" viewBox="0 0 16 16" width="16" height="16" fill="currentColor" display="inline-block" overflow="visible" style="vertical-align:text-bottom"><path d="M12.78 5.22a.749.749 0 0 1 0 1.06l-4.25 4.25a.749.749 0 0 1-1.06 0L3.22 6.28a.749.749 0 1 1 1.06-1.06L8 8.939l3.72-3.719a.749.749 0 0 1 1.06 0Z"></path></svg></div></span></div><div data-line-number="554" class="child-of-line-552  react-line-number react-code-text" style="padding-right:16px">554</div><div data-line-number="555" class="child-of-line-552  react-line-number react-code-text" style="padding-right:16px">555</div><div data-line-number="556" class="child-of-line-552  react-line-number react-code-text" style="padding-right:16px">556</div><div data-line-number="557" class="child-of-line-552  react-line-number react-code-text" style="padding-right:16px">557</div><div data-line-number="558" class="child-of-line-552  react-line-number react-code-text" style="padding-right:16px">558</div><div data-line-number="559" class="child-of-line-552  react-line-number react-code-text" style="padding-right:16px">559</div><div data-line-number="560" class="child-of-line-552  react-line-number react-code-text" style="padding-right:16px">560</div><div data-line-number="561" class="child-of-line-552  react-line-number react-code-text" style="padding-right:16px">561</div><div data-line-number="562" class="child-of-line-552  react-line-number react-code-text" style="padding-right:16px">562</div><div data-line-number="563" class="child-of-line-552  react-line-number react-code-text" style="padding-right:16px">563</div><div data-line-number="564" class="child-of-line-552  react-line-number react-code-text" style="padding-right:16px">564</div><div data-line-number="565" class="child-of-line-552  react-line-number react-code-text" style="padding-right:16px">565</div><div data-line-number="566" class="child-of-line-552  react-line-number react-code-text" style="padding-right:16px">566</div><div data-line-number="567" class="child-of-line-552  react-line-number react-code-text" style="padding-right:16px">567</div><div data-line-number="568" class="child-of-line-552  react-line-number react-code-text" style="padding-right:16px">568</div><div data-line-number="569" class="child-of-line-552  react-line-number react-code-text" style="padding-right:16px">569</div><div data-line-number="570" class="child-of-line-552  react-line-number react-code-text" style="padding-right:16px">570</div><div data-line-number="571" class="child-of-line-552  react-line-number react-code-text" style="padding-right:16px">571</div><div data-line-number="572" class="child-of-line-552  react-line-number react-code-text" style="padding-right:16px">572</div><div data-line-number="573" class="child-of-line-552  react-line-number react-code-text" style="padding-right:16px">573</div><div data-line-number="574" class="child-of-line-552  react-line-number react-code-text" style="padding-right:16px">574</div><div data-line-number="575" class="child-of-line-552  react-line-number react-code-text" style="padding-right:16px">575</div><div data-line-number="576" class="react-line-number react-code-text" style="padding-right:16px">576</div><div data-line-number="577" class="react-line-number react-code-text" style="padding-right:16px">577</div><div data-line-number="578" class="react-line-number react-code-text" style="padding-right:16px">578</div><div data-line-number="579" class="react-line-number react-code-text" style="padding-right:16px">579</div><div data-line-number="580" class="react-line-number react-code-text" style="padding-right:16px">580</div><div data-line-number="581" class="react-line-number react-code-text" style="padding-right:16px">581<span class="Box-sc-62in7e-0 gTgIBo"><div aria-label="Collapse code section" role="button" class="Box-sc-62in7e-0 bzYYiL"><svg aria-hidden="true" focusable="false" class="octicon octicon-chevron-down" viewBox="0 0 16 16" width="16" height="16" fill="currentColor" display="inline-block" overflow="visible" style="vertical-align:text-bottom"><path d="M12.78 5.22a.749.749 0 0 1 0 1.06l-4.25 4.25a.749.749 0 0 1-1.06 0L3.22 6.28a.749.749 0 1 1 1.06-1.06L8 8.939l3.72-3.719a.749.749 0 0 1 1.06 0Z"></path></svg></div></span></div><div data-line-number="582" class="child-of-line-580  react-line-number react-code-text" style="padding-right:16px">582</div><div data-line-number="583" class="child-of-line-580  react-line-number react-code-text" style="padding-right:16px">583</div><div data-line-number="584" class="child-of-line-580  react-line-number react-code-text" style="padding-right:16px">584</div><div data-line-number="585" class="child-of-line-580  react-line-number react-code-text" style="padding-right:16px">585</div><div data-line-number="586" class="child-of-line-580  react-line-number react-code-text" style="padding-right:16px">586</div><div data-line-number="587" class="child-of-line-580  react-line-number react-code-text" style="padding-right:16px">587</div><div data-line-number="588" class="child-of-line-580  react-line-number react-code-text" style="padding-right:16px">588</div><div data-line-number="589" class="child-of-line-580  react-line-number react-code-text" style="padding-right:16px">589</div><div data-line-number="590" class="child-of-line-580  react-line-number react-code-text" style="padding-right:16px">590</div><div data-line-number="591" class="child-of-line-580  react-line-number react-code-text" style="padding-right:16px">591</div><div data-line-number="592" class="child-of-line-580  react-line-number react-code-text" style="padding-right:16px">592</div><div data-line-number="593" class="child-of-line-580  react-line-number react-code-text" style="padding-right:16px">593</div><div data-line-number="594" class="child-of-line-580  react-line-number react-code-text" style="padding-right:16px">594</div><div data-line-number="595" class="child-of-line-580  react-line-number react-code-text" style="padding-right:16px">595</div><div data-line-number="596" class="child-of-line-580  react-line-number react-code-text" style="padding-right:16px">596</div><div data-line-number="597" class="child-of-line-580  react-line-number react-code-text" style="padding-right:16px">597</div><div data-line-number="598" class="child-of-line-580  react-line-number react-code-text" style="padding-right:16px">598</div><div data-line-number="599" class="child-of-line-580  react-line-number react-code-text" style="padding-right:16px">599</div><div data-line-number="600" class="child-of-line-580  react-line-number react-code-text" style="padding-right:16px">600</div></div><div class="react-no-virtualization-wrapper-lines-ssr"><div data-line-number="601" class="child-of-line-580  react-line-number react-code-text" style="padding-right:16px">601</div><div data-line-number="602" class="child-of-line-580  react-line-number react-code-text" style="padding-right:16px">602</div><div data-line-number="603" class="child-of-line-580  react-line-number react-code-text" style="padding-right:16px">603</div><div data-line-number="604" class="child-of-line-580  react-line-number react-code-text" style="padding-right:16px">604</div><div data-line-number="605" class="child-of-line-580  react-line-number react-code-text" style="padding-right:16px">605</div><div data-line-number="606" class="child-of-line-580  react-line-number react-code-text" style="padding-right:16px">606</div><div data-line-number="607" class="child-of-line-580  react-line-number react-code-text" style="padding-right:16px">607</div><div data-line-number="608" class="child-of-line-580  react-line-number react-code-text" style="padding-right:16px">608</div><div data-line-number="609" class="child-of-line-580  react-line-number react-code-text" style="padding-right:16px">609</div><div data-line-number="610" class="child-of-line-580  react-line-number react-code-text" style="padding-right:16px">610</div><div data-line-number="611" class="child-of-line-580  react-line-number react-code-text" style="padding-right:16px">611</div><div data-line-number="612" class="child-of-line-580  react-line-number react-code-text" style="padding-right:16px">612</div><div data-line-number="613" class="child-of-line-580  react-line-number react-code-text" style="padding-right:16px">613</div><div data-line-number="614" class="child-of-line-580  react-line-number react-code-text" style="padding-right:16px">614</div><div data-line-number="615" class="child-of-line-580  react-line-number react-code-text" style="padding-right:16px">615</div><div data-line-number="616" class="child-of-line-580  react-line-number react-code-text" style="padding-right:16px">616</div><div data-line-number="617" class="child-of-line-580  react-line-number react-code-text" style="padding-right:16px">617</div><div data-line-number="618" class="react-line-number react-code-text" style="padding-right:16px">618</div><div data-line-number="619" class="react-line-number react-code-text" style="padding-right:16px">619</div><div data-line-number="620" class="react-line-number react-code-text" style="padding-right:16px">620</div><div data-line-number="621" class="react-line-number react-code-text" style="padding-right:16px">621</div><div data-line-number="622" class="react-line-number react-code-text" style="padding-right:16px">622</div><div data-line-number="623" class="react-line-number react-code-text" style="padding-right:16px">623<span class="Box-sc-62in7e-0 gTgIBo"><div aria-label="Collapse code section" role="button" class="Box-sc-62in7e-0 bzYYiL"><svg aria-hidden="true" focusable="false" class="octicon octicon-chevron-down" viewBox="0 0 16 16" width="16" height="16" fill="currentColor" display="inline-block" overflow="visible" style="vertical-align:text-bottom"><path d="M12.78 5.22a.749.749 0 0 1 0 1.06l-4.25 4.25a.749.749 0 0 1-1.06 0L3.22 6.28a.749.749 0 1 1 1.06-1.06L8 8.939l3.72-3.719a.749.749 0 0 1 1.06 0Z"></path></svg></div></span></div><div data-line-number="624" class="child-of-line-622  react-line-number react-code-text" style="padding-right:16px">624</div><div data-line-number="625" class="child-of-line-622  react-line-number react-code-text" style="padding-right:16px">625</div><div data-line-number="626" class="child-of-line-622  react-line-number react-code-text" style="padding-right:16px">626</div><div data-line-number="627" class="child-of-line-622  react-line-number react-code-text" style="padding-right:16px">627</div><div data-line-number="628" class="child-of-line-622  react-line-number react-code-text" style="padding-right:16px">628</div><div data-line-number="629" class="child-of-line-622  react-line-number react-code-text" style="padding-right:16px">629</div><div data-line-number="630" class="child-of-line-622  react-line-number react-code-text" style="padding-right:16px">630</div><div data-line-number="631" class="child-of-line-622  react-line-number react-code-text" style="padding-right:16px">631</div><div data-line-number="632" class="child-of-line-622  react-line-number react-code-text" style="padding-right:16px">632</div><div data-line-number="633" class="child-of-line-622  react-line-number react-code-text" style="padding-right:16px">633</div><div data-line-number="634" class="child-of-line-622  react-line-number react-code-text" style="padding-right:16px">634</div><div data-line-number="635" class="child-of-line-622  react-line-number react-code-text" style="padding-right:16px">635</div><div data-line-number="636" class="child-of-line-622  react-line-number react-code-text" style="padding-right:16px">636</div><div data-line-number="637" class="child-of-line-622  react-line-number react-code-text" style="padding-right:16px">637</div><div data-line-number="638" class="child-of-line-622  react-line-number react-code-text" style="padding-right:16px">638</div><div data-line-number="639" class="child-of-line-622  react-line-number react-code-text" style="padding-right:16px">639</div><div data-line-number="640" class="child-of-line-622  react-line-number react-code-text" style="padding-right:16px">640</div><div data-line-number="641" class="child-of-line-622  react-line-number react-code-text" style="padding-right:16px">641</div><div data-line-number="642" class="child-of-line-622  react-line-number react-code-text" style="padding-right:16px">642</div><div data-line-number="643" class="child-of-line-622  react-line-number react-code-text" style="padding-right:16px">643</div><div data-line-number="644" class="child-of-line-622  react-line-number react-code-text" style="padding-right:16px">644</div><div data-line-number="645" class="child-of-line-622  react-line-number react-code-text" style="padding-right:16px">645</div><div data-line-number="646" class="child-of-line-622  react-line-number react-code-text" style="padding-right:16px">646</div><div data-line-number="647" class="child-of-line-622  react-line-number react-code-text" style="padding-right:16px">647</div><div data-line-number="648" class="child-of-line-622  react-line-number react-code-text" style="padding-right:16px">648</div><div data-line-number="649" class="child-of-line-622  react-line-number react-code-text" style="padding-right:16px">649</div><div data-line-number="650" class="child-of-line-622  react-line-number react-code-text" style="padding-right:16px">650</div><div data-line-number="651" class="child-of-line-622  react-line-number react-code-text" style="padding-right:16px">651</div><div data-line-number="652" class="child-of-line-622  react-line-number react-code-text" style="padding-right:16px">652</div><div data-line-number="653" class="child-of-line-622  react-line-number react-code-text" style="padding-right:16px">653</div><div data-line-number="654" class="child-of-line-622  react-line-number react-code-text" style="padding-right:16px">654</div><div data-line-number="655" class="child-of-line-622  react-line-number react-code-text" style="padding-right:16px">655</div><div data-line-number="656" class="child-of-line-622  react-line-number react-code-text" style="padding-right:16px">656</div><div data-line-number="657" class="child-of-line-622  react-line-number react-code-text" style="padding-right:16px">657</div><div data-line-number="658" class="child-of-line-622  react-line-number react-code-text" style="padding-right:16px">658</div><div data-line-number="659" class="child-of-line-622  react-line-number react-code-text" style="padding-right:16px">659</div><div data-line-number="660" class="child-of-line-622  react-line-number react-code-text" style="padding-right:16px">660</div></div><div class="react-no-virtualization-wrapper-lines-ssr"><div data-line-number="661" class="child-of-line-622  react-line-number react-code-text" style="padding-right:16px">661</div><div data-line-number="662" class="child-of-line-622  react-line-number react-code-text" style="padding-right:16px">662</div><div data-line-number="663" class="child-of-line-622  react-line-number react-code-text" style="padding-right:16px">663</div><div data-line-number="664" class="child-of-line-622  react-line-number react-code-text" style="padding-right:16px">664</div><div data-line-number="665" class="child-of-line-622  react-line-number react-code-text" style="padding-right:16px">665</div><div data-line-number="666" class="child-of-line-622  react-line-number react-code-text" style="padding-right:16px">666</div><div data-line-number="667" class="child-of-line-622  react-line-number react-code-text" style="padding-right:16px">667</div><div data-line-number="668" class="child-of-line-622  react-line-number react-code-text" style="padding-right:16px">668</div><div data-line-number="669" class="child-of-line-622  react-line-number react-code-text" style="padding-right:16px">669</div><div data-line-number="670" class="child-of-line-622  react-line-number react-code-text" style="padding-right:16px">670</div><div data-line-number="671" class="child-of-line-622  react-line-number react-code-text" style="padding-right:16px">671</div><div data-line-number="672" class="react-line-number react-code-text" style="padding-right:16px">672</div><div data-line-number="673" class="react-line-number react-code-text" style="padding-right:16px">673</div><div data-line-number="674" class="react-line-number react-code-text" style="padding-right:16px">674</div></div></div><div class="react-code-lines"><div><div id="LC1" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div "><span class="pl-c"><span class="pl-c">#!</span>/usr/bin/env bash</span></div>
+<div id="LC2" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div "><span class="pl-c1">set</span> -euo pipefail</div>
+<div id="LC3" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div ">
+</div>
+<div id="LC4" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div "><span class="pl-c"><span class="pl-c">#</span> ============================================================</span></div>
+<div id="LC5" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div "><span class="pl-c"><span class="pl-c">#</span> Veeam Software Appliance repository mirror script </span></div>
+<div id="LC6" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div "><span class="pl-c"><span class="pl-c">#</span></span></div>
+<div id="LC7" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div "><span class="pl-c"><span class="pl-c">#</span> This script orchestrates the complete setup of a local Veeam VSA</span></div>
+<div id="LC8" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div "><span class="pl-c"><span class="pl-c">#</span> package mirror infrastructure on RHEL-family systems. It:</span></div>
+<div id="LC9" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div "><span class="pl-c"><span class="pl-c">#</span></span></div>
+<div id="LC10" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div "><span class="pl-c"><span class="pl-c">#</span>   1) Partitions and mounts a dedicated XFS filesystem on extra data disk</span></div>
+<div id="LC11" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div "><span class="pl-c"><span class="pl-c">#</span>   2) Installs core packages (dnf-plugins-core, curl, nginx, SELinux tools, firewalld)</span></div>
+<div id="LC12" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div "><span class="pl-c"><span class="pl-c">#</span>   3) Creates /etc/yum.repos.d/veeam-vsa-upstream.repo with 3 repo definitions</span></div>
+<div id="LC13" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div "><span class="pl-c"><span class="pl-c">#</span>   4) Generates parameterized /usr/local/sbin/veeam-vsa-reposync.sh with injected configuration</span></div>
+<div id="LC14" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div "><span class="pl-c"><span class="pl-c">#</span>   5) Sets up repo directory with proper ownership and permissions</span></div>
+<div id="LC15" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div "><span class="pl-c"><span class="pl-c">#</span>   6) Configures nginx to serve mirror on port 80</span></div>
+<div id="LC16" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div "><span class="pl-c"><span class="pl-c">#</span>   7) Applies SELinux contexts and firewall rules</span></div>
+<div id="LC17" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div "><span class="pl-c"><span class="pl-c">#</span>   8) Creates systemd service + hourly timer for automated syncing</span></div>
+<div id="LC18" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div "><span class="pl-c"><span class="pl-c">#</span>   9) Validates available disk space for sync operations</span></div>
+<div id="LC19" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div "><span class="pl-c"><span class="pl-c">#</span>   10) Tests local HTTP connectivity to mirror paths</span></div>
+<div id="LC20" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div "><span class="pl-c"><span class="pl-c">#</span></span></div>
+<div id="LC21" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div "><span class="pl-c"><span class="pl-c">#</span> NOTE: This script sets up infrastructure only. Manual reposync trigger required:</span></div>
+<div id="LC22" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div "><span class="pl-c"><span class="pl-c">#</span>   sudo /usr/local/sbin/veeam-vsa-reposync.sh</span></div>
+<div id="LC23" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div "><span class="pl-c"><span class="pl-c">#</span></span></div>
+<div id="LC24" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div "><span class="pl-c"><span class="pl-c">#</span> Supported: RHEL / Rocky / Alma / CentOS Stream 9+ (incl. Rocky 10)</span></div>
+<div id="LC25" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div "><span class="pl-c"><span class="pl-c">#</span> NOT SUPPORTED: Debian / Ubuntu / SUSE / anything without dnf + reposync.</span></div>
+<div id="LC26" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div "><span class="pl-c"><span class="pl-c">#</span></span></div>
+<div id="LC27" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div "><span class="pl-c"><span class="pl-c">#</span> Created by MarvinFS wrapped up with AI assistance.</span></div>
+<div id="LC28" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div "><span class="pl-c"><span class="pl-c">#</span> This script is NOT officially provided by Veeam Software company or supported in any way.</span></div>
+<div id="LC29" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div "><span class="pl-c"><span class="pl-c">#</span> Strictly provided AS IS - use at your own discretion</span></div>
+<div id="LC30" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div "><span class="pl-c"><span class="pl-c">#</span> ============================================================</span></div>
+<div id="LC31" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div ">
+</div>
+<div id="LC32" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div "><span class="pl-c"><span class="pl-c">#</span> -------------------------</span></div>
+<div id="LC33" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div "><span class="pl-c"><span class="pl-c">#</span> CONFIG - EDIT IF NEEDED</span></div>
+<div id="LC34" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div "><span class="pl-c"><span class="pl-c">#</span> -------------------------</span></div>
+<div id="LC35" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div ">DATA_DEVICE=<span class="pl-s"><span class="pl-pds">&quot;</span>/dev/sdb<span class="pl-pds">&quot;</span></span>              <span class="pl-c"><span class="pl-c">#</span> disk to use for repo data (will be partitioned) I have added new drive to a VM 100GB</span></div>
+<div id="LC36" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div ">DATA_PARTITION=<span class="pl-s"><span class="pl-pds">&quot;</span><span class="pl-smi">${DATA_DEVICE}</span>1<span class="pl-pds">&quot;</span></span>    <span class="pl-c"><span class="pl-c">#</span> resulting partition </span></div>
+<div id="LC37" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div ">MOUNT_POINT=<span class="pl-s"><span class="pl-pds">&quot;</span>/mnt/data<span class="pl-pds">&quot;</span></span>             <span class="pl-c"><span class="pl-c">#</span> mount point for XFS</span></div>
+<div id="LC38" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div ">
+</div>
+<div id="LC39" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div ">REPO_ROOT=<span class="pl-s"><span class="pl-pds">&quot;</span><span class="pl-smi">${MOUNT_POINT}</span>/repo/repository.veeam.com<span class="pl-pds">&quot;</span></span></div>
+<div id="LC40" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div ">
+</div>
+<div id="LC41" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div ">OS_VERSION=<span class="pl-s"><span class="pl-pds">&quot;</span>9.2<span class="pl-pds">&quot;</span></span></div>
+<div id="LC42" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div ">VBR_VERSION=<span class="pl-s"><span class="pl-pds">&quot;</span>13.0<span class="pl-pds">&quot;</span></span></div>
+<div id="LC43" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div ">
+</div>
+<div id="LC44" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div "><span class="pl-c"><span class="pl-c">#</span> desired hostnames and IP which NGINX serves on port 80 (no SSL used, if needed, use any reverse proxy with SSL certs)</span></div>
+<div id="LC45" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div ">REPO_HOSTNAME_SHORT=<span class="pl-s"><span class="pl-pds">&quot;</span>veeamrepo<span class="pl-pds">&quot;</span></span></div>
+<div id="LC46" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div ">REPO_HOSTNAME_FQDN=<span class="pl-s"><span class="pl-pds">&quot;</span>veeamrepo.test.local<span class="pl-pds">&quot;</span></span></div>
+<div id="LC47" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div ">REPO_HOST_IP=<span class="pl-s"><span class="pl-pds">&quot;</span>192.168.1.54<span class="pl-pds">&quot;</span></span></div>
+<div id="LC48" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div ">
+</div>
+<div id="LC49" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div "><span class="pl-c"><span class="pl-c">#</span> Paths and constants</span></div>
+<div id="LC50" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div ">UPSTREAM_MANDATORY_URL=<span class="pl-s"><span class="pl-pds">&quot;</span>https://repository.veeam.com/vsa/<span class="pl-smi">${OS_VERSION}</span>/vbr/<span class="pl-smi">${VBR_VERSION}</span>/mandatory<span class="pl-pds">&quot;</span></span></div>
+<div id="LC51" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div ">UPSTREAM_OPTIONAL_URL=<span class="pl-s"><span class="pl-pds">&quot;</span>https://repository.veeam.com/vsa/<span class="pl-smi">${OS_VERSION}</span>/vbr/<span class="pl-smi">${VBR_VERSION}</span>/optional<span class="pl-pds">&quot;</span></span></div>
+<div id="LC52" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div ">UPSTREAM_EXTERNAL_MANDATORY_URL=<span class="pl-s"><span class="pl-pds">&quot;</span>https://repository.veeam.com/vsa/<span class="pl-smi">${OS_VERSION}</span>/external-mandatory<span class="pl-pds">&quot;</span></span></div>
+<div id="LC53" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div ">
+</div>
+<div id="LC54" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div ">DNF_BIN=<span class="pl-s"><span class="pl-pds">&quot;</span>/usr/bin/dnf<span class="pl-pds">&quot;</span></span></div>
+<div id="LC55" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div ">KEY_INDEX_URL=<span class="pl-s"><span class="pl-pds">&quot;</span>https://repository.veeam.com/keys/<span class="pl-pds">&quot;</span></span></div>
+<div id="LC56" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div ">KEY_LOCAL_DIR=<span class="pl-s"><span class="pl-pds">&quot;</span>/etc/veeam/rpm-gpg<span class="pl-pds">&quot;</span></span></div>
+<div id="LC57" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div ">UPSTREAM_REPO_FILE=<span class="pl-s"><span class="pl-pds">&quot;</span>/etc/yum.repos.d/veeam-vsa-upstream.repo<span class="pl-pds">&quot;</span></span></div>
+<div id="LC58" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div ">REPOSYNC_SCRIPT=<span class="pl-s"><span class="pl-pds">&quot;</span>/usr/local/sbin/veeam-vsa-reposync.sh<span class="pl-pds">&quot;</span></span></div>
+<div id="LC59" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div ">NGINX_CONF=<span class="pl-s"><span class="pl-pds">&quot;</span>/etc/nginx/conf.d/veeam-repo.conf<span class="pl-pds">&quot;</span></span></div>
+<div id="LC60" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div ">
+</div>
+<div id="LC61" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div ">REPOID_MANDATORY=<span class="pl-s"><span class="pl-pds">&quot;</span>veeam-vsa-mandatory<span class="pl-pds">&quot;</span></span></div>
+<div id="LC62" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div ">REPOID_OPTIONAL=<span class="pl-s"><span class="pl-pds">&quot;</span>veeam-vsa-optional<span class="pl-pds">&quot;</span></span></div>
+<div id="LC63" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div ">REPOID_EXTERNAL_MANDATORY=<span class="pl-s"><span class="pl-pds">&quot;</span>veeam-vsa-external-mandatory<span class="pl-pds">&quot;</span></span></div>
+<div id="LC64" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div ">
+</div>
+<div id="LC65" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div ">SYSTEMD_SERVICE=<span class="pl-s"><span class="pl-pds">&quot;</span>/etc/systemd/system/veeam-vsa-reposync.service<span class="pl-pds">&quot;</span></span></div>
+<div id="LC66" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div ">SYSTEMD_TIMER=<span class="pl-s"><span class="pl-pds">&quot;</span>/etc/systemd/system/veeam-vsa-reposync.timer<span class="pl-pds">&quot;</span></span></div>
+<div id="LC67" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div ">
+</div>
+<div id="LC68" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div "><span class="pl-c"><span class="pl-c">#</span> -------------------------</span></div>
+<div id="LC69" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div "><span class="pl-c"><span class="pl-c">#</span> LOGGING HELPERS</span></div>
+<div id="LC70" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div "><span class="pl-c"><span class="pl-c">#</span> -------------------------</span></div>
+<div id="LC71" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div "><span class="pl-en">log</span>() {</div>
+<div id="LC72" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div ">  <span class="pl-c1">printf</span> <span class="pl-s"><span class="pl-pds">&#39;</span>[%(%Y-%m-%d %H:%M:%S)T] %s\n<span class="pl-pds">&#39;</span></span> -1 <span class="pl-s"><span class="pl-pds">&quot;</span><span class="pl-smi">$*</span><span class="pl-pds">&quot;</span></span> <span class="pl-k">&gt;&amp;2</span></div>
+<div id="LC73" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div ">}</div>
+<div id="LC74" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div ">
+</div>
+<div id="LC75" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div "><span class="pl-en">fatal</span>() {</div>
+<div id="LC76" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div ">  log <span class="pl-s"><span class="pl-pds">&quot;</span>FATAL: <span class="pl-smi">$*</span><span class="pl-pds">&quot;</span></span></div>
+<div id="LC77" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div ">  <span class="pl-c1">exit</span> 1</div>
+<div id="LC78" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div ">}</div>
+<div id="LC79" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div ">
+</div>
+<div id="LC80" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div "><span class="pl-c"><span class="pl-c">#</span> -------------------------</span></div>
+<div id="LC81" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div "><span class="pl-c"><span class="pl-c">#</span> BASIC CHECKS</span></div>
+<div id="LC82" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div "><span class="pl-c"><span class="pl-c">#</span> -------------------------</span></div>
+<div id="LC83" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div "><span class="pl-en">require_root</span>() {</div>
+<div id="LC84" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-82 ">  <span class="pl-k">if</span> [[ <span class="pl-smi">$EUID</span> <span class="pl-k">-ne</span> 0 ]]<span class="pl-k">;</span> <span class="pl-k">then</span></div>
+<div id="LC85" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-82 ">    fatal <span class="pl-s"><span class="pl-pds">&quot;</span>Must be run as root.<span class="pl-pds">&quot;</span></span></div>
+<div id="LC86" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-82 ">  <span class="pl-k">fi</span></div>
+<div id="LC87" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div ">}</div>
+<div id="LC88" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div ">
+</div>
+<div id="LC89" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div "><span class="pl-en">check_os</span>() {</div>
+<div id="LC90" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-88 ">  <span class="pl-k">if</span> [[ <span class="pl-k">-r</span> /etc/os-release ]]<span class="pl-k">;</span> <span class="pl-k">then</span></div>
+<div id="LC91" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-88 ">    <span class="pl-c1">.</span> /etc/os-release</div>
+<div id="LC92" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-88 ">  <span class="pl-k">else</span></div>
+<div id="LC93" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-88 ">    fatal <span class="pl-s"><span class="pl-pds">&quot;</span>/etc/os-release not found. Unsupported OS.<span class="pl-pds">&quot;</span></span></div>
+<div id="LC94" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-88 ">  <span class="pl-k">fi</span></div>
+<div id="LC95" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-88 ">
+</div>
+<div id="LC96" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-88 ">  <span class="pl-k">case</span> <span class="pl-s"><span class="pl-pds">&quot;</span><span class="pl-smi">${ID<span class="pl-k">:-</span>unknown}</span><span class="pl-pds">&quot;</span></span> <span class="pl-k">in</span></div>
+<div id="LC97" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-88 ">    rhel|rocky|almalinux|centos)</div>
+<div id="LC98" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-88 ">      log <span class="pl-s"><span class="pl-pds">&quot;</span>OS detected: <span class="pl-smi">${PRETTY_NAME<span class="pl-k">:-</span><span class="pl-smi">$ID</span>}</span><span class="pl-pds">&quot;</span></span></div>
+<div id="LC99" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-88 ">      ;;</div>
+<div id="LC100" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-88 ">    <span class="pl-k">*</span>)</div>
+<div id="LC101" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-88 ">      fatal <span class="pl-s"><span class="pl-pds">&quot;</span>Unsupported OS ID: <span class="pl-smi">${ID<span class="pl-k">:-</span>unknown}</span>. Only RHEL/Rocky/Alma/CentOS-family is supported.<span class="pl-pds">&quot;</span></span></div>
+<div id="LC102" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-88 ">      ;;</div>
+<div id="LC103" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-88 ">  <span class="pl-k">esac</span></div>
+<div id="LC104" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div ">}</div>
+<div id="LC105" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div ">
+</div>
+<div id="LC106" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div "><span class="pl-en">check_dnf</span>() {</div>
+<div id="LC107" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-105 ">  <span class="pl-k">if</span> <span class="pl-k">!</span> <span class="pl-c1">command</span> -v <span class="pl-s"><span class="pl-pds">&quot;</span><span class="pl-smi">${DNF_BIN}</span><span class="pl-pds">&quot;</span></span> <span class="pl-k">&gt;</span>/dev/null <span class="pl-k">2&gt;&amp;1</span><span class="pl-k">;</span> <span class="pl-k">then</span></div>
+<div id="LC108" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-105 ">    fatal <span class="pl-s"><span class="pl-pds">&quot;</span>dnf not found. This script requires a dnf based system.<span class="pl-pds">&quot;</span></span></div>
+<div id="LC109" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-105 ">  <span class="pl-k">fi</span></div>
+<div id="LC110" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div ">}</div>
+<div id="LC111" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div ">
+</div>
+<div id="LC112" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div "><span class="pl-c"><span class="pl-c">#</span> -------------------------</span></div>
+<div id="LC113" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div "><span class="pl-c"><span class="pl-c">#</span> DISK AND FILESYSTEM SETUP</span></div>
+<div id="LC114" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div "><span class="pl-c"><span class="pl-c">#</span> -------------------------</span></div>
+<div id="LC115" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div "><span class="pl-en">prepare_disk</span>() {</div>
+<div id="LC116" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-114 ">  log <span class="pl-s"><span class="pl-pds">&quot;</span>Checking data disk <span class="pl-smi">${DATA_DEVICE}</span><span class="pl-pds">&quot;</span></span></div>
+<div id="LC117" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-114 ">
+</div>
+<div id="LC118" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-114 ">  <span class="pl-k">if</span> [[ <span class="pl-k">!</span> <span class="pl-k">-b</span> <span class="pl-s"><span class="pl-pds">&quot;</span><span class="pl-smi">${DATA_DEVICE}</span><span class="pl-pds">&quot;</span></span> ]]<span class="pl-k">;</span> <span class="pl-k">then</span></div>
+<div id="LC119" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-114 ">    fatal <span class="pl-s"><span class="pl-pds">&quot;</span>Device <span class="pl-smi">${DATA_DEVICE}</span> does not exist. Adjust DATA_DEVICE in script.<span class="pl-pds">&quot;</span></span></div>
+<div id="LC120" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-114 ">  <span class="pl-k">fi</span></div>
+<div id="LC121" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-114 ">
+</div>
+<div id="LC122" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-114 ">  <span class="pl-c"><span class="pl-c">#</span> If partition already exists and is XFS, assume it is fine and skip destructive steps</span></div>
+<div id="LC123" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-114 ">  <span class="pl-k">if</span> lsblk -no TYPE <span class="pl-s"><span class="pl-pds">&quot;</span><span class="pl-smi">${DATA_PARTITION}</span><span class="pl-pds">&quot;</span></span> <span class="pl-k">2&gt;</span>/dev/null <span class="pl-k">|</span> grep -q <span class="pl-s"><span class="pl-pds">&#39;</span>^part$<span class="pl-pds">&#39;</span></span><span class="pl-k">;</span> <span class="pl-k">then</span></div>
+<div id="LC124" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-114 ">    <span class="pl-k">local</span> fstype</div>
+<div id="LC125" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-114 ">    fstype=<span class="pl-s"><span class="pl-pds">$(</span>lsblk -no FSTYPE <span class="pl-s"><span class="pl-pds">&quot;</span><span class="pl-smi">${DATA_PARTITION}</span><span class="pl-pds">&quot;</span></span> <span class="pl-k">2&gt;</span>/dev/null <span class="pl-k">||</span> true<span class="pl-pds">)</span></span></div>
+<div id="LC126" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-114 ">    log <span class="pl-s"><span class="pl-pds">&quot;</span>Found existing partition <span class="pl-smi">${DATA_PARTITION}</span> (FSTYPE=<span class="pl-smi">${fstype<span class="pl-k">:-</span>unknown}</span>). Will NOT repartition or reformat.<span class="pl-pds">&quot;</span></span></div>
+<div id="LC127" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-114 ">
+</div>
+<div id="LC128" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-114 ">    <span class="pl-k">if</span> [[ <span class="pl-s"><span class="pl-pds">&quot;</span><span class="pl-smi">${fstype}</span><span class="pl-pds">&quot;</span></span> <span class="pl-k">!=</span> <span class="pl-s"><span class="pl-pds">&quot;</span>xfs<span class="pl-pds">&quot;</span></span> ]]<span class="pl-k">;</span> <span class="pl-k">then</span></div>
+<div id="LC129" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-114 ">      log <span class="pl-s"><span class="pl-pds">&quot;</span>WARNING: <span class="pl-smi">${DATA_PARTITION}</span> is not XFS. Script expects XFS. Mount may fail.<span class="pl-pds">&quot;</span></span></div>
+<div id="LC130" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-114 ">    <span class="pl-k">fi</span></div>
+<div id="LC131" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-114 ">    <span class="pl-k">return</span></div>
+<div id="LC132" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-114 ">  <span class="pl-k">fi</span></div>
+<div id="LC133" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-114 ">
+</div>
+<div id="LC134" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-114 ">  log <span class="pl-s"><span class="pl-pds">&quot;</span>No existing partition <span class="pl-smi">${DATA_PARTITION}</span> detected. Creating fresh GPT + XFS.<span class="pl-pds">&quot;</span></span></div>
+<div id="LC135" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-114 ">
+</div>
+<div id="LC136" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-114 ">  <span class="pl-c"><span class="pl-c">#</span> Extra sanity: ensure disk is not already mounted</span></div>
+<div id="LC137" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-114 ">  <span class="pl-k">if</span> lsblk -no MOUNTPOINT <span class="pl-s"><span class="pl-pds">&quot;</span><span class="pl-smi">${DATA_DEVICE}</span><span class="pl-pds">&quot;</span></span> <span class="pl-k">|</span> grep -q <span class="pl-s"><span class="pl-pds">&#39;</span>/<span class="pl-pds">&#39;</span></span><span class="pl-k">;</span> <span class="pl-k">then</span></div>
+<div id="LC138" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-114 ">    fatal <span class="pl-s"><span class="pl-pds">&quot;</span><span class="pl-smi">${DATA_DEVICE}</span> appears to have mounted filesystems. Refusing to wipe.<span class="pl-pds">&quot;</span></span></div>
+<div id="LC139" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-114 ">  <span class="pl-k">fi</span></div>
+<div id="LC140" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-114 ">
+</div>
+<div id="LC141" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-114 ">  <span class="pl-c"><span class="pl-c">#</span> Wipe signatures and create partition table</span></div>
+<div id="LC142" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-114 ">  log <span class="pl-s"><span class="pl-pds">&quot;</span>Wiping filesystem signatures on <span class="pl-smi">${DATA_DEVICE}</span><span class="pl-pds">&quot;</span></span></div>
+<div id="LC143" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-114 ">  wipefs -a <span class="pl-s"><span class="pl-pds">&quot;</span><span class="pl-smi">${DATA_DEVICE}</span><span class="pl-pds">&quot;</span></span></div>
+<div id="LC144" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-114 ">
+</div>
+<div id="LC145" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-114 ">  log <span class="pl-s"><span class="pl-pds">&quot;</span>Creating GPT and single XFS partition on <span class="pl-smi">${DATA_DEVICE}</span><span class="pl-pds">&quot;</span></span></div>
+<div id="LC146" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-114 ">  parted <span class="pl-s"><span class="pl-pds">&quot;</span><span class="pl-smi">${DATA_DEVICE}</span><span class="pl-pds">&quot;</span></span> --script \</div>
+<div id="LC147" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-114 ">    mklabel gpt \</div>
+<div id="LC148" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-114 ">    mkpart primary xfs 0% 100%</div>
+<div id="LC149" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-114 ">
+</div>
+<div id="LC150" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-114 ">  <span class="pl-c"><span class="pl-c">#</span> Format partition</span></div>
+<div id="LC151" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-114 ">  log <span class="pl-s"><span class="pl-pds">&quot;</span>Formatting <span class="pl-smi">${DATA_PARTITION}</span> as XFS<span class="pl-pds">&quot;</span></span></div>
+<div id="LC152" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-114 ">  mkfs.xfs -f <span class="pl-s"><span class="pl-pds">&quot;</span><span class="pl-smi">${DATA_PARTITION}</span><span class="pl-pds">&quot;</span></span></div>
+<div id="LC153" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-114 ">
+</div>
+<div id="LC154" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-114 ">  log <span class="pl-s"><span class="pl-pds">&quot;</span>Disk preparation completed for <span class="pl-smi">${DATA_PARTITION}</span><span class="pl-pds">&quot;</span></span></div>
+<div id="LC155" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div ">}</div>
+<div id="LC156" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div ">
+</div>
+<div id="LC157" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div "><span class="pl-en">ensure_mountpoint</span>() {</div>
+<div id="LC158" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div ">  mkdir -p <span class="pl-s"><span class="pl-pds">&quot;</span><span class="pl-smi">${MOUNT_POINT}</span><span class="pl-pds">&quot;</span></span></div>
+<div id="LC159" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div ">  chmod 0755 <span class="pl-s"><span class="pl-pds">&quot;</span><span class="pl-smi">${MOUNT_POINT}</span><span class="pl-pds">&quot;</span></span></div>
+<div id="LC160" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div ">}</div>
+<div id="LC161" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div ">
+</div>
+<div id="LC162" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div "><span class="pl-en">ensure_fstab_entry</span>() {</div>
+<div id="LC163" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-161 ">  log <span class="pl-s"><span class="pl-pds">&quot;</span>Ensuring /etc/fstab has PARTUUID entry for <span class="pl-smi">${DATA_PARTITION}</span><span class="pl-pds">&quot;</span></span></div>
+<div id="LC164" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-161 ">
+</div>
+<div id="LC165" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-161 ">  <span class="pl-k">local</span> partuuid</div>
+<div id="LC166" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-161 ">  partuuid=<span class="pl-s"><span class="pl-pds">$(</span>blkid -o value -s PARTUUID <span class="pl-s"><span class="pl-pds">&quot;</span><span class="pl-smi">${DATA_PARTITION}</span><span class="pl-pds">&quot;</span></span> <span class="pl-k">2&gt;</span>/dev/null <span class="pl-k">||</span> true<span class="pl-pds">)</span></span></div>
+<div id="LC167" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-161 ">  <span class="pl-k">if</span> [[ <span class="pl-k">-z</span> <span class="pl-s"><span class="pl-pds">&quot;</span><span class="pl-smi">${partuuid}</span><span class="pl-pds">&quot;</span></span> ]]<span class="pl-k">;</span> <span class="pl-k">then</span></div>
+<div id="LC168" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-161 ">    fatal <span class="pl-s"><span class="pl-pds">&quot;</span>Could not read PARTUUID for <span class="pl-smi">${DATA_PARTITION}</span>. Check blkid output.<span class="pl-pds">&quot;</span></span></div>
+<div id="LC169" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-161 ">  <span class="pl-k">fi</span></div>
+<div id="LC170" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-161 ">
+</div>
+<div id="LC171" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-161 ">  <span class="pl-k">local</span> fstab_line=<span class="pl-s"><span class="pl-pds">&quot;</span>PARTUUID=<span class="pl-smi">${partuuid}</span>   <span class="pl-smi">${MOUNT_POINT}</span>   xfs   defaults,noatime   0 0<span class="pl-pds">&quot;</span></span></div>
+<div id="LC172" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-161 ">
+</div>
+<div id="LC173" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-161 ">  <span class="pl-k">if</span> grep -q <span class="pl-s"><span class="pl-pds">&quot;</span>PARTUUID=<span class="pl-smi">${partuuid}</span><span class="pl-pds">&quot;</span></span> /etc/fstab <span class="pl-k">2&gt;</span>/dev/null<span class="pl-k">;</span> <span class="pl-k">then</span></div>
+<div id="LC174" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-161 ">    log <span class="pl-s"><span class="pl-pds">&quot;</span>fstab already contains entry for PARTUUID=<span class="pl-smi">${partuuid}</span>. Skipping append.<span class="pl-pds">&quot;</span></span></div>
+<div id="LC175" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-161 ">  <span class="pl-k">else</span></div>
+<div id="LC176" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-161 ">    log <span class="pl-s"><span class="pl-pds">&quot;</span>Adding new fstab entry: <span class="pl-smi">${fstab_line}</span><span class="pl-pds">&quot;</span></span></div>
+<div id="LC177" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-161 ">    <span class="pl-k">if</span> <span class="pl-k">!</span> <span class="pl-c1">printf</span> <span class="pl-s"><span class="pl-pds">&quot;</span>\n%s\n<span class="pl-pds">&quot;</span></span> <span class="pl-s"><span class="pl-pds">&quot;</span><span class="pl-smi">${fstab_line}</span><span class="pl-pds">&quot;</span></span> <span class="pl-k">&gt;&gt;</span> /etc/fstab<span class="pl-k">;</span> <span class="pl-k">then</span></div>
+<div id="LC178" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-161 ">      fatal <span class="pl-s"><span class="pl-pds">&quot;</span>Failed to write to /etc/fstab. Check permissions and disk space.<span class="pl-pds">&quot;</span></span></div>
+<div id="LC179" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-161 ">    <span class="pl-k">fi</span></div>
+<div id="LC180" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-161 ">  <span class="pl-k">fi</span></div>
+<div id="LC181" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div ">}</div>
+<div id="LC182" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div ">
+</div>
+<div id="LC183" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div "><span class="pl-en">mount_data_fs</span>() {</div>
+<div id="LC184" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-182 ">  log <span class="pl-s"><span class="pl-pds">&quot;</span>Reloading systemd daemon and mounting all filesystems.<span class="pl-pds">&quot;</span></span></div>
+<div id="LC185" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-182 ">  systemctl daemon-reload <span class="pl-k">||</span> <span class="pl-c1">true</span></div>
+<div id="LC186" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-182 ">  mount -a</div>
+<div id="LC187" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-182 ">
+</div>
+<div id="LC188" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-182 ">  <span class="pl-k">local</span> mp</div>
+<div id="LC189" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-182 ">  mp=<span class="pl-s"><span class="pl-pds">$(</span>lsblk -no MOUNTPOINT <span class="pl-s"><span class="pl-pds">&quot;</span><span class="pl-smi">${DATA_PARTITION}</span><span class="pl-pds">&quot;</span></span> <span class="pl-k">2&gt;</span>/dev/null <span class="pl-k">||</span> true<span class="pl-pds">)</span></span></div>
+<div id="LC190" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-182 ">  <span class="pl-k">if</span> [[ <span class="pl-s"><span class="pl-pds">&quot;</span><span class="pl-smi">${mp}</span><span class="pl-pds">&quot;</span></span> <span class="pl-k">!=</span> <span class="pl-s"><span class="pl-pds">&quot;</span><span class="pl-smi">${MOUNT_POINT}</span><span class="pl-pds">&quot;</span></span> ]]<span class="pl-k">;</span> <span class="pl-k">then</span></div>
+<div id="LC191" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-182 ">    fatal <span class="pl-s"><span class="pl-pds">&quot;</span>Expected <span class="pl-smi">${DATA_PARTITION}</span> to be mounted on <span class="pl-smi">${MOUNT_POINT}</span> but got &#39;<span class="pl-smi">${mp<span class="pl-k">:-</span>&lt;none&gt;}</span>&#39;<span class="pl-pds">&quot;</span></span></div>
+<div id="LC192" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-182 ">  <span class="pl-k">fi</span></div>
+<div id="LC193" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-182 ">
+</div>
+<div id="LC194" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-182 ">  log <span class="pl-s"><span class="pl-pds">&quot;</span>Mount check passed: <span class="pl-smi">${DATA_PARTITION}</span> -&gt; <span class="pl-smi">${MOUNT_POINT}</span><span class="pl-pds">&quot;</span></span></div>
+<div id="LC195" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div ">}</div>
+<div id="LC196" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div ">
+</div>
+<div id="LC197" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div "><span class="pl-c"><span class="pl-c">#</span> -------------------------</span></div>
+<div id="LC198" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div "><span class="pl-c"><span class="pl-c">#</span> CORE PACKAGES</span></div>
+<div id="LC199" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div "><span class="pl-c"><span class="pl-c">#</span> -------------------------</span></div>
+<div id="LC200" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div "><span class="pl-en">install_core_packages</span>() {</div>
+<div id="LC201" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-199 ">  log <span class="pl-s"><span class="pl-pds">&quot;</span>Installing required packages (dnf-plugins-core, curl, nginx, SELinux tools, firewalld helpers)<span class="pl-pds">&quot;</span></span></div>
+<div id="LC202" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-199 ">
+</div>
+<div id="LC203" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-199 ">  <span class="pl-s"><span class="pl-pds">&quot;</span><span class="pl-smi">${DNF_BIN}</span><span class="pl-pds">&quot;</span></span> install -y dnf-plugins-core curl nginx policycoreutils-python-utils selinux-policy-targeted firewalld <span class="pl-k">||</span> \</div>
+<div id="LC204" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-199 ">    log <span class="pl-s"><span class="pl-pds">&quot;</span>WARNING: Some packages failed to install. If your distro variant does not use them, this may be ok.<span class="pl-pds">&quot;</span></span></div>
+<div id="LC205" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-199 ">
+</div>
+<div id="LC206" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-199 ">  <span class="pl-c"><span class="pl-c">#</span> Make sure dnf reposync is available</span></div>
+<div id="LC207" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-199 ">  <span class="pl-k">if</span> <span class="pl-k">!</span> <span class="pl-s"><span class="pl-pds">&quot;</span><span class="pl-smi">${DNF_BIN}</span><span class="pl-pds">&quot;</span></span> --help <span class="pl-k">2&gt;&amp;1</span> <span class="pl-k">|</span> grep -q <span class="pl-s"><span class="pl-pds">&#39;</span>reposync<span class="pl-pds">&#39;</span></span><span class="pl-k">;</span> <span class="pl-k">then</span></div>
+<div id="LC208" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-199 ">    fatal <span class="pl-s"><span class="pl-pds">&quot;</span>dnf reposync plugin not available even after installing dnf-plugins-core.<span class="pl-pds">&quot;</span></span></div>
+<div id="LC209" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-199 ">  <span class="pl-k">fi</span></div>
+<div id="LC210" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div ">}</div>
+<div id="LC211" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div ">
+</div>
+<div id="LC212" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div "><span class="pl-c"><span class="pl-c">#</span> -------------------------</span></div>
+<div id="LC213" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div "><span class="pl-c"><span class="pl-c">#</span> DISK SPACE VALIDATION</span></div>
+<div id="LC214" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div "><span class="pl-c"><span class="pl-c">#</span> -------------------------</span></div>
+<div id="LC215" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div "><span class="pl-en">check_disk_space</span>() {</div>
+<div id="LC216" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-214 ">  log <span class="pl-s"><span class="pl-pds">&quot;</span>Checking available disk space on <span class="pl-smi">${MOUNT_POINT}</span><span class="pl-pds">&quot;</span></span></div>
+<div id="LC217" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-214 ">
+</div>
+<div id="LC218" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-214 ">  <span class="pl-k">local</span> available_gb</div>
+<div id="LC219" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-214 ">  available_gb=<span class="pl-s"><span class="pl-pds">$(</span>df -B1G <span class="pl-s"><span class="pl-pds">&quot;</span><span class="pl-smi">${MOUNT_POINT}</span><span class="pl-pds">&quot;</span></span> <span class="pl-k">|</span> awk <span class="pl-s"><span class="pl-pds">&#39;</span>NR==2 {print $4}<span class="pl-pds">&#39;</span></span> <span class="pl-k">|</span> sed <span class="pl-s"><span class="pl-pds">&#39;</span>s/G$//<span class="pl-pds">&#39;</span></span><span class="pl-pds">)</span></span></div>
+<div id="LC220" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-214 ">
+</div>
+<div id="LC221" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-214 ">  <span class="pl-k">if</span> [[ <span class="pl-k">-z</span> <span class="pl-s"><span class="pl-pds">&quot;</span><span class="pl-smi">${available_gb}</span><span class="pl-pds">&quot;</span></span> ]]<span class="pl-k">;</span> <span class="pl-k">then</span></div>
+<div id="LC222" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-214 ">    log <span class="pl-s"><span class="pl-pds">&quot;</span>WARNING: Could not determine available disk space. Proceeding anyway.<span class="pl-pds">&quot;</span></span></div>
+<div id="LC223" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-214 ">    <span class="pl-k">return</span></div>
+<div id="LC224" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-214 ">  <span class="pl-k">fi</span></div>
+<div id="LC225" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-214 ">
+</div>
+<div id="LC226" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-214 ">  <span class="pl-c"><span class="pl-c">#</span> Warn if less than 40GB available (initial sync is ~30GB + buffer)</span></div>
+<div id="LC227" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-214 ">  <span class="pl-k">if</span> <span class="pl-s"><span class="pl-pds">((</span> available_gb <span class="pl-k">&lt;</span> <span class="pl-c1">40</span> <span class="pl-pds">))</span></span><span class="pl-k">;</span> <span class="pl-k">then</span></div>
+<div id="LC228" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-214 ">    log <span class="pl-s"><span class="pl-pds">&quot;</span>WARNING: Only <span class="pl-smi">${available_gb}</span>GB available on <span class="pl-smi">${MOUNT_POINT}</span>. Initial reposync needs ~30GB.<span class="pl-pds">&quot;</span></span></div>
+<div id="LC229" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-214 ">    log <span class="pl-s"><span class="pl-pds">&quot;</span>WARNING: Sync may fail if space is insufficient.<span class="pl-pds">&quot;</span></span></div>
+<div id="LC230" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-214 ">  <span class="pl-k">else</span></div>
+<div id="LC231" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-214 ">    log <span class="pl-s"><span class="pl-pds">&quot;</span>Disk space check: <span class="pl-smi">${available_gb}</span>GB available (sufficient for initial sync).<span class="pl-pds">&quot;</span></span></div>
+<div id="LC232" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-214 ">  <span class="pl-k">fi</span></div>
+<div id="LC233" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div ">}</div>
+<div id="LC234" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div ">
+</div>
+<div id="LC235" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div "><span class="pl-c"><span class="pl-c">#</span> -------------------------</span></div>
+<div id="LC236" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div "><span class="pl-c"><span class="pl-c">#</span> VEEAM UPSTREAM .repo FILE</span></div>
+<div id="LC237" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div "><span class="pl-c"><span class="pl-c">#</span> -------------------------</span></div>
+<div id="LC238" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div "><span class="pl-en">create_upstream_repo_file</span>() {</div>
+<div id="LC239" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-237 ">  <span class="pl-k">if</span> [[ <span class="pl-k">-f</span> <span class="pl-s"><span class="pl-pds">&quot;</span><span class="pl-smi">${UPSTREAM_REPO_FILE}</span><span class="pl-pds">&quot;</span></span> ]]<span class="pl-k">;</span> <span class="pl-k">then</span></div>
+<div id="LC240" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-237 ">    log <span class="pl-s"><span class="pl-pds">&quot;</span>Upstream repo file <span class="pl-smi">${UPSTREAM_REPO_FILE}</span> already exists. Leaving it intact.<span class="pl-pds">&quot;</span></span></div>
+<div id="LC241" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-237 ">    <span class="pl-k">return</span></div>
+<div id="LC242" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-237 ">  <span class="pl-k">fi</span></div>
+<div id="LC243" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-237 ">
+</div>
+<div id="LC244" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-237 ">  log <span class="pl-s"><span class="pl-pds">&quot;</span>Creating upstream repo definition at <span class="pl-smi">${UPSTREAM_REPO_FILE}</span><span class="pl-pds">&quot;</span></span></div>
+<div id="LC245" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-237 ">
+</div>
+<div id="LC246" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-237 ">  tee <span class="pl-s"><span class="pl-pds">&quot;</span><span class="pl-smi">${UPSTREAM_REPO_FILE}</span><span class="pl-pds">&quot;</span></span> <span class="pl-k">&gt;</span>/dev/null <span class="pl-s"><span class="pl-k">&lt;&lt;</span><span class="pl-k">EOF</span></span></div>
+<div id="LC247" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-237 "><span class="pl-s">[<span class="pl-smi">${REPOID_MANDATORY}</span>]</span></div>
+<div id="LC248" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-237 "><span class="pl-s">name=Veeam VSA mandatory (upstream mirror source)</span></div>
+<div id="LC249" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-237 "><span class="pl-s">baseurl=https://repository.veeam.com/vsa/<span class="pl-smi">${OS_VERSION}</span>/vbr/<span class="pl-smi">${VBR_VERSION}</span>/mandatory/</span></div>
+<div id="LC250" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-237 "><span class="pl-s">enabled=0</span></div>
+<div id="LC251" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-237 "><span class="pl-s">gpgcheck=0</span></div>
+<div id="LC252" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-237 "><span class="pl-s">repo_gpgcheck=0</span></div>
+<div id="LC253" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-237 "><span class="pl-s">gpgkey=https://repository.veeam.com/keys/RPM-E6FBD664 https://repository.veeam.com/keys/RPM-EFDCEA77</span></div>
+<div id="LC254" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-237 "><span class="pl-s"></span></div>
+<div id="LC255" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-237 "><span class="pl-s">[<span class="pl-smi">${REPOID_OPTIONAL}</span>]</span></div>
+<div id="LC256" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-237 "><span class="pl-s">name=Veeam VSA optional (upstream mirror source)</span></div>
+<div id="LC257" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-237 "><span class="pl-s">baseurl=https://repository.veeam.com/vsa/<span class="pl-smi">${OS_VERSION}</span>/vbr/<span class="pl-smi">${VBR_VERSION}</span>/optional/</span></div>
+<div id="LC258" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-237 "><span class="pl-s">enabled=0</span></div>
+<div id="LC259" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-237 "><span class="pl-s">gpgcheck=0</span></div>
+<div id="LC260" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-237 "><span class="pl-s">repo_gpgcheck=0</span></div>
+<div id="LC261" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-237 "><span class="pl-s">gpgkey=https://repository.veeam.com/keys/RPM-E6FBD664 https://repository.veeam.com/keys/RPM-EFDCEA77</span></div>
+<div id="LC262" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-237 "><span class="pl-s"></span></div>
+<div id="LC263" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-237 "><span class="pl-s">[<span class="pl-smi">${REPOID_EXTERNAL_MANDATORY}</span>]</span></div>
+<div id="LC264" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-237 "><span class="pl-s">name=Veeam VSA external mandatory (upstream mirror source)</span></div>
+<div id="LC265" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-237 "><span class="pl-s">baseurl=https://repository.veeam.com/vsa/<span class="pl-smi">${OS_VERSION}</span>/external-mandatory/</span></div>
+<div id="LC266" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-237 "><span class="pl-s">enabled=0</span></div>
+<div id="LC267" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-237 "><span class="pl-s">gpgcheck=0</span></div>
+<div id="LC268" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-237 "><span class="pl-s">repo_gpgcheck=0</span></div>
+<div id="LC269" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-237 "><span class="pl-s">gpgkey=https://repository.veeam.com/keys/RPM-E6FBD664 https://repository.veeam.com/keys/RPM-EFDCEA77</span></div>
+<div id="LC270" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-237 "><span class="pl-s"><span class="pl-k">EOF</span></span></div>
+<div id="LC271" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div ">}</div>
+<div id="LC272" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div ">
+</div>
+<div id="LC273" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div "><span class="pl-c"><span class="pl-c">#</span> -------------------------</span></div>
+<div id="LC274" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div "><span class="pl-c"><span class="pl-c">#</span> REPOSYNC SCRIPT</span></div>
+<div id="LC275" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div "><span class="pl-c"><span class="pl-c">#</span> -------------------------</span></div>
+<div id="LC276" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div "><span class="pl-en">create_reposync_script</span>() {</div>
+<div id="LC277" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 ">  log <span class="pl-s"><span class="pl-pds">&quot;</span>Creating reposync script at <span class="pl-smi">${REPOSYNC_SCRIPT}</span><span class="pl-pds">&quot;</span></span></div>
+<div id="LC278" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 ">
+</div>
+<div id="LC279" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 ">  mkdir -p <span class="pl-s"><span class="pl-pds">&quot;</span><span class="pl-s"><span class="pl-pds">$(</span>dirname <span class="pl-s"><span class="pl-pds">&quot;</span><span class="pl-smi">${REPOSYNC_SCRIPT}</span><span class="pl-pds">&quot;</span></span><span class="pl-pds">)</span></span><span class="pl-pds">&quot;</span></span></div>
+<div id="LC280" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 ">
+</div>
+<div id="LC281" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 ">  <span class="pl-c"><span class="pl-c">#</span> Inject configuration variables into the embedded script</span></div>
+<div id="LC282" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 ">  tee <span class="pl-s"><span class="pl-pds">&quot;</span><span class="pl-smi">${REPOSYNC_SCRIPT}</span><span class="pl-pds">&quot;</span></span> <span class="pl-k">&gt;</span>/dev/null <span class="pl-s"><span class="pl-k">&lt;&lt;</span><span class="pl-k">EOF</span></span></div>
+<div id="LC283" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">#!/usr/bin/env bash</span></div>
+<div id="LC284" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">set -euo pipefail</span></div>
+<div id="LC285" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s"></span></div>
+<div id="LC286" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s"># ============================================================</span></div>
+<div id="LC287" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s"># VSA local mirror script using dnf reposync</span></div>
+<div id="LC288" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s"># Supported: RHEL / Rocky / Alma / CentOS Stream 9+ (incl. Rocky 10)</span></div>
+<div id="LC289" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s"># NOT SUPPORTED: Debian/Ubuntu or non-dnf systems.</span></div>
+<div id="LC290" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s"># Created by MarvinFS </span></div>
+<div id="LC291" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s"># This script is NOT officially provided by Veeam Software company or supported in any way.</span></div>
+<div id="LC292" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s"># Strictly provided AS IS - use at your own discretion</span></div>
+<div id="LC293" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">#</span></div>
+<div id="LC294" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s"># NOTE:</span></div>
+<div id="LC295" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">#  - GPG checks are DISABLED on the mirror host (--nogpgcheck),</span></div>
+<div id="LC296" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">#    because external-mandatory contains packages signed by</span></div>
+<div id="LC297" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">#    multiple vendor keys (Rocky, CIQ, PGDG, etc).</span></div>
+<div id="LC298" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">#  - The VSA itself can still enforce full GPG checks (packages</span></div>
+<div id="LC299" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">#    and metadata) when using this mirror.</span></div>
+<div id="LC300" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s"># ============================================================</span></div>
+<div id="LC301" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s"></span></div>
+<div id="LC302" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">REPO_ROOT=&quot;<span class="pl-smi">${REPO_ROOT}</span>&quot;</span></div>
+<div id="LC303" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s"></span></div>
+<div id="LC304" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">REPOID_MANDATORY=&quot;veeam-vsa-mandatory&quot;</span></div>
+<div id="LC305" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">REPOID_OPTIONAL=&quot;veeam-vsa-optional&quot;</span></div>
+<div id="LC306" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">REPOID_EXTERNAL_MANDATORY=&quot;veeam-vsa-external-mandatory&quot;</span></div>
+<div id="LC307" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s"></span></div>
+<div id="LC308" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s"># Upstream Veeam URLs for VSA repos (metadata signatures live here)</span></div>
+<div id="LC309" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">UPSTREAM_MANDATORY_URL=&quot;<span class="pl-smi">${UPSTREAM_MANDATORY_URL}</span>&quot;</span></div>
+<div id="LC310" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">UPSTREAM_OPTIONAL_URL=&quot;<span class="pl-smi">${UPSTREAM_OPTIONAL_URL}</span>&quot;</span></div>
+<div id="LC311" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">UPSTREAM_EXTERNAL_MANDATORY_URL=&quot;<span class="pl-smi">${UPSTREAM_EXTERNAL_MANDATORY_URL}</span>&quot;</span></div>
+<div id="LC312" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s"></span></div>
+<div id="LC313" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">DNF_BIN=&quot;/usr/bin/dnf&quot;</span></div>
+<div id="LC314" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">KEY_INDEX_URL=&quot;https://repository.veeam.com/keys/&quot;</span></div>
+<div id="LC315" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">KEY_LOCAL_DIR=&quot;/etc/veeam/rpm-gpg&quot;</span></div>
+<div id="LC316" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s"></span></div>
+<div id="LC317" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">log() {</span></div>
+<div id="LC318" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">  printf &#39;[%(%Y-%m-%d %H:%M:%S)T] %s\n&#39; -1 &quot;<span class="pl-smi">$*</span>&quot; &gt;&amp;2</span></div>
+<div id="LC319" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">}</span></div>
+<div id="LC320" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s"></span></div>
+<div id="LC321" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">check_os() {</span></div>
+<div id="LC322" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">  if [[ -r /etc/os-release ]]; then</span></div>
+<div id="LC323" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">    # shellcheck disable=SC1091</span></div>
+<div id="LC324" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">    . /etc/os-release</span></div>
+<div id="LC325" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">  else</span></div>
+<div id="LC326" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">    log &quot;ERROR: /etc/os-release not found. Unsupported OS.&quot;</span></div>
+<div id="LC327" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">    exit 1</span></div>
+<div id="LC328" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">  fi</span></div>
+<div id="LC329" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s"></span></div>
+<div id="LC330" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">  case &quot;<span class="pl-smi">${ID<span class="pl-k">:-</span>unknown}</span>&quot; in</span></div>
+<div id="LC331" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">    rhel|rocky|almalinux|centos)</span></div>
+<div id="LC332" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">      ;;</span></div>
+<div id="LC333" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">    *)</span></div>
+<div id="LC334" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">      log &quot;ERROR: This script supports only RHEL/Rocky/Alma/CentOS-family systems.&quot;</span></div>
+<div id="LC335" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">      exit 1</span></div>
+<div id="LC336" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">      ;;</span></div>
+<div id="LC337" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">  esac</span></div>
+<div id="LC338" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">}</span></div>
+<div id="LC339" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s"></span></div>
+<div id="LC340" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">check_prereqs() {</span></div>
+<div id="LC341" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">  if ! command -v &quot;<span class="pl-smi">${DNF_BIN}</span>&quot; &gt;/dev/null 2&gt;&amp;1; then</span></div>
+<div id="LC342" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">    log &quot;ERROR: dnf not found. This is not a RHEL-family system.&quot;</span></div>
+<div id="LC343" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">    exit 1</span></div>
+<div id="LC344" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">  fi</span></div>
+<div id="LC345" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s"></span></div>
+<div id="LC346" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">  if ! &quot;<span class="pl-smi">${DNF_BIN}</span>&quot; --help 2&gt;&amp;1 | grep -q &#39;reposync&#39;; then</span></div>
+<div id="LC347" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">    log &quot;ERROR: dnf reposync plugin not available. Install dnf-plugins-core first:&quot;</span></div>
+<div id="LC348" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">    log &quot;       dnf install -y dnf-plugins-core&quot;</span></div>
+<div id="LC349" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">    exit 1</span></div>
+<div id="LC350" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">  fi</span></div>
+<div id="LC351" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s"></span></div>
+<div id="LC352" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">  if ! command -v curl &gt;/dev/null 2&gt;&amp;1; then</span></div>
+<div id="LC353" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">    log &quot;ERROR: curl not found. Install it first:&quot;</span></div>
+<div id="LC354" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">    log &quot;       dnf install -y curl&quot;</span></div>
+<div id="LC355" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">    exit 1</span></div>
+<div id="LC356" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">  fi</span></div>
+<div id="LC357" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s"></span></div>
+<div id="LC358" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">  if [[ ! -f /etc/yum.repos.d/veeam-vsa-upstream.repo ]]; then</span></div>
+<div id="LC359" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">    log &quot;ERROR: /etc/yum.repos.d/veeam-vsa-upstream.repo not found.&quot;</span></div>
+<div id="LC360" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">    log &quot;       Create it before running this script.&quot;</span></div>
+<div id="LC361" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">    exit 1</span></div>
+<div id="LC362" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">  fi</span></div>
+<div id="LC363" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">}</span></div>
+<div id="LC364" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s"></span></div>
+<div id="LC365" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">sync_veeam_keys() {</span></div>
+<div id="LC366" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">  log &quot;Syncing Veeam RPM GPG keys from <span class="pl-smi">${KEY_INDEX_URL}</span>&quot;</span></div>
+<div id="LC367" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s"></span></div>
+<div id="LC368" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">  mkdir -p &quot;<span class="pl-smi">${KEY_LOCAL_DIR}</span>&quot;</span></div>
+<div id="LC369" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s"></span></div>
+<div id="LC370" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">  local index</span></div>
+<div id="LC371" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">  if ! index=<span class="pl-s"><span class="pl-pds">$(</span>curl -fsSL <span class="pl-s"><span class="pl-pds">&quot;</span><span class="pl-smi">${KEY_INDEX_URL}</span><span class="pl-pds">&quot;</span></span><span class="pl-pds">)</span></span>; then</span></div>
+<div id="LC372" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">    log &quot;WARNING: Failed to download key index, skipping key sync.&quot;</span></div>
+<div id="LC373" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">    return</span></div>
+<div id="LC374" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">  fi</span></div>
+<div id="LC375" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s"></span></div>
+<div id="LC376" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">  local keys</span></div>
+<div id="LC377" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">  keys=<span class="pl-s"><span class="pl-pds">$(</span>printf <span class="pl-s"><span class="pl-pds">&#39;</span>%s\n<span class="pl-pds">&#39;</span></span> <span class="pl-s"><span class="pl-pds">&quot;</span><span class="pl-smi">${index}</span><span class="pl-pds">&quot;</span></span> <span class="pl-k">|</span> grep -o <span class="pl-s"><span class="pl-pds">&#39;</span>RPM-[A-Za-z0-9]\+<span class="pl-pds">&#39;</span></span> <span class="pl-k">|</span> sort -u <span class="pl-k">||</span> true<span class="pl-pds">)</span></span></span></div>
+<div id="LC378" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s"></span></div>
+<div id="LC379" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">  if [[ -z &quot;<span class="pl-smi">${keys}</span>&quot; ]]; then</span></div>
+<div id="LC380" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">    log &quot;WARNING: No RPM-* keys found in index, skipping key sync.&quot;</span></div>
+<div id="LC381" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">    return</span></div>
+<div id="LC382" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">  fi</span></div>
+<div id="LC383" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s"></span></div>
+<div id="LC384" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">  local k</span></div>
+<div id="LC385" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">  for k in <span class="pl-smi">${keys}</span>; do</span></div>
+<div id="LC386" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">    local dst=&quot;<span class="pl-smi">${KEY_LOCAL_DIR}</span>/<span class="pl-smi">${k}</span>.gpg&quot;</span></div>
+<div id="LC387" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">    local url=&quot;<span class="pl-smi">${KEY_INDEX_URL}${k}</span>&quot;</span></div>
+<div id="LC388" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s"></span></div>
+<div id="LC389" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">    log &quot;  - Downloading key <span class="pl-smi">${k}</span>&quot;</span></div>
+<div id="LC390" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">    if curl -fsSL &quot;<span class="pl-smi">${url}</span>&quot; -o &quot;<span class="pl-smi">${dst}</span>&quot;; then</span></div>
+<div id="LC391" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">      rpm --import &quot;<span class="pl-smi">${dst}</span>&quot; || log &quot;WARNING: Failed to import key <span class="pl-smi">${dst}</span>&quot;</span></div>
+<div id="LC392" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">    else</span></div>
+<div id="LC393" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">      log &quot;WARNING: Could not download key <span class="pl-smi">${k}</span>&quot;</span></div>
+<div id="LC394" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">    fi</span></div>
+<div id="LC395" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">  done</span></div>
+<div id="LC396" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s"></span></div>
+<div id="LC397" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">  log &quot;Veeam RPM GPG key sync completed (some keys may be rejected by policies - this is expected).&quot;</span></div>
+<div id="LC398" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">}</span></div>
+<div id="LC399" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s"></span></div>
+<div id="LC400" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">sync_repo_signatures() {</span></div>
+<div id="LC401" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">  local upstream_url=&quot;<span class="pl-smi">$1</span>&quot;</span></div>
+<div id="LC402" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">  local target_path=&quot;<span class="pl-smi">$2</span>&quot;</span></div>
+<div id="LC403" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">  local repodata_path=&quot;<span class="pl-smi">${target_path}</span>/repodata&quot;</span></div>
+<div id="LC404" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s"></span></div>
+<div id="LC405" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">  mkdir -p &quot;<span class="pl-smi">${repodata_path}</span>&quot;</span></div>
+<div id="LC406" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s"></span></div>
+<div id="LC407" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">  # We try to pull both repomd.xml.asc and repomd.xml.key.</span></div>
+<div id="LC408" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">  # If they are missing upstream, we only log a warning and continue.</span></div>
+<div id="LC409" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">  local f</span></div>
+<div id="LC410" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">  for f in repomd.xml.asc repomd.xml.key; do</span></div>
+<div id="LC411" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">    local url=&quot;<span class="pl-smi">${upstream_url}</span>/repodata/<span class="pl-smi">${f}</span>&quot;</span></div>
+<div id="LC412" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">    local dst=&quot;<span class="pl-smi">${repodata_path}</span>/<span class="pl-smi">${f}</span>&quot;</span></div>
+<div id="LC413" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s"></span></div>
+<div id="LC414" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">    log &quot;Syncing metadata signature <span class="pl-smi">${f}</span> from <span class="pl-smi">${url}</span>&quot;</span></div>
+<div id="LC415" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">    if curl -fsSL &quot;<span class="pl-smi">${url}</span>&quot; -o &quot;<span class="pl-smi">${dst}</span>&quot;; then</span></div>
+<div id="LC416" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">      log &quot;  - Downloaded <span class="pl-smi">${f}</span> to <span class="pl-smi">${dst}</span>&quot;</span></div>
+<div id="LC417" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">    else</span></div>
+<div id="LC418" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">      log &quot;WARNING: Could not download <span class="pl-smi">${f}</span> from <span class="pl-smi">${url}</span> (metadata GPG for this repo may fail if repo_gpgcheck=1).&quot;</span></div>
+<div id="LC419" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">    fi</span></div>
+<div id="LC420" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">  done</span></div>
+<div id="LC421" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">}</span></div>
+<div id="LC422" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s"></span></div>
+<div id="LC423" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">mirror_repo() {</span></div>
+<div id="LC424" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">  local repoid=&quot;<span class="pl-smi">$1</span>&quot;</span></div>
+<div id="LC425" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">  local relpath=&quot;<span class="pl-smi">$2</span>&quot;</span></div>
+<div id="LC426" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">  local upstream_url=&quot;<span class="pl-smi">$3</span>&quot;</span></div>
+<div id="LC427" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">  local target_path=&quot;<span class="pl-smi">${REPO_ROOT}</span>/<span class="pl-smi">${relpath}</span>&quot;</span></div>
+<div id="LC428" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s"></span></div>
+<div id="LC429" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">  mkdir -p &quot;<span class="pl-smi">${target_path}</span>&quot;</span></div>
+<div id="LC430" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s"></span></div>
+<div id="LC431" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">  log &quot;Running dnf reposync for <span class="pl-smi">${repoid}</span>&quot;</span></div>
+<div id="LC432" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">  log &quot;Target: <span class="pl-smi">${target_path}</span>&quot;</span></div>
+<div id="LC433" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s"></span></div>
+<div id="LC434" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">  # IMPORTANT:</span></div>
+<div id="LC435" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">  #   --nogpgcheck is ONLY for this mirror host.</span></div>
+<div id="LC436" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">  #   The VSA still does GPG checks when consuming this mirror.</span></div>
+<div id="LC437" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">  &quot;<span class="pl-smi">${DNF_BIN}</span>&quot; -y reposync <span class="pl-cce">\</span></span></div>
+<div id="LC438" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">    --repoid=&quot;<span class="pl-smi">${repoid}</span>&quot; <span class="pl-cce">\</span></span></div>
+<div id="LC439" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">    --download-metadata <span class="pl-cce">\</span></span></div>
+<div id="LC440" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">    --download-path=&quot;<span class="pl-smi">${target_path}</span>&quot; <span class="pl-cce">\</span></span></div>
+<div id="LC441" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">    --norepopath <span class="pl-cce">\</span></span></div>
+<div id="LC442" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">    --delete <span class="pl-cce">\</span></span></div>
+<div id="LC443" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">    --nogpgcheck</span></div>
+<div id="LC444" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s"></span></div>
+<div id="LC445" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">  # After successful reposync, pull metadata signature files</span></div>
+<div id="LC446" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">  sync_repo_signatures &quot;<span class="pl-smi">${upstream_url}</span>&quot; &quot;<span class="pl-smi">${target_path}</span>&quot;</span></div>
+<div id="LC447" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">}</span></div>
+<div id="LC448" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s"></span></div>
+<div id="LC449" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">main() {</span></div>
+<div id="LC450" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">  if [[ <span class="pl-smi">$EUID</span> -ne 0 ]]; then</span></div>
+<div id="LC451" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">    log &quot;ERROR: Must run as root.&quot;</span></div>
+<div id="LC452" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">    exit 1</span></div>
+<div id="LC453" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">  fi</span></div>
+<div id="LC454" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s"></span></div>
+<div id="LC455" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">  check_os</span></div>
+<div id="LC456" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">  check_prereqs</span></div>
+<div id="LC457" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">  sync_veeam_keys</span></div>
+<div id="LC458" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s"></span></div>
+<div id="LC459" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">  # Mirror the three VSA repos into the expected tree</span></div>
+<div id="LC460" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">  mirror_repo &quot;<span class="pl-smi">${REPOID_MANDATORY}</span>&quot;          &quot;vsa/<span class="pl-smi">${OS_VERSION}</span>/vbr/<span class="pl-smi">${VBR_VERSION}</span>/mandatory&quot;       &quot;<span class="pl-smi">${UPSTREAM_MANDATORY_URL}</span>&quot;</span></div>
+<div id="LC461" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">  mirror_repo &quot;<span class="pl-smi">${REPOID_OPTIONAL}</span>&quot;           &quot;vsa/<span class="pl-smi">${OS_VERSION}</span>/vbr/<span class="pl-smi">${VBR_VERSION}</span>/optional&quot;        &quot;<span class="pl-smi">${UPSTREAM_OPTIONAL_URL}</span>&quot;</span></div>
+<div id="LC462" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">  mirror_repo &quot;<span class="pl-smi">${REPOID_EXTERNAL_MANDATORY}</span>&quot; &quot;vsa/<span class="pl-smi">${OS_VERSION}</span>/external-mandatory&quot;                 &quot;<span class="pl-smi">${UPSTREAM_EXTERNAL_MANDATORY_URL}</span>&quot;</span></div>
+<div id="LC463" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s"></span></div>
+<div id="LC464" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">  log &quot;Veeam VSA reposync completed successfully.&quot;</span></div>
+<div id="LC465" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">}</span></div>
+<div id="LC466" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s"></span></div>
+<div id="LC467" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s">main &quot;<span class="pl-smi">$@</span>&quot;</span></div>
+<div id="LC468" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 "><span class="pl-s"><span class="pl-k">EOF</span></span></div>
+<div id="LC469" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 ">
+</div>
+<div id="LC470" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 ">  chmod 0755 <span class="pl-s"><span class="pl-pds">&quot;</span><span class="pl-smi">${REPOSYNC_SCRIPT}</span><span class="pl-pds">&quot;</span></span></div>
+<div id="LC471" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-275 ">EOF</div>
+<div id="LC472" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div ">}</div>
+<div id="LC473" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div ">
+</div>
+<div id="LC474" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div "><span class="pl-c"><span class="pl-c">#</span> -------------------------</span></div>
+<div id="LC475" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div "><span class="pl-c"><span class="pl-c">#</span> NGINX CONFIG</span></div>
+<div id="LC476" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div "><span class="pl-c"><span class="pl-c">#</span> -------------------------</span></div>
+<div id="LC477" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div "><span class="pl-en">configure_nginx</span>() {</div>
+<div id="LC478" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-476 ">  log <span class="pl-s"><span class="pl-pds">&quot;</span>Enabling and starting nginx<span class="pl-pds">&quot;</span></span></div>
+<div id="LC479" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-476 ">  systemctl <span class="pl-c1">enable</span> --now nginx <span class="pl-k">||</span> fatal <span class="pl-s"><span class="pl-pds">&quot;</span>Failed to enable or start nginx.<span class="pl-pds">&quot;</span></span></div>
+<div id="LC480" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-476 ">
+</div>
+<div id="LC481" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-476 ">  log <span class="pl-s"><span class="pl-pds">&quot;</span>Writing nginx repo config to <span class="pl-smi">${NGINX_CONF}</span><span class="pl-pds">&quot;</span></span></div>
+<div id="LC482" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-476 ">
+</div>
+<div id="LC483" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-476 ">  tee <span class="pl-s"><span class="pl-pds">&quot;</span><span class="pl-smi">${NGINX_CONF}</span><span class="pl-pds">&quot;</span></span> <span class="pl-k">&gt;</span>/dev/null <span class="pl-s"><span class="pl-k">&lt;&lt;</span><span class="pl-k">EOF</span></span></div>
+<div id="LC484" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-476 "><span class="pl-s">server {</span></div>
+<div id="LC485" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-476 "><span class="pl-s">    listen 80;</span></div>
+<div id="LC486" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-476 "><span class="pl-s">    server_name <span class="pl-smi">${REPO_HOSTNAME_FQDN}</span> <span class="pl-smi">${REPO_HOSTNAME_SHORT}</span> <span class="pl-smi">${REPO_HOST_IP}</span>;</span></div>
+<div id="LC487" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-476 "><span class="pl-s"></span></div>
+<div id="LC488" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-476 "><span class="pl-s">    # Root of the mirrored repo</span></div>
+<div id="LC489" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-476 "><span class="pl-s">    root <span class="pl-smi">${REPO_ROOT}</span>;</span></div>
+<div id="LC490" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-476 "><span class="pl-s"></span></div>
+<div id="LC491" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-476 "><span class="pl-s">    autoindex on;</span></div>
+<div id="LC492" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-476 "><span class="pl-s">    autoindex_exact_size off;</span></div>
+<div id="LC493" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-476 "><span class="pl-s">    autoindex_localtime on;</span></div>
+<div id="LC494" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-476 "><span class="pl-s"></span></div>
+<div id="LC495" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-476 "><span class="pl-s">    # Everything served read-only</span></div>
+<div id="LC496" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-476 "><span class="pl-s">    location / {</span></div>
+<div id="LC497" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-476 "><span class="pl-s">        try_files <span class="pl-cce">\$</span>uri <span class="pl-cce">\$</span>uri/ =404;</span></div>
+<div id="LC498" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-476 "><span class="pl-s">    }</span></div>
+<div id="LC499" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-476 "><span class="pl-s">}</span></div>
+<div id="LC500" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-476 "><span class="pl-s"><span class="pl-k">EOF</span></span></div>
+<div id="LC501" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-476 ">
+</div>
+<div id="LC502" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-476 ">  log <span class="pl-s"><span class="pl-pds">&quot;</span>Testing nginx configuration<span class="pl-pds">&quot;</span></span></div>
+<div id="LC503" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-476 ">  nginx -t</div>
+<div id="LC504" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-476 ">
+</div>
+<div id="LC505" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-476 ">  log <span class="pl-s"><span class="pl-pds">&quot;</span>Reloading nginx<span class="pl-pds">&quot;</span></span></div>
+<div id="LC506" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-476 ">  systemctl reload nginx</div>
+<div id="LC507" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div ">}</div>
+<div id="LC508" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div ">
+</div>
+<div id="LC509" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div "><span class="pl-c"><span class="pl-c">#</span> -------------------------</span></div>
+<div id="LC510" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div "><span class="pl-c"><span class="pl-c">#</span> SELINUX CONTEXTS</span></div>
+<div id="LC511" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div "><span class="pl-c"><span class="pl-c">#</span> -------------------------</span></div>
+<div id="LC512" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div "><span class="pl-en">configure_selinux</span>() {</div>
+<div id="LC513" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-511 ">  <span class="pl-k">if</span> <span class="pl-c1">command</span> -v getenforce <span class="pl-k">&gt;</span>/dev/null <span class="pl-k">2&gt;&amp;1</span><span class="pl-k">;</span> <span class="pl-k">then</span></div>
+<div id="LC514" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-511 ">    <span class="pl-k">local</span> mode</div>
+<div id="LC515" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-511 ">    mode=<span class="pl-s"><span class="pl-pds">$(</span>getenforce <span class="pl-k">||</span> <span class="pl-c1">echo</span> <span class="pl-s"><span class="pl-pds">&quot;</span>Unknown<span class="pl-pds">&quot;</span></span><span class="pl-pds">)</span></span></div>
+<div id="LC516" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-511 ">    log <span class="pl-s"><span class="pl-pds">&quot;</span>SELinux mode: <span class="pl-smi">${mode}</span><span class="pl-pds">&quot;</span></span></div>
+<div id="LC517" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-511 ">
+</div>
+<div id="LC518" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-511 ">    <span class="pl-k">case</span> <span class="pl-s"><span class="pl-pds">&quot;</span><span class="pl-smi">${mode}</span><span class="pl-pds">&quot;</span></span> <span class="pl-k">in</span></div>
+<div id="LC519" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-511 ">      Enforcing|Permissive)</div>
+<div id="LC520" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-511 ">        log <span class="pl-s"><span class="pl-pds">&quot;</span>Applying SELinux context httpd_sys_content_t to <span class="pl-smi">${MOUNT_POINT}</span>/repo<span class="pl-pds">&quot;</span></span></div>
+<div id="LC521" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-511 ">        semanage fcontext -a -t httpd_sys_content_t <span class="pl-s"><span class="pl-pds">&quot;</span><span class="pl-smi">${MOUNT_POINT}</span>/repo(/.*)?<span class="pl-pds">&quot;</span></span> <span class="pl-k">||</span> \</div>
+<div id="LC522" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-511 ">          log <span class="pl-s"><span class="pl-pds">&quot;</span>WARNING: semanage failed. Check if policycoreutils-python-utils is installed.<span class="pl-pds">&quot;</span></span></div>
+<div id="LC523" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-511 ">        restorecon -Rv <span class="pl-s"><span class="pl-pds">&quot;</span><span class="pl-smi">${MOUNT_POINT}</span>/repo<span class="pl-pds">&quot;</span></span> <span class="pl-k">||</span> \</div>
+<div id="LC524" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-511 ">          log <span class="pl-s"><span class="pl-pds">&quot;</span>WARNING: restorecon failed. Check SELinux configuration.<span class="pl-pds">&quot;</span></span></div>
+<div id="LC525" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-511 ">        ;;</div>
+<div id="LC526" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-511 ">      <span class="pl-k">*</span>)</div>
+<div id="LC527" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-511 ">        log <span class="pl-s"><span class="pl-pds">&quot;</span>SELinux not enforcing or permissive. Skipping context configuration.<span class="pl-pds">&quot;</span></span></div>
+<div id="LC528" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-511 ">        ;;</div>
+<div id="LC529" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-511 ">    <span class="pl-k">esac</span></div>
+<div id="LC530" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-511 ">  <span class="pl-k">else</span></div>
+<div id="LC531" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-511 ">    log <span class="pl-s"><span class="pl-pds">&quot;</span>getenforce not available. Assuming SELinux not in use, skipping.<span class="pl-pds">&quot;</span></span></div>
+<div id="LC532" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-511 ">  <span class="pl-k">fi</span></div>
+<div id="LC533" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div ">}</div>
+<div id="LC534" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div ">
+</div>
+<div id="LC535" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div "><span class="pl-c"><span class="pl-c">#</span> -------------------------</span></div>
+<div id="LC536" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div "><span class="pl-c"><span class="pl-c">#</span> FIREWALLD</span></div>
+<div id="LC537" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div "><span class="pl-c"><span class="pl-c">#</span> -------------------------</span></div>
+<div id="LC538" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div "><span class="pl-en">configure_firewall</span>() {</div>
+<div id="LC539" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-537 ">  <span class="pl-k">if</span> systemctl is-active --quiet firewalld<span class="pl-k">;</span> <span class="pl-k">then</span></div>
+<div id="LC540" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-537 ">    log <span class="pl-s"><span class="pl-pds">&quot;</span>Opening HTTP service in firewalld<span class="pl-pds">&quot;</span></span></div>
+<div id="LC541" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-537 ">    firewall-cmd --add-service=http --permanent <span class="pl-k">||</span> \</div>
+<div id="LC542" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-537 ">      log <span class="pl-s"><span class="pl-pds">&quot;</span>WARNING: failed to add http service to firewalld.<span class="pl-pds">&quot;</span></span></div>
+<div id="LC543" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-537 ">    firewall-cmd --reload <span class="pl-k">||</span> \</div>
+<div id="LC544" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-537 ">      log <span class="pl-s"><span class="pl-pds">&quot;</span>WARNING: failed to reload firewalld.<span class="pl-pds">&quot;</span></span></div>
+<div id="LC545" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-537 ">  <span class="pl-k">else</span></div>
+<div id="LC546" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-537 ">    log <span class="pl-s"><span class="pl-pds">&quot;</span>firewalld is not active. Skipping firewall configuration.<span class="pl-pds">&quot;</span></span></div>
+<div id="LC547" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-537 ">  <span class="pl-k">fi</span></div>
+<div id="LC548" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div ">}</div>
+<div id="LC549" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div ">
+</div>
+<div id="LC550" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div "><span class="pl-c"><span class="pl-c">#</span> -------------------------</span></div>
+<div id="LC551" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div "><span class="pl-c"><span class="pl-c">#</span> CONNECTIVITY CHECKS</span></div>
+<div id="LC552" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div "><span class="pl-c"><span class="pl-c">#</span> -------------------------</span></div>
+<div id="LC553" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div "><span class="pl-en">check_connectivity</span>() {</div>
+<div id="LC554" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-552 ">  <span class="pl-k">if</span> <span class="pl-k">!</span> <span class="pl-c1">command</span> -v curl <span class="pl-k">&gt;</span>/dev/null <span class="pl-k">2&gt;&amp;1</span><span class="pl-k">;</span> <span class="pl-k">then</span></div>
+<div id="LC555" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-552 ">    log <span class="pl-s"><span class="pl-pds">&quot;</span>curl not available for connectivity checks. Skipping.<span class="pl-pds">&quot;</span></span></div>
+<div id="LC556" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-552 ">    <span class="pl-k">return</span></div>
+<div id="LC557" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-552 ">  <span class="pl-k">fi</span></div>
+<div id="LC558" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-552 ">
+</div>
+<div id="LC559" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-552 ">  log <span class="pl-s"><span class="pl-pds">&quot;</span>Checking local HTTP access to repo paths<span class="pl-pds">&quot;</span></span></div>
+<div id="LC560" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-552 ">
+</div>
+<div id="LC561" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-552 ">  <span class="pl-k">local</span> urls=(</div>
+<div id="LC562" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-552 ">    <span class="pl-s"><span class="pl-pds">&quot;</span>http://<span class="pl-smi">${REPO_HOSTNAME_SHORT}</span>/vsa/<span class="pl-smi">${OS_VERSION}</span>/vbr/<span class="pl-smi">${VBR_VERSION}</span>/mandatory/<span class="pl-pds">&quot;</span></span></div>
+<div id="LC563" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-552 ">    <span class="pl-s"><span class="pl-pds">&quot;</span>http://<span class="pl-smi">${REPO_HOSTNAME_FQDN}</span>/vsa/<span class="pl-smi">${OS_VERSION}</span>/vbr/<span class="pl-smi">${VBR_VERSION}</span>/mandatory/<span class="pl-pds">&quot;</span></span></div>
+<div id="LC564" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-552 ">    <span class="pl-s"><span class="pl-pds">&quot;</span>http://<span class="pl-smi">${REPO_HOST_IP}</span>/vsa/<span class="pl-smi">${OS_VERSION}</span>/vbr/<span class="pl-smi">${VBR_VERSION}</span>/mandatory/<span class="pl-pds">&quot;</span></span></div>
+<div id="LC565" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-552 ">  )</div>
+<div id="LC566" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-552 ">
+</div>
+<div id="LC567" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-552 ">  <span class="pl-k">local</span> u</div>
+<div id="LC568" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-552 ">  <span class="pl-k">for</span> <span class="pl-smi">u</span> <span class="pl-k">in</span> <span class="pl-s"><span class="pl-pds">&quot;</span><span class="pl-smi">${urls[@]}</span><span class="pl-pds">&quot;</span></span><span class="pl-k">;</span> <span class="pl-k">do</span></div>
+<div id="LC569" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-552 ">    log <span class="pl-s"><span class="pl-pds">&quot;</span>  - curl -I <span class="pl-smi">${u}</span><span class="pl-pds">&quot;</span></span></div>
+<div id="LC570" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-552 ">    <span class="pl-k">if</span> curl -I -s <span class="pl-s"><span class="pl-pds">&quot;</span><span class="pl-smi">${u}</span><span class="pl-pds">&quot;</span></span> <span class="pl-k">&gt;</span>/dev/null<span class="pl-k">;</span> <span class="pl-k">then</span></div>
+<div id="LC571" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-552 ">      log <span class="pl-s"><span class="pl-pds">&quot;</span>    OK: <span class="pl-smi">${u}</span><span class="pl-pds">&quot;</span></span></div>
+<div id="LC572" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-552 ">    <span class="pl-k">else</span></div>
+<div id="LC573" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-552 ">      log <span class="pl-s"><span class="pl-pds">&quot;</span>    WARNING: failed to connect to <span class="pl-smi">${u}</span><span class="pl-pds">&quot;</span></span></div>
+<div id="LC574" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-552 ">    <span class="pl-k">fi</span></div>
+<div id="LC575" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-552 ">  <span class="pl-k">done</span></div>
+<div id="LC576" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div ">}</div>
+<div id="LC577" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div ">
+</div>
+<div id="LC578" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div "><span class="pl-c"><span class="pl-c">#</span> -------------------------</span></div>
+<div id="LC579" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div "><span class="pl-c"><span class="pl-c">#</span> SYSTEMD SERVICE + TIMER</span></div>
+<div id="LC580" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div "><span class="pl-c"><span class="pl-c">#</span> -------------------------</span></div>
+<div id="LC581" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div "><span class="pl-en">create_systemd_units</span>() {</div>
+<div id="LC582" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-580 ">  log <span class="pl-s"><span class="pl-pds">&quot;</span>Creating systemd service at <span class="pl-smi">${SYSTEMD_SERVICE}</span><span class="pl-pds">&quot;</span></span></div>
+<div id="LC583" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-580 ">
+</div>
+<div id="LC584" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-580 ">  tee <span class="pl-s"><span class="pl-pds">&quot;</span><span class="pl-smi">${SYSTEMD_SERVICE}</span><span class="pl-pds">&quot;</span></span> <span class="pl-k">&gt;</span>/dev/null <span class="pl-s"><span class="pl-k">&lt;&lt;</span><span class="pl-k">EOF</span></span></div>
+<div id="LC585" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-580 "><span class="pl-s">[Unit]</span></div>
+<div id="LC586" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-580 "><span class="pl-s">Description=Veeam VSA repository mirror sync</span></div>
+<div id="LC587" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-580 "><span class="pl-s">Documentation=file:<span class="pl-smi">${REPOSYNC_SCRIPT}</span></span></div>
+<div id="LC588" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-580 "><span class="pl-s">Wants=network-online.target</span></div>
+<div id="LC589" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-580 "><span class="pl-s">After=network-online.target</span></div>
+<div id="LC590" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-580 "><span class="pl-s"></span></div>
+<div id="LC591" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-580 "><span class="pl-s">[Service]</span></div>
+<div id="LC592" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-580 "><span class="pl-s">Type=oneshot</span></div>
+<div id="LC593" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-580 "><span class="pl-s">ExecStart=<span class="pl-smi">${REPOSYNC_SCRIPT}</span></span></div>
+<div id="LC594" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-580 "><span class="pl-s">Nice=10</span></div>
+<div id="LC595" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-580 "><span class="pl-s">IOSchedulingClass=best-effort</span></div>
+<div id="LC596" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-580 "><span class="pl-s">IOSchedulingPriority=7</span></div>
+<div id="LC597" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-580 "><span class="pl-s"><span class="pl-k">EOF</span></span></div>
+<div id="LC598" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-580 ">
+</div>
+<div id="LC599" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-580 ">  log <span class="pl-s"><span class="pl-pds">&quot;</span>Creating systemd timer at <span class="pl-smi">${SYSTEMD_TIMER}</span><span class="pl-pds">&quot;</span></span></div>
+<div id="LC600" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-580 ">
+</div>
+<div id="LC601" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-580 ">  tee <span class="pl-s"><span class="pl-pds">&quot;</span><span class="pl-smi">${SYSTEMD_TIMER}</span><span class="pl-pds">&quot;</span></span> <span class="pl-k">&gt;</span>/dev/null <span class="pl-s"><span class="pl-k">&lt;&lt;</span><span class="pl-k">EOF</span></span></div>
+<div id="LC602" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-580 "><span class="pl-s">[Unit]</span></div>
+<div id="LC603" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-580 "><span class="pl-s">Description=Run Veeam VSA repository mirror sync hourly</span></div>
+<div id="LC604" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-580 "><span class="pl-s"></span></div>
+<div id="LC605" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-580 "><span class="pl-s">[Timer]</span></div>
+<div id="LC606" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-580 "><span class="pl-s">OnBootSec=15min</span></div>
+<div id="LC607" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-580 "><span class="pl-s">OnUnitActiveSec=1h</span></div>
+<div id="LC608" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-580 "><span class="pl-s">Unit=veeam-vsa-reposync.service</span></div>
+<div id="LC609" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-580 "><span class="pl-s">Persistent=true</span></div>
+<div id="LC610" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-580 "><span class="pl-s"></span></div>
+<div id="LC611" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-580 "><span class="pl-s">[Install]</span></div>
+<div id="LC612" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-580 "><span class="pl-s">WantedBy=timers.target</span></div>
+<div id="LC613" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-580 "><span class="pl-s"><span class="pl-k">EOF</span></span></div>
+<div id="LC614" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-580 ">
+</div>
+<div id="LC615" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-580 ">  log <span class="pl-s"><span class="pl-pds">&quot;</span>Reloading systemd units and enabling timer<span class="pl-pds">&quot;</span></span></div>
+<div id="LC616" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-580 ">  systemctl daemon-reload</div>
+<div id="LC617" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-580 ">  systemctl <span class="pl-c1">enable</span> --now veeam-vsa-reposync.timer</div>
+<div id="LC618" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div ">}</div>
+<div id="LC619" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div ">
+</div>
+<div id="LC620" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div "><span class="pl-c"><span class="pl-c">#</span> -------------------------</span></div>
+<div id="LC621" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div "><span class="pl-c"><span class="pl-c">#</span> MAIN</span></div>
+<div id="LC622" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div "><span class="pl-c"><span class="pl-c">#</span> -------------------------</span></div>
+<div id="LC623" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div "><span class="pl-en">main</span>() {</div>
+<div id="LC624" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-622 ">  require_root</div>
+<div id="LC625" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-622 ">  check_os</div>
+<div id="LC626" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-622 ">  check_dnf</div>
+<div id="LC627" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-622 ">
+</div>
+<div id="LC628" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-622 ">  <span class="pl-c"><span class="pl-c">#</span> 1) Disk and filesystem setup</span></div>
+<div id="LC629" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-622 ">  prepare_disk</div>
+<div id="LC630" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-622 ">  ensure_mountpoint</div>
+<div id="LC631" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-622 ">  ensure_fstab_entry</div>
+<div id="LC632" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-622 ">  mount_data_fs</div>
+<div id="LC633" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-622 ">
+</div>
+<div id="LC634" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-622 ">  <span class="pl-c"><span class="pl-c">#</span> 2) Package installation</span></div>
+<div id="LC635" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-622 ">  install_core_packages</div>
+<div id="LC636" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-622 ">
+</div>
+<div id="LC637" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-622 ">  <span class="pl-c"><span class="pl-c">#</span> 3) Upstream repo configuration</span></div>
+<div id="LC638" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-622 ">  create_upstream_repo_file</div>
+<div id="LC639" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-622 ">
+</div>
+<div id="LC640" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-622 ">  <span class="pl-c"><span class="pl-c">#</span> 4) Reposync script generation (with injected configuration)</span></div>
+<div id="LC641" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-622 ">  create_reposync_script</div>
+<div id="LC642" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-622 ">
+</div>
+<div id="LC643" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-622 ">  <span class="pl-c"><span class="pl-c">#</span> 5) Directory preparation</span></div>
+<div id="LC644" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-622 ">  log <span class="pl-s"><span class="pl-pds">&quot;</span>Ensuring repo root directory <span class="pl-smi">${REPO_ROOT}</span><span class="pl-pds">&quot;</span></span></div>
+<div id="LC645" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-622 ">  mkdir -p <span class="pl-s"><span class="pl-pds">&quot;</span><span class="pl-smi">${REPO_ROOT}</span><span class="pl-pds">&quot;</span></span></div>
+<div id="LC646" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-622 ">  chown root:root <span class="pl-s"><span class="pl-pds">&quot;</span><span class="pl-smi">${MOUNT_POINT}</span><span class="pl-pds">&quot;</span></span> <span class="pl-s"><span class="pl-pds">&quot;</span><span class="pl-smi">${MOUNT_POINT}</span>/repo<span class="pl-pds">&quot;</span></span> <span class="pl-s"><span class="pl-pds">&quot;</span><span class="pl-smi">${REPO_ROOT}</span><span class="pl-pds">&quot;</span></span> <span class="pl-k">||</span> <span class="pl-c1">true</span></div>
+<div id="LC647" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-622 ">  chmod 0755 <span class="pl-s"><span class="pl-pds">&quot;</span><span class="pl-smi">${MOUNT_POINT}</span><span class="pl-pds">&quot;</span></span> <span class="pl-s"><span class="pl-pds">&quot;</span><span class="pl-smi">${MOUNT_POINT}</span>/repo<span class="pl-pds">&quot;</span></span> <span class="pl-s"><span class="pl-pds">&quot;</span><span class="pl-smi">${REPO_ROOT}</span><span class="pl-pds">&quot;</span></span> <span class="pl-k">||</span> <span class="pl-c1">true</span></div>
+<div id="LC648" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-622 ">
+</div>
+<div id="LC649" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-622 ">  <span class="pl-c"><span class="pl-c">#</span> 6) Network and security configuration</span></div>
+<div id="LC650" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-622 ">  configure_nginx</div>
+<div id="LC651" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-622 ">  configure_selinux</div>
+<div id="LC652" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-622 ">  configure_firewall</div>
+<div id="LC653" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-622 ">
+</div>
+<div id="LC654" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-622 ">  <span class="pl-c"><span class="pl-c">#</span> 7) Systemd automation setup</span></div>
+<div id="LC655" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-622 ">  create_systemd_units</div>
+<div id="LC656" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-622 ">
+</div>
+<div id="LC657" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-622 ">  <span class="pl-c"><span class="pl-c">#</span> 8) Connectivity test</span></div>
+<div id="LC658" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-622 ">  check_connectivity</div>
+<div id="LC659" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-622 ">
+</div>
+<div id="LC660" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-622 ">  log <span class="pl-s"><span class="pl-pds">&quot;</span>============================================================<span class="pl-pds">&quot;</span></span></div>
+<div id="LC661" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-622 ">  log <span class="pl-s"><span class="pl-pds">&quot;</span>Veeam VSA mirror setup completed.<span class="pl-pds">&quot;</span></span></div>
+<div id="LC662" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-622 ">  log <span class="pl-s"><span class="pl-pds">&quot;</span>Serve URL examples:<span class="pl-pds">&quot;</span></span></div>
+<div id="LC663" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-622 ">  log <span class="pl-s"><span class="pl-pds">&quot;</span>  http://<span class="pl-smi">${REPO_HOSTNAME_SHORT}</span>/vsa<span class="pl-pds">&quot;</span></span></div>
+<div id="LC664" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-622 ">  log <span class="pl-s"><span class="pl-pds">&quot;</span>  http://<span class="pl-smi">${REPO_HOSTNAME_FQDN}</span>/vsa<span class="pl-pds">&quot;</span></span></div>
+<div id="LC665" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-622 ">  log <span class="pl-s"><span class="pl-pds">&quot;</span>  http://<span class="pl-smi">${REPO_HOST_IP}</span>/vsa<span class="pl-pds">&quot;</span></span></div>
+<div id="LC666" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-622 ">  log <span class="pl-s"><span class="pl-pds">&quot;</span><span class="pl-pds">&quot;</span></span></div>
+<div id="LC667" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-622 ">  log <span class="pl-s"><span class="pl-pds">&quot;</span>Hourly sync is handled by systemd timer: veeam-vsa-reposync.timer<span class="pl-pds">&quot;</span></span></div>
+<div id="LC668" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-622 ">  log <span class="pl-s"><span class="pl-pds">&quot;</span>Check status with: systemctl status veeam-vsa-reposync.timer<span class="pl-pds">&quot;</span></span></div>
+<div id="LC669" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-622 ">  log <span class="pl-s"><span class="pl-pds">&quot;</span>You need to run initial repo-sync (this will download ~30 GB on first run) with:<span class="pl-pds">&quot;</span></span></div>
+<div id="LC670" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-622 ">  log <span class="pl-s"><span class="pl-pds">&quot;</span><span class="pl-smi">${REPOSYNC_SCRIPT}</span><span class="pl-pds">&quot;</span></span></div>
+<div id="LC671" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div child-of-line-622 ">  log <span class="pl-s"><span class="pl-pds">&quot;</span>============================================================<span class="pl-pds">&quot;</span></span></div>
+<div id="LC672" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div ">}</div>
+<div id="LC673" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div ">
+</div>
+<div id="LC674" class="react-code-text react-code-line-contents-no-virtualization react-file-line html-div ">main <span class="pl-s"><span class="pl-pds">&quot;</span><span class="pl-smi">$@</span><span class="pl-pds">&quot;</span></span></div></div></div></div></div><div id="copilot-button-container"></div></div><div id="highlighted-line-menu-container"></div></div></div><button hidden="" data-testid="hotkey-button" data-hotkey-scope="read-only-cursor-text-area"></button><button hidden=""></button></section></div></div><div class="Box-sc-62in7e-0 kuJVuq"></div><div class="Box-sc-62in7e-0 iafbuG Panel-module__Box--lC3LD panel-content-narrow-styles inner-panel-content-not-narrow"><div id="symbols-pane"><div aria-labelledby="symbols-pane-header" class="Box-sc-62in7e-0 cxWhiL"><div class="Box-sc-62in7e-0 fHoMbg"><h2 id="symbols-pane-header" tabindex="-1" class="Box-sc-62in7e-0 cnoVsg">Symbols</h2><button data-component="IconButton" type="button" data-hotkey="Escape" class="prc-Button-ButtonBase-c50BI IconButton__StyledIconButton-sc-i53dt6-0 bTccwu prc-Button-IconButton-szpyj" data-loading="false" data-no-visuals="true" data-size="medium" data-variant="invisible" aria-describedby=":R3hd9al9lab:-loading-announcement" aria-labelledby=":Rhd9al9lab:"><svg aria-hidden="true" focusable="false" class="octicon octicon-x" viewBox="0 0 16 16" width="16" height="16" fill="currentColor" display="inline-block" overflow="visible" style="vertical-align:text-bottom"><path d="M3.72 3.72a.75.75 0 0 1 1.06 0L8 6.94l3.22-3.22a.749.749 0 0 1 1.275.326.749.749 0 0 1-.215.734L9.06 8l3.22 3.22a.749.749 0 0 1-.326 1.275.749.749 0 0 1-.734-.215L8 9.06l-3.22 3.22a.751.751 0 0 1-1.042-.018.751.751 0 0 1-.018-1.042L6.94 8 3.72 4.78a.75.75 0 0 1 0-1.06Z"></path></svg></button><span class="prc-TooltipV2-Tooltip-cYMVY" data-direction="w" aria-hidden="true" id=":Rhd9al9lab:">Close symbols</span></div><div class="Box-sc-62in7e-0 bjdPSr">Find definitions and references for functions and other symbols in this file by clicking a symbol below or in the code.</div><span class="TextInput__StyledTextInput-sc-ttxlvl-0 bLATi TextInput-wrapper prc-components-TextInputWrapper-i1ofR prc-components-TextInputBaseWrapper-ueK9q" data-block="true" data-trailing-action="true" data-leading-visual="true" data-trailing-visual="true" aria-busy="false"><span class="TextInput-icon" id=":R3d9al9lab:" aria-hidden="true"><svg aria-hidden="true" focusable="false" class="octicon octicon-filter" viewBox="0 0 16 16" width="16" height="16" fill="currentColor" display="inline-block" overflow="visible" style="vertical-align:text-bottom"><path d="M.75 3h14.5a.75.75 0 0 1 0 1.5H.75a.75.75 0 0 1 0-1.5ZM3 7.75A.75.75 0 0 1 3.75 7h8.5a.75.75 0 0 1 0 1.5h-8.5A.75.75 0 0 1 3 7.75Zm3 4a.75.75 0 0 1 .75-.75h2.5a.75.75 0 0 1 0 1.5h-2.5a.75.75 0 0 1-.75-.75Z"></path></svg></span><input type="text" placeholder="Filter symbols" name="Filter symbols" aria-label="Filter symbols" aria-controls="filter-results" aria-expanded="true" aria-autocomplete="list" role="combobox" aria-describedby=":R3d9al9lab: :R3d9al9labH1:" data-component="input" class="prc-components-Input-Ic-y8" value=""/><span class="TextInput-icon" id=":R3d9al9labH1:" aria-hidden="true"><div class="Box-sc-62in7e-0 cIntug"><kbd>r</kbd></div></span></span><div class="Box-sc-62in7e-0 dILSWH"><div id="filter-results" class="Box-sc-62in7e-0 knbnik"><span class="prc-src-InternalVisuallyHidden-nlR9R" role="status" aria-live="polite" aria-atomic="true"></span><ul role="tree" aria-label="Code Navigation" data-omit-spacer="true" data-truncate-text="true" class="prc-TreeView-TreeViewRootUlStyles-eZtxW"><li class="PRIVATE_TreeView-item prc-TreeView-TreeViewItem-ShJr0" tabindex="0" id="0log" role="treeitem" aria-labelledby=":R1kd9al9lab:" aria-level="1" aria-selected="false"><div class="PRIVATE_TreeView-item-container prc-TreeView-TreeViewItemContainer--2Rkn" style="--level:1"><div style="grid-area:spacer;display:flex"><div style="width:100%;display:flex"></div></div><div id=":R1kd9al9lab:" class="PRIVATE_TreeView-item-content prc-TreeView-TreeViewItemContent-f0r0b"><span class="PRIVATE_TreeView-item-content-text prc-TreeView-TreeViewItemContentText-smZM-"><div class="Box-sc-62in7e-0 iRVXIo"><div class="Box-sc-62in7e-0 kOALiS"><div class="Box-sc-62in7e-0 kxkZhe"></div><div class="Box-sc-62in7e-0 eLoRjE">func</div></div>  <div class="Truncate-sc-x3i4it-0 bkmqFA prc-Truncate-Truncate-A9Wn6" title="log" style="--truncate-max-width:125px"><span>log</span></div></div></span></div></div></li><li class="PRIVATE_TreeView-item prc-TreeView-TreeViewItem-ShJr0" tabindex="0" id="1fatal" role="treeitem" aria-labelledby=":R2kd9al9lab:" aria-level="1" aria-selected="false"><div class="PRIVATE_TreeView-item-container prc-TreeView-TreeViewItemContainer--2Rkn" style="--level:1"><div style="grid-area:spacer;display:flex"><div style="width:100%;display:flex"></div></div><div id=":R2kd9al9lab:" class="PRIVATE_TreeView-item-content prc-TreeView-TreeViewItemContent-f0r0b"><span class="PRIVATE_TreeView-item-content-text prc-TreeView-TreeViewItemContentText-smZM-"><div class="Box-sc-62in7e-0 iRVXIo"><div class="Box-sc-62in7e-0 kOALiS"><div class="Box-sc-62in7e-0 kxkZhe"></div><div class="Box-sc-62in7e-0 eLoRjE">func</div></div>  <div class="Truncate-sc-x3i4it-0 bkmqFA prc-Truncate-Truncate-A9Wn6" title="fatal" style="--truncate-max-width:125px"><span>fatal</span></div></div></span></div></div></li><li class="PRIVATE_TreeView-item prc-TreeView-TreeViewItem-ShJr0" tabindex="0" id="2require_root" role="treeitem" aria-labelledby=":R3kd9al9lab:" aria-level="1" aria-selected="false"><div class="PRIVATE_TreeView-item-container prc-TreeView-TreeViewItemContainer--2Rkn" style="--level:1"><div style="grid-area:spacer;display:flex"><div style="width:100%;display:flex"></div></div><div id=":R3kd9al9lab:" class="PRIVATE_TreeView-item-content prc-TreeView-TreeViewItemContent-f0r0b"><span class="PRIVATE_TreeView-item-content-text prc-TreeView-TreeViewItemContentText-smZM-"><div class="Box-sc-62in7e-0 iRVXIo"><div class="Box-sc-62in7e-0 kOALiS"><div class="Box-sc-62in7e-0 kxkZhe"></div><div class="Box-sc-62in7e-0 eLoRjE">func</div></div>  <div class="Truncate-sc-x3i4it-0 bkmqFA prc-Truncate-Truncate-A9Wn6" title="require_root" style="--truncate-max-width:125px"><span>require_root</span></div></div></span></div></div></li><li class="PRIVATE_TreeView-item prc-TreeView-TreeViewItem-ShJr0" tabindex="0" id="3check_os" role="treeitem" aria-labelledby=":R4kd9al9lab:" aria-level="1" aria-selected="false"><div class="PRIVATE_TreeView-item-container prc-TreeView-TreeViewItemContainer--2Rkn" style="--level:1"><div style="grid-area:spacer;display:flex"><div style="width:100%;display:flex"></div></div><div id=":R4kd9al9lab:" class="PRIVATE_TreeView-item-content prc-TreeView-TreeViewItemContent-f0r0b"><span class="PRIVATE_TreeView-item-content-text prc-TreeView-TreeViewItemContentText-smZM-"><div class="Box-sc-62in7e-0 iRVXIo"><div class="Box-sc-62in7e-0 kOALiS"><div class="Box-sc-62in7e-0 kxkZhe"></div><div class="Box-sc-62in7e-0 eLoRjE">func</div></div>  <div class="Truncate-sc-x3i4it-0 bkmqFA prc-Truncate-Truncate-A9Wn6" title="check_os" style="--truncate-max-width:125px"><span>check_os</span></div></div></span></div></div></li><li class="PRIVATE_TreeView-item prc-TreeView-TreeViewItem-ShJr0" tabindex="0" id="4check_dnf" role="treeitem" aria-labelledby=":R5kd9al9lab:" aria-level="1" aria-selected="false"><div class="PRIVATE_TreeView-item-container prc-TreeView-TreeViewItemContainer--2Rkn" style="--level:1"><div style="grid-area:spacer;display:flex"><div style="width:100%;display:flex"></div></div><div id=":R5kd9al9lab:" class="PRIVATE_TreeView-item-content prc-TreeView-TreeViewItemContent-f0r0b"><span class="PRIVATE_TreeView-item-content-text prc-TreeView-TreeViewItemContentText-smZM-"><div class="Box-sc-62in7e-0 iRVXIo"><div class="Box-sc-62in7e-0 kOALiS"><div class="Box-sc-62in7e-0 kxkZhe"></div><div class="Box-sc-62in7e-0 eLoRjE">func</div></div>  <div class="Truncate-sc-x3i4it-0 bkmqFA prc-Truncate-Truncate-A9Wn6" title="check_dnf" style="--truncate-max-width:125px"><span>check_dnf</span></div></div></span></div></div></li><li class="PRIVATE_TreeView-item prc-TreeView-TreeViewItem-ShJr0" tabindex="0" id="5prepare_disk" role="treeitem" aria-labelledby=":R6kd9al9lab:" aria-level="1" aria-selected="false"><div class="PRIVATE_TreeView-item-container prc-TreeView-TreeViewItemContainer--2Rkn" style="--level:1"><div style="grid-area:spacer;display:flex"><div style="width:100%;display:flex"></div></div><div id=":R6kd9al9lab:" class="PRIVATE_TreeView-item-content prc-TreeView-TreeViewItemContent-f0r0b"><span class="PRIVATE_TreeView-item-content-text prc-TreeView-TreeViewItemContentText-smZM-"><div class="Box-sc-62in7e-0 iRVXIo"><div class="Box-sc-62in7e-0 kOALiS"><div class="Box-sc-62in7e-0 kxkZhe"></div><div class="Box-sc-62in7e-0 eLoRjE">func</div></div>  <div class="Truncate-sc-x3i4it-0 bkmqFA prc-Truncate-Truncate-A9Wn6" title="prepare_disk" style="--truncate-max-width:125px"><span>prepare_disk</span></div></div></span></div></div></li><li class="PRIVATE_TreeView-item prc-TreeView-TreeViewItem-ShJr0" tabindex="0" id="6ensure_mountpoint" role="treeitem" aria-labelledby=":R7kd9al9lab:" aria-level="1" aria-selected="false"><div class="PRIVATE_TreeView-item-container prc-TreeView-TreeViewItemContainer--2Rkn" style="--level:1"><div style="grid-area:spacer;display:flex"><div style="width:100%;display:flex"></div></div><div id=":R7kd9al9lab:" class="PRIVATE_TreeView-item-content prc-TreeView-TreeViewItemContent-f0r0b"><span class="PRIVATE_TreeView-item-content-text prc-TreeView-TreeViewItemContentText-smZM-"><div class="Box-sc-62in7e-0 iRVXIo"><div class="Box-sc-62in7e-0 kOALiS"><div class="Box-sc-62in7e-0 kxkZhe"></div><div class="Box-sc-62in7e-0 eLoRjE">func</div></div>  <div class="Truncate-sc-x3i4it-0 bkmqFA prc-Truncate-Truncate-A9Wn6" title="ensure_mountpoint" style="--truncate-max-width:125px"><span>ensure_mountpoint</span></div></div></span></div></div></li><li class="PRIVATE_TreeView-item prc-TreeView-TreeViewItem-ShJr0" tabindex="0" id="7ensure_fstab_entry" role="treeitem" aria-labelledby=":R8kd9al9lab:" aria-level="1" aria-selected="false"><div class="PRIVATE_TreeView-item-container prc-TreeView-TreeViewItemContainer--2Rkn" style="--level:1"><div style="grid-area:spacer;display:flex"><div style="width:100%;display:flex"></div></div><div id=":R8kd9al9lab:" class="PRIVATE_TreeView-item-content prc-TreeView-TreeViewItemContent-f0r0b"><span class="PRIVATE_TreeView-item-content-text prc-TreeView-TreeViewItemContentText-smZM-"><div class="Box-sc-62in7e-0 iRVXIo"><div class="Box-sc-62in7e-0 kOALiS"><div class="Box-sc-62in7e-0 kxkZhe"></div><div class="Box-sc-62in7e-0 eLoRjE">func</div></div>  <div class="Truncate-sc-x3i4it-0 bkmqFA prc-Truncate-Truncate-A9Wn6" title="ensure_fstab_entry" style="--truncate-max-width:125px"><span>ensure_fstab_entry</span></div></div></span></div></div></li><li class="PRIVATE_TreeView-item prc-TreeView-TreeViewItem-ShJr0" tabindex="0" id="8mount_data_fs" role="treeitem" aria-labelledby=":R9kd9al9lab:" aria-level="1" aria-selected="false"><div class="PRIVATE_TreeView-item-container prc-TreeView-TreeViewItemContainer--2Rkn" style="--level:1"><div style="grid-area:spacer;display:flex"><div style="width:100%;display:flex"></div></div><div id=":R9kd9al9lab:" class="PRIVATE_TreeView-item-content prc-TreeView-TreeViewItemContent-f0r0b"><span class="PRIVATE_TreeView-item-content-text prc-TreeView-TreeViewItemContentText-smZM-"><div class="Box-sc-62in7e-0 iRVXIo"><div class="Box-sc-62in7e-0 kOALiS"><div class="Box-sc-62in7e-0 kxkZhe"></div><div class="Box-sc-62in7e-0 eLoRjE">func</div></div>  <div class="Truncate-sc-x3i4it-0 bkmqFA prc-Truncate-Truncate-A9Wn6" title="mount_data_fs" style="--truncate-max-width:125px"><span>mount_data_fs</span></div></div></span></div></div></li><li class="PRIVATE_TreeView-item prc-TreeView-TreeViewItem-ShJr0" tabindex="0" id="9install_core_packages" role="treeitem" aria-labelledby=":Rakd9al9lab:" aria-level="1" aria-selected="false"><div class="PRIVATE_TreeView-item-container prc-TreeView-TreeViewItemContainer--2Rkn" style="--level:1"><div style="grid-area:spacer;display:flex"><div style="width:100%;display:flex"></div></div><div id=":Rakd9al9lab:" class="PRIVATE_TreeView-item-content prc-TreeView-TreeViewItemContent-f0r0b"><span class="PRIVATE_TreeView-item-content-text prc-TreeView-TreeViewItemContentText-smZM-"><div class="Box-sc-62in7e-0 iRVXIo"><div class="Box-sc-62in7e-0 kOALiS"><div class="Box-sc-62in7e-0 kxkZhe"></div><div class="Box-sc-62in7e-0 eLoRjE">func</div></div>  <div class="Truncate-sc-x3i4it-0 bkmqFA prc-Truncate-Truncate-A9Wn6" title="install_core_packages" style="--truncate-max-width:125px"><span>install_core_packages</span></div></div></span></div></div></li><li class="PRIVATE_TreeView-item prc-TreeView-TreeViewItem-ShJr0" tabindex="0" id="10check_disk_space" role="treeitem" aria-labelledby=":Rbkd9al9lab:" aria-level="1" aria-selected="false"><div class="PRIVATE_TreeView-item-container prc-TreeView-TreeViewItemContainer--2Rkn" style="--level:1"><div style="grid-area:spacer;display:flex"><div style="width:100%;display:flex"></div></div><div id=":Rbkd9al9lab:" class="PRIVATE_TreeView-item-content prc-TreeView-TreeViewItemContent-f0r0b"><span class="PRIVATE_TreeView-item-content-text prc-TreeView-TreeViewItemContentText-smZM-"><div class="Box-sc-62in7e-0 iRVXIo"><div class="Box-sc-62in7e-0 kOALiS"><div class="Box-sc-62in7e-0 kxkZhe"></div><div class="Box-sc-62in7e-0 eLoRjE">func</div></div>  <div class="Truncate-sc-x3i4it-0 bkmqFA prc-Truncate-Truncate-A9Wn6" title="check_disk_space" style="--truncate-max-width:125px"><span>check_disk_space</span></div></div></span></div></div></li><li class="PRIVATE_TreeView-item prc-TreeView-TreeViewItem-ShJr0" tabindex="0" id="11create_upstream_repo_file" role="treeitem" aria-labelledby=":Rckd9al9lab:" aria-level="1" aria-selected="false"><div class="PRIVATE_TreeView-item-container prc-TreeView-TreeViewItemContainer--2Rkn" style="--level:1"><div style="grid-area:spacer;display:flex"><div style="width:100%;display:flex"></div></div><div id=":Rckd9al9lab:" class="PRIVATE_TreeView-item-content prc-TreeView-TreeViewItemContent-f0r0b"><span class="PRIVATE_TreeView-item-content-text prc-TreeView-TreeViewItemContentText-smZM-"><div class="Box-sc-62in7e-0 iRVXIo"><div class="Box-sc-62in7e-0 kOALiS"><div class="Box-sc-62in7e-0 kxkZhe"></div><div class="Box-sc-62in7e-0 eLoRjE">func</div></div>  <div class="Truncate-sc-x3i4it-0 bkmqFA prc-Truncate-Truncate-A9Wn6" title="create_upstream_repo_file" style="--truncate-max-width:125px"><span>create_upstream_repo_file</span></div></div></span></div></div></li><li class="PRIVATE_TreeView-item prc-TreeView-TreeViewItem-ShJr0" tabindex="0" id="12create_reposync_script" role="treeitem" aria-labelledby=":Rdkd9al9lab:" aria-level="1" aria-selected="false"><div class="PRIVATE_TreeView-item-container prc-TreeView-TreeViewItemContainer--2Rkn" style="--level:1"><div style="grid-area:spacer;display:flex"><div style="width:100%;display:flex"></div></div><div id=":Rdkd9al9lab:" class="PRIVATE_TreeView-item-content prc-TreeView-TreeViewItemContent-f0r0b"><span class="PRIVATE_TreeView-item-content-text prc-TreeView-TreeViewItemContentText-smZM-"><div class="Box-sc-62in7e-0 iRVXIo"><div class="Box-sc-62in7e-0 kOALiS"><div class="Box-sc-62in7e-0 kxkZhe"></div><div class="Box-sc-62in7e-0 eLoRjE">func</div></div>  <div class="Truncate-sc-x3i4it-0 bkmqFA prc-Truncate-Truncate-A9Wn6" title="create_reposync_script" style="--truncate-max-width:125px"><span>create_reposync_script</span></div></div></span></div></div></li><li class="PRIVATE_TreeView-item prc-TreeView-TreeViewItem-ShJr0" tabindex="0" id="13configure_nginx" role="treeitem" aria-labelledby=":Rekd9al9lab:" aria-level="1" aria-selected="false"><div class="PRIVATE_TreeView-item-container prc-TreeView-TreeViewItemContainer--2Rkn" style="--level:1"><div style="grid-area:spacer;display:flex"><div style="width:100%;display:flex"></div></div><div id=":Rekd9al9lab:" class="PRIVATE_TreeView-item-content prc-TreeView-TreeViewItemContent-f0r0b"><span class="PRIVATE_TreeView-item-content-text prc-TreeView-TreeViewItemContentText-smZM-"><div class="Box-sc-62in7e-0 iRVXIo"><div class="Box-sc-62in7e-0 kOALiS"><div class="Box-sc-62in7e-0 kxkZhe"></div><div class="Box-sc-62in7e-0 eLoRjE">func</div></div>  <div class="Truncate-sc-x3i4it-0 bkmqFA prc-Truncate-Truncate-A9Wn6" title="configure_nginx" style="--truncate-max-width:125px"><span>configure_nginx</span></div></div></span></div></div></li><li class="PRIVATE_TreeView-item prc-TreeView-TreeViewItem-ShJr0" tabindex="0" id="14configure_selinux" role="treeitem" aria-labelledby=":Rfkd9al9lab:" aria-level="1" aria-selected="false"><div class="PRIVATE_TreeView-item-container prc-TreeView-TreeViewItemContainer--2Rkn" style="--level:1"><div style="grid-area:spacer;display:flex"><div style="width:100%;display:flex"></div></div><div id=":Rfkd9al9lab:" class="PRIVATE_TreeView-item-content prc-TreeView-TreeViewItemContent-f0r0b"><span class="PRIVATE_TreeView-item-content-text prc-TreeView-TreeViewItemContentText-smZM-"><div class="Box-sc-62in7e-0 iRVXIo"><div class="Box-sc-62in7e-0 kOALiS"><div class="Box-sc-62in7e-0 kxkZhe"></div><div class="Box-sc-62in7e-0 eLoRjE">func</div></div>  <div class="Truncate-sc-x3i4it-0 bkmqFA prc-Truncate-Truncate-A9Wn6" title="configure_selinux" style="--truncate-max-width:125px"><span>configure_selinux</span></div></div></span></div></div></li><li class="PRIVATE_TreeView-item prc-TreeView-TreeViewItem-ShJr0" tabindex="0" id="15configure_firewall" role="treeitem" aria-labelledby=":Rgkd9al9lab:" aria-level="1" aria-selected="false"><div class="PRIVATE_TreeView-item-container prc-TreeView-TreeViewItemContainer--2Rkn" style="--level:1"><div style="grid-area:spacer;display:flex"><div style="width:100%;display:flex"></div></div><div id=":Rgkd9al9lab:" class="PRIVATE_TreeView-item-content prc-TreeView-TreeViewItemContent-f0r0b"><span class="PRIVATE_TreeView-item-content-text prc-TreeView-TreeViewItemContentText-smZM-"><div class="Box-sc-62in7e-0 iRVXIo"><div class="Box-sc-62in7e-0 kOALiS"><div class="Box-sc-62in7e-0 kxkZhe"></div><div class="Box-sc-62in7e-0 eLoRjE">func</div></div>  <div class="Truncate-sc-x3i4it-0 bkmqFA prc-Truncate-Truncate-A9Wn6" title="configure_firewall" style="--truncate-max-width:125px"><span>configure_firewall</span></div></div></span></div></div></li><li class="PRIVATE_TreeView-item prc-TreeView-TreeViewItem-ShJr0" tabindex="0" id="16check_connectivity" role="treeitem" aria-labelledby=":Rhkd9al9lab:" aria-level="1" aria-selected="false"><div class="PRIVATE_TreeView-item-container prc-TreeView-TreeViewItemContainer--2Rkn" style="--level:1"><div style="grid-area:spacer;display:flex"><div style="width:100%;display:flex"></div></div><div id=":Rhkd9al9lab:" class="PRIVATE_TreeView-item-content prc-TreeView-TreeViewItemContent-f0r0b"><span class="PRIVATE_TreeView-item-content-text prc-TreeView-TreeViewItemContentText-smZM-"><div class="Box-sc-62in7e-0 iRVXIo"><div class="Box-sc-62in7e-0 kOALiS"><div class="Box-sc-62in7e-0 kxkZhe"></div><div class="Box-sc-62in7e-0 eLoRjE">func</div></div>  <div class="Truncate-sc-x3i4it-0 bkmqFA prc-Truncate-Truncate-A9Wn6" title="check_connectivity" style="--truncate-max-width:125px"><span>check_connectivity</span></div></div></span></div></div></li><li class="PRIVATE_TreeView-item prc-TreeView-TreeViewItem-ShJr0" tabindex="0" id="17create_systemd_units" role="treeitem" aria-labelledby=":Rikd9al9lab:" aria-level="1" aria-selected="false"><div class="PRIVATE_TreeView-item-container prc-TreeView-TreeViewItemContainer--2Rkn" style="--level:1"><div style="grid-area:spacer;display:flex"><div style="width:100%;display:flex"></div></div><div id=":Rikd9al9lab:" class="PRIVATE_TreeView-item-content prc-TreeView-TreeViewItemContent-f0r0b"><span class="PRIVATE_TreeView-item-content-text prc-TreeView-TreeViewItemContentText-smZM-"><div class="Box-sc-62in7e-0 iRVXIo"><div class="Box-sc-62in7e-0 kOALiS"><div class="Box-sc-62in7e-0 kxkZhe"></div><div class="Box-sc-62in7e-0 eLoRjE">func</div></div>  <div class="Truncate-sc-x3i4it-0 bkmqFA prc-Truncate-Truncate-A9Wn6" title="create_systemd_units" style="--truncate-max-width:125px"><span>create_systemd_units</span></div></div></span></div></div></li><li class="PRIVATE_TreeView-item prc-TreeView-TreeViewItem-ShJr0" tabindex="0" id="18main" role="treeitem" aria-labelledby=":Rjkd9al9lab:" aria-level="1" aria-selected="false"><div class="PRIVATE_TreeView-item-container prc-TreeView-TreeViewItemContainer--2Rkn" style="--level:1"><div style="grid-area:spacer;display:flex"><div style="width:100%;display:flex"></div></div><div id=":Rjkd9al9lab:" class="PRIVATE_TreeView-item-content prc-TreeView-TreeViewItemContent-f0r0b"><span class="PRIVATE_TreeView-item-content-text prc-TreeView-TreeViewItemContentText-smZM-"><div class="Box-sc-62in7e-0 iRVXIo"><div class="Box-sc-62in7e-0 kOALiS"><div class="Box-sc-62in7e-0 kxkZhe"></div><div class="Box-sc-62in7e-0 eLoRjE">func</div></div>  <div class="Truncate-sc-x3i4it-0 bkmqFA prc-Truncate-Truncate-A9Wn6" title="main" style="--truncate-max-width:125px"><span>main</span></div></div></span></div></div></li></ul></div></div></div></div></div></div> <!-- --> <!-- --> </div></div></div></div></div></div></div><div id="find-result-marks-container" class="Box-sc-62in7e-0 vdPNv"></div><button hidden="" data-testid="" data-hotkey-scope="read-only-cursor-text-area"></button><button hidden=""></button></div> <!-- --> <!-- --> <script type="application/json" id="__PRIMER_DATA_:R0:__">{"resolvedServerColorMode":"night"}</script></div>
+</react-app>
+</turbo-frame>
+
+
+
+  </div>
+
+</turbo-frame>
+
+    </main>
+  </div>
+
+  </div>
+
+          <footer class="footer pt-8 pb-6 f6 color-fg-muted p-responsive" role="contentinfo" >
+  <h2 class='sr-only'>Footer</h2>
+
+  
+
+
+  <div class="d-flex flex-justify-center flex-items-center flex-column-reverse flex-lg-row flex-wrap flex-lg-nowrap">
+    <div class="d-flex flex-items-center flex-shrink-0 mx-2">
+      <a aria-label="GitHub Homepage" class="footer-octicon mr-2" href="https://github.com">
+        <svg aria-hidden="true" height="24" viewBox="0 0 24 24" version="1.1" width="24" data-view-component="true" class="octicon octicon-mark-github">
+    <path d="M12 1C5.923 1 1 5.923 1 12c0 4.867 3.149 8.979 7.521 10.436.55.096.756-.233.756-.522 0-.262-.013-1.128-.013-2.049-2.764.509-3.479-.674-3.699-1.292-.124-.317-.66-1.293-1.127-1.554-.385-.207-.936-.715-.014-.729.866-.014 1.485.797 1.691 1.128.99 1.663 2.571 1.196 3.204.907.096-.715.385-1.196.701-1.471-2.448-.275-5.005-1.224-5.005-5.432 0-1.196.426-2.186 1.128-2.956-.111-.275-.496-1.402.11-2.915 0 0 .921-.288 3.024 1.128a10.193 10.193 0 0 1 2.75-.371c.936 0 1.871.123 2.75.371 2.104-1.43 3.025-1.128 3.025-1.128.605 1.513.221 2.64.111 2.915.701.77 1.127 1.747 1.127 2.956 0 4.222-2.571 5.157-5.019 5.432.399.344.743 1.004.743 2.035 0 1.471-.014 2.654-.014 3.025 0 .289.206.632.756.522C19.851 20.979 23 16.854 23 12c0-6.077-4.922-11-11-11Z"></path>
+</svg>
+</a>
+      <span>
+        &copy; 2025 GitHub,&nbsp;Inc.
+      </span>
+    </div>
+
+    <nav aria-label="Footer">
+      <h3 class="sr-only" id="sr-footer-heading">Footer navigation</h3>
+
+      <ul class="list-style-none d-flex flex-justify-center flex-wrap mb-2 mb-lg-0" aria-labelledby="sr-footer-heading">
+
+          <li class="mx-2">
+            <a data-analytics-event="{&quot;category&quot;:&quot;Footer&quot;,&quot;action&quot;:&quot;go to Terms&quot;,&quot;label&quot;:&quot;text:terms&quot;}" href="https://docs.github.com/site-policy/github-terms/github-terms-of-service" data-view-component="true" class="Link--secondary Link">Terms</a>
+          </li>
+
+          <li class="mx-2">
+            <a data-analytics-event="{&quot;category&quot;:&quot;Footer&quot;,&quot;action&quot;:&quot;go to privacy&quot;,&quot;label&quot;:&quot;text:privacy&quot;}" href="https://docs.github.com/site-policy/privacy-policies/github-privacy-statement" data-view-component="true" class="Link--secondary Link">Privacy</a>
+          </li>
+
+          <li class="mx-2">
+            <a data-analytics-event="{&quot;category&quot;:&quot;Footer&quot;,&quot;action&quot;:&quot;go to security&quot;,&quot;label&quot;:&quot;text:security&quot;}" href="https://github.com/security" data-view-component="true" class="Link--secondary Link">Security</a>
+          </li>
+
+          <li class="mx-2">
+            <a data-analytics-event="{&quot;category&quot;:&quot;Footer&quot;,&quot;action&quot;:&quot;go to status&quot;,&quot;label&quot;:&quot;text:status&quot;}" href="https://www.githubstatus.com/" data-view-component="true" class="Link--secondary Link">Status</a>
+          </li>
+
+          <li class="mx-2">
+            <a data-analytics-event="{&quot;category&quot;:&quot;Footer&quot;,&quot;action&quot;:&quot;go to community&quot;,&quot;label&quot;:&quot;text:community&quot;}" href="https://github.community/" data-view-component="true" class="Link--secondary Link">Community</a>
+          </li>
+
+          <li class="mx-2">
+            <a data-analytics-event="{&quot;category&quot;:&quot;Footer&quot;,&quot;action&quot;:&quot;go to docs&quot;,&quot;label&quot;:&quot;text:docs&quot;}" href="https://docs.github.com/" data-view-component="true" class="Link--secondary Link">Docs</a>
+          </li>
+
+          <li class="mx-2">
+            <a data-analytics-event="{&quot;category&quot;:&quot;Footer&quot;,&quot;action&quot;:&quot;go to contact&quot;,&quot;label&quot;:&quot;text:contact&quot;}" href="https://support.github.com?tags=dotcom-footer" data-view-component="true" class="Link--secondary Link">Contact</a>
+          </li>
+
+          <li class="mx-2" >
+  <cookie-consent-link>
+    <button
+      type="button"
+      class="Link--secondary underline-on-hover border-0 p-0 color-bg-transparent"
+      data-action="click:cookie-consent-link#showConsentManagement"
+      data-analytics-event="{&quot;location&quot;:&quot;footer&quot;,&quot;action&quot;:&quot;cookies&quot;,&quot;context&quot;:&quot;subfooter&quot;,&quot;tag&quot;:&quot;link&quot;,&quot;label&quot;:&quot;cookies_link_subfooter_footer&quot;}"
+    >
+       Manage cookies
+    </button>
+  </cookie-consent-link>
+</li>
+
+<li class="mx-2">
+  <cookie-consent-link>
+    <button
+      type="button"
+      class="Link--secondary underline-on-hover border-0 p-0 color-bg-transparent text-left"
+      data-action="click:cookie-consent-link#showConsentManagement"
+      data-analytics-event="{&quot;location&quot;:&quot;footer&quot;,&quot;action&quot;:&quot;dont_share_info&quot;,&quot;context&quot;:&quot;subfooter&quot;,&quot;tag&quot;:&quot;link&quot;,&quot;label&quot;:&quot;dont_share_info_link_subfooter_footer&quot;}"
+    >
+      Do not share my personal information
+    </button>
+  </cookie-consent-link>
+</li>
+
+      </ul>
+    </nav>
+  </div>
+</footer>
+
+
+
+    <ghcc-consent id="ghcc" class="position-fixed bottom-0 left-0" style="z-index: 999999"
+      data-locale="en"
+      data-initial-cookie-consent-allowed=""
+      data-cookie-consent-required="true"
+    ></ghcc-consent>
+
+
+
+
+  <div id="ajax-error-message" class="ajax-error-message flash flash-error" hidden>
+    <svg aria-hidden="true" height="16" viewBox="0 0 16 16" version="1.1" width="16" data-view-component="true" class="octicon octicon-alert">
+    <path d="M6.457 1.047c.659-1.234 2.427-1.234 3.086 0l6.082 11.378A1.75 1.75 0 0 1 14.082 15H1.918a1.75 1.75 0 0 1-1.543-2.575Zm1.763.707a.25.25 0 0 0-.44 0L1.698 13.132a.25.25 0 0 0 .22.368h12.164a.25.25 0 0 0 .22-.368Zm.53 3.996v2.5a.75.75 0 0 1-1.5 0v-2.5a.75.75 0 0 1 1.5 0ZM9 11a1 1 0 1 1-2 0 1 1 0 0 1 2 0Z"></path>
+</svg>
+    <button type="button" class="flash-close js-ajax-error-dismiss" aria-label="Dismiss error">
+      <svg aria-hidden="true" height="16" viewBox="0 0 16 16" version="1.1" width="16" data-view-component="true" class="octicon octicon-x">
+    <path d="M3.72 3.72a.75.75 0 0 1 1.06 0L8 6.94l3.22-3.22a.749.749 0 0 1 1.275.326.749.749 0 0 1-.215.734L9.06 8l3.22 3.22a.749.749 0 0 1-.326 1.275.749.749 0 0 1-.734-.215L8 9.06l-3.22 3.22a.751.751 0 0 1-1.042-.018.751.751 0 0 1-.018-1.042L6.94 8 3.72 4.78a.75.75 0 0 1 0-1.06Z"></path>
+</svg>
+    </button>
+    You can’t perform that action at this time.
+  </div>
+
+    <template id="site-details-dialog">
+  <details class="details-reset details-overlay details-overlay-dark lh-default color-fg-default hx_rsm" open>
+    <summary role="button" aria-label="Close dialog"></summary>
+    <details-dialog class="Box Box--overlay d-flex flex-column anim-fade-in fast hx_rsm-dialog hx_rsm-modal">
+      <button class="Box-btn-octicon m-0 btn-octicon position-absolute right-0 top-0" type="button" aria-label="Close dialog" data-close-dialog>
+        <svg aria-hidden="true" height="16" viewBox="0 0 16 16" version="1.1" width="16" data-view-component="true" class="octicon octicon-x">
+    <path d="M3.72 3.72a.75.75 0 0 1 1.06 0L8 6.94l3.22-3.22a.749.749 0 0 1 1.275.326.749.749 0 0 1-.215.734L9.06 8l3.22 3.22a.749.749 0 0 1-.326 1.275.749.749 0 0 1-.734-.215L8 9.06l-3.22 3.22a.751.751 0 0 1-1.042-.018.751.751 0 0 1-.018-1.042L6.94 8 3.72 4.78a.75.75 0 0 1 0-1.06Z"></path>
+</svg>
+      </button>
+      <div class="octocat-spinner my-6 js-details-dialog-spinner"></div>
+    </details-dialog>
+  </details>
+</template>
+
+    <div class="Popover js-hovercard-content position-absolute" style="display: none; outline: none;">
+  <div class="Popover-message Popover-message--bottom-left Popover-message--large Box color-shadow-large" style="width:360px;">
+  </div>
+</div>
+
+    <template id="snippet-clipboard-copy-button">
+  <div class="zeroclipboard-container position-absolute right-0 top-0">
+    <clipboard-copy aria-label="Copy" class="ClipboardButton btn js-clipboard-copy m-2 p-0" data-copy-feedback="Copied!" data-tooltip-direction="w">
+      <svg aria-hidden="true" height="16" viewBox="0 0 16 16" version="1.1" width="16" data-view-component="true" class="octicon octicon-copy js-clipboard-copy-icon m-2">
+    <path d="M0 6.75C0 5.784.784 5 1.75 5h1.5a.75.75 0 0 1 0 1.5h-1.5a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-1.5a.75.75 0 0 1 1.5 0v1.5A1.75 1.75 0 0 1 9.25 16h-7.5A1.75 1.75 0 0 1 0 14.25Z"></path><path d="M5 1.75C5 .784 5.784 0 6.75 0h7.5C15.216 0 16 .784 16 1.75v7.5A1.75 1.75 0 0 1 14.25 11h-7.5A1.75 1.75 0 0 1 5 9.25Zm1.75-.25a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-7.5a.25.25 0 0 0-.25-.25Z"></path>
+</svg>
+      <svg aria-hidden="true" height="16" viewBox="0 0 16 16" version="1.1" width="16" data-view-component="true" class="octicon octicon-check js-clipboard-check-icon color-fg-success d-none m-2">
+    <path d="M13.78 4.22a.75.75 0 0 1 0 1.06l-7.25 7.25a.75.75 0 0 1-1.06 0L2.22 9.28a.751.751 0 0 1 .018-1.042.751.751 0 0 1 1.042-.018L6 10.94l6.72-6.72a.75.75 0 0 1 1.06 0Z"></path>
+</svg>
+    </clipboard-copy>
+  </div>
+</template>
+<template id="snippet-clipboard-copy-button-unpositioned">
+  <div class="zeroclipboard-container">
+    <clipboard-copy aria-label="Copy" class="ClipboardButton btn btn-invisible js-clipboard-copy m-2 p-0 d-flex flex-justify-center flex-items-center" data-copy-feedback="Copied!" data-tooltip-direction="w">
+      <svg aria-hidden="true" height="16" viewBox="0 0 16 16" version="1.1" width="16" data-view-component="true" class="octicon octicon-copy js-clipboard-copy-icon">
+    <path d="M0 6.75C0 5.784.784 5 1.75 5h1.5a.75.75 0 0 1 0 1.5h-1.5a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-1.5a.75.75 0 0 1 1.5 0v1.5A1.75 1.75 0 0 1 9.25 16h-7.5A1.75 1.75 0 0 1 0 14.25Z"></path><path d="M5 1.75C5 .784 5.784 0 6.75 0h7.5C15.216 0 16 .784 16 1.75v7.5A1.75 1.75 0 0 1 14.25 11h-7.5A1.75 1.75 0 0 1 5 9.25Zm1.75-.25a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-7.5a.25.25 0 0 0-.25-.25Z"></path>
+</svg>
+      <svg aria-hidden="true" height="16" viewBox="0 0 16 16" version="1.1" width="16" data-view-component="true" class="octicon octicon-check js-clipboard-check-icon color-fg-success d-none">
+    <path d="M13.78 4.22a.75.75 0 0 1 0 1.06l-7.25 7.25a.75.75 0 0 1-1.06 0L2.22 9.28a.751.751 0 0 1 .018-1.042.751.751 0 0 1 1.042-.018L6 10.94l6.72-6.72a.75.75 0 0 1 1.06 0Z"></path>
+</svg>
+    </clipboard-copy>
+  </div>
+</template>
+
+
+    <style>
+      .user-mention[href$="/MarvinFS"] {
+        color: var(--color-user-mention-fg);
+        background-color: var(--bgColor-attention-muted, var(--color-attention-subtle));
+        border-radius: 2px;
+        margin-left: -2px;
+        margin-right: -2px;
+      }
+      .user-mention[href$="/MarvinFS"]:before,
+      .user-mention[href$="/MarvinFS"]:after {
+        content: '';
+        display: inline-block;
+        width: 2px;
+      }
+    </style>
+
+
+    </div>
+    <div id="js-global-screen-reader-notice" class="sr-only mt-n1" aria-live="polite" aria-atomic="true" ></div>
+    <div id="js-global-screen-reader-notice-assertive" class="sr-only mt-n1" aria-live="assertive" aria-atomic="true"></div>
+  </body>
+</html>
+

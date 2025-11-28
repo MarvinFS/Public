@@ -126,3 +126,31 @@ curl -I https://veeamrepo.test.local/vsa/9.2/vbr/13.0/mandatory/   # only when H
 To change sync interval (default 1 hour):
 1. Edit `OnUnitActiveSec=1h` in generated systemd unit file
 2. Reload systemd: `systemctl daemon-reload`
+
+### Reposync Logging
+The reposync script logs all activity to a persistent log file with automatic rotation
+Each sync tracks and logs package changes per repository
+
+- **Log file location**: `/var/log/veeam-vsa-reposync.log`
+- **Dual output**: All messages go to both stderr (for journalctl) and the log file
+- **Added packages**: New RPMs downloaded during sync
+- **Removed packages**: Old RPMs deleted by `--delete` flag
+
+### Log Rotation
+Logrotate configuration is automatically created at `/etc/logrotate.d/veeam-vsa-reposync`:
+- **Rotation**: Monthly
+- **Retention**: 3 months (rotate 3)
+- **Compression**: Enabled with delayed compression
+- **Permissions**: 0640 root:root
+
+### Logrotate Commands
+```bash
+# Test logrotate configuration (dry-run / debug mode)
+logrotate -d /etc/logrotate.d/veeam-vsa-reposync
+
+# Force immediate rotation
+logrotate -f /etc/logrotate.d/veeam-vsa-reposync
+
+# Search for package changes
+grep -E '\[Added\]|\[Removed\]' /var/log/veeam-vsa-reposync.log
+```

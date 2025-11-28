@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # ============================================================
-# Veeam Software Appliance repository mirror script (v3)
+# Veeam Software Appliance repository mirror script (v3.3)
 #
 # This script orchestrates the complete setup of a local Veeam VSA
 # package mirror infrastructure on RHEL-family systems. It does the following:
@@ -17,6 +17,7 @@ set -euo pipefail
 #   8) Creates systemd service + hourly timer for automated syncing
 #   9) Validates available disk space before initial sync operation
 #   10) Tests local HTTP connectivity to mirror paths to check if NGINX is correctly set
+#   11) Configures logging with logrotate for reposync script
 #
 # NOTE: This script sets up infrastructure only. Manual reposync trigger required:
 #   sudo /usr/local/sbin/veeam-vsa-reposync.sh
@@ -30,7 +31,7 @@ set -euo pipefail
 # ============================================================
 
 # -------------------------
-# CONFIG - EDIT TO REFLECT YOUR ENVIRONMENT
+# CONFIG START - EDIT TO REFLECT YOUR ENVIRONMENT
 # -------------------------
 DATA_DEVICE="/dev/sdb"              # disk to use for repo data (will be partitioned) I have added new drive to a VM 100GB
 DATA_PARTITION="${DATA_DEVICE}1"    # resulting partition 
@@ -41,13 +42,16 @@ REPO_ROOT="${MOUNT_POINT}/repo/repository.veeam.com"
 OS_VERSION="9.2"
 VBR_VERSION="13.0"
 
-# desired hostnames and IP which NGINX serves on port 80 (no SSL used, if needed, use any reverse proxy with SSL certs)
+# desired hostnames and IP which NGINX serves on port HTTP and optional HTTPS you may also specify IPv6 IP - both IPv4 and v6 supported for serving.
 REPO_HOSTNAME_SHORT="veeamrepo"
 REPO_HOSTNAME_FQDN="veeamrepo.test.local"
 REPO_HOST_IP="192.168.1.2"
 
 # Let's Encrypt email for certificate expiry notifications (required for HTTPS)
 LE_EMAIL="postmaster@test.us"
+# -------------------------
+# CONFIG END - EDIT TO REFLECT YOUR ENVIRONMENT
+# -------------------------
 
 # Paths and constants
 UPSTREAM_BASE_URL="https://repository.veeam.com"
@@ -56,6 +60,8 @@ KEY_INDEX_URL="${UPSTREAM_BASE_URL}/keys/"
 KEY_LOCAL_DIR="/etc/veeam/rpm-gpg"
 UPSTREAM_REPO_FILE="/etc/yum.repos.d/veeam-vsa-upstream.repo"
 REPOSYNC_SCRIPT="/usr/local/sbin/veeam-vsa-reposync.sh"
+REPOSYNC_LOGFILE="/var/log/veeam-vsa-reposync.log"
+REPOSYNC_LOGROTATE="/etc/logrotate.d/veeam-vsa-reposync"
 NGINX_CONF="/etc/nginx/conf.d/veeam-repo.conf"
 
 REPOID_MANDATORY="veeam-vsa-mandatory"
@@ -106,10 +112,10 @@ print_colored() {
 config_warning_prompt() {
   local border="==============================================================================="
   print_colored "1;31" "$border"
-  print_colored "1;37" "!!! WARNING !!! Please edit the configuration section at the top of this script before running."
+  print_colored "1;37" "!!! WARNING !!! Before launching the setup step, you have to edit the config section at the top of this script !!!"
   print_colored "1;33" "Defaults (hostnames, IPs, etc.) will be used otherwise, which might not be compatible with your system."
   print_colored "1;31" "$border"
-  print_colored "1;32" "Press any key to continue or Ctrl+C to abort."
+  print_colored "1;32" "Press any key to continue setup or Ctrl+C to abort now."
   read -r -n 1 -s || true
 }
 
@@ -140,7 +146,7 @@ display_option_menu() {
   else
     printf '\033[1;31mdisabled\033[0m)\n\n'
   fi
-  printf '  \033[1;32m[4]\033[0m \033[1;36mPerform setup\033[0m\n\n'
+  printf '  \033[1;32m[4]\033[0m \033[1;36mSTART INSTALLATION\033[0m\n\n'
   printf '  \033[1;31m[5]\033[0m \033[1;37mExit without changes\033[0m\n'
 }
 
@@ -407,6 +413,25 @@ EOF
 }
 
 # -------------------------
+# LOGROTATE CONFIG
+# -------------------------
+create_logrotate_config() {
+  log "Creating logrotate configuration at ${REPOSYNC_LOGROTATE}"
+  tee "${REPOSYNC_LOGROTATE}" >/dev/null <<'EOF'
+/var/log/veeam-vsa-reposync.log {
+    monthly
+    rotate 3
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 0640 root root
+}
+EOF
+  chmod 0644 "${REPOSYNC_LOGROTATE}"
+}
+
+# -------------------------
 # REPOSYNC SCRIPT
 # -------------------------
 create_reposync_script() {
@@ -454,14 +479,31 @@ UPSTREAM_EXTERNAL_MANDATORY_URL="\${UPSTREAM_BASE_URL}/vsa/\${OS_VERSION}/extern
 DNF_BIN="${DNF_BIN}"
 KEY_INDEX_URL="\${UPSTREAM_BASE_URL}/keys/"
 KEY_LOCAL_DIR="${KEY_LOCAL_DIR}"
+
+# Logging
+LOGFILE="${REPOSYNC_LOGFILE}"
 REPOSYNC_VARS
 
   # Append the rest of the script without variable expansion
   cat <<'REPOSYNC_FUNCTIONS' >> "${REPOSYNC_SCRIPT}"
 
+# Session tracking
+SESSION_START=""
+SESSION_STATUS="SUCCESS"
+
 log() {
-  printf '[%(%Y-%m-%d %H:%M:%S)T] %s\n' -1 "$*" >&2
+  local msg
+  msg=$(printf '[%(%Y-%m-%d %H:%M:%S)T] %s' -1 "$*")
+  printf '%s\n' "$msg" >&2
+  printf '%s\n' "$msg" >> "$LOGFILE"
 }
+
+cleanup_temp_files() {
+  rm -f /tmp/veeam-reposync-*.txt 2>/dev/null || true
+}
+
+# Ensure temp files are cleaned up on exit
+trap cleanup_temp_files EXIT
 
 check_prereqs() {
   [[ $EUID -eq 0 ]] || { log "ERROR: Must run as root."; exit 1; }
@@ -534,6 +576,42 @@ sync_repo_signatures() {
   done
 }
 
+log_package_changes() {
+  local repoid="$1"
+  local before_file="$2"
+  local after_file="$3"
+
+  # Compare sorted lists
+  local added removed
+  added=$(comm -13 "$before_file" "$after_file" 2>/dev/null || true)
+  removed=$(comm -23 "$before_file" "$after_file" 2>/dev/null || true)
+
+  local added_count=0 removed_count=0
+  [[ -n "$added" ]] && added_count=$(printf '%s\n' "$added" | wc -l)
+  [[ -n "$removed" ]] && removed_count=$(printf '%s\n' "$removed" | wc -l)
+
+  if [[ $added_count -eq 0 && $removed_count -eq 0 ]]; then
+    log "  ${repoid}: No package changes"
+    return
+  fi
+
+  log "  ${repoid}: +${added_count} added, -${removed_count} removed"
+
+  if [[ -n "$added" ]]; then
+    log "  [Added]"
+    while IFS= read -r rpm_path; do
+      [[ -n "$rpm_path" ]] && log "    ${rpm_path##*/}"
+    done <<< "$added"
+  fi
+
+  if [[ -n "$removed" ]]; then
+    log "  [Removed]"
+    while IFS= read -r rpm_path; do
+      [[ -n "$rpm_path" ]] && log "    ${rpm_path##*/}"
+    done <<< "$removed"
+  fi
+}
+
 mirror_repo() {
   local repoid="$1"
   local relpath="$2"
@@ -544,6 +622,11 @@ mirror_repo() {
 
   log "Running dnf reposync for ${repoid}"
   log "Target: ${target_path}"
+
+  # Capture package list before sync
+  local before_file="/tmp/veeam-reposync-before-${repoid}.txt"
+  local after_file="/tmp/veeam-reposync-after-${repoid}.txt"
+  find "${target_path}" -name "*.rpm" 2>/dev/null | sort > "$before_file" || true
 
   # IMPORTANT:
   #   --nogpgcheck is ONLY for this mirror host.
@@ -556,6 +639,12 @@ mirror_repo() {
     --norepopath \
     --delete \
     --nogpgcheck
+
+  # Capture package list after sync
+  find "${target_path}" -name "*.rpm" 2>/dev/null | sort > "$after_file" || true
+
+  # Log package changes
+  log_package_changes "${repoid}" "$before_file" "$after_file"
 
   # After successful reposync, pull metadata signature files
   sync_repo_signatures "${upstream_url}" "${target_path}"
@@ -571,7 +660,7 @@ verify_repo_metadata() {
   [[ -f "${asc}" && -f "${xml}" ]] || { log "!FATAL: Missing repomd.xml or repomd.xml.asc in ${repodata_path}"; return 1; }
   command -v gpg >/dev/null 2>&1 || { log "!FATAL: gpg not found; cannot verify metadata"; return 1; }
 
-  printf '[%(%Y-%m-%d %H:%M:%S)T] Verifying metadata signature: %s\n' -1 "${asc}" >&2
+  log "Verifying metadata signature: ${asc}"
   
   # Run GPG verification and capture output (--batch --no-tty prevents hanging in automated scripts)
   local gpg_output gpg_status
@@ -579,14 +668,16 @@ verify_repo_metadata() {
   gpg_status=$?
   
   # Display GPG output - filter out confusing warnings and trust messages, show only clean verification
-  printf '%s\n' "${gpg_output}" | grep -E '(Signature made|using RSA key|Good signature|BAD signature)' | sed 's/ \[unknown\]$//' >&2
+  local filtered_output
+  filtered_output=$(printf '%s\n' "${gpg_output}" | grep -E '(Signature made|using RSA key|Good signature|BAD signature)' | sed 's/ \[unknown\]$//' || true)
+  [[ -n "$filtered_output" ]] && log "$filtered_output"
   
   # Check verification result and log appropriately
   if [[ ${gpg_status} -eq 0 ]]; then
-    printf '[%(%Y-%m-%d %H:%M:%S)T] !SUCCESS: Metadata signature verified for %s\n' -1 "${relpath}" >&2
+    log "!SUCCESS: Metadata signature verified for ${relpath}"
     return 0
   else
-    printf '[%(%Y-%m-%d %H:%M:%S)T] !FATAL: Metadata signature FAILED for %s\n' -1 "${relpath}" >&2
+    log "!FATAL: Metadata signature FAILED for ${relpath}"
     return 1
   fi
 }
@@ -608,6 +699,7 @@ verify_all_metadata_or_abort() {
     log "This may indicate tampering or corruption of upstream metadata."
     log "Taking mirror offline. Manual investigation required."
     log "============================================================"
+    SESSION_STATUS="FAILURE"
     command -v systemctl >/dev/null 2>&1 && systemctl stop nginx || log "WARNING: Failed to stop nginx; please stop it manually."
     exit 1
   fi
@@ -618,7 +710,36 @@ verify_all_metadata_or_abort() {
   log "============================================================"
 }
 
+log_session_start() {
+  SESSION_START=$(date +%s)
+  log "============================================================"
+  log "REPOSYNC SESSION START"
+  log "============================================================"
+}
+
+log_session_end() {
+  local end_time duration_sec duration_str
+  end_time=$(date +%s)
+  duration_sec=$((end_time - SESSION_START))
+  
+  # Format duration as Xm Ys
+  local mins=$((duration_sec / 60))
+  local secs=$((duration_sec % 60))
+  if [[ $mins -gt 0 ]]; then
+    duration_str="${mins}m ${secs}s"
+  else
+    duration_str="${secs}s"
+  fi
+
+  log "============================================================"
+  log "REPOSYNC SESSION END - STATUS: ${SESSION_STATUS}"
+  log "Duration: ${duration_str}"
+  log "============================================================"
+}
+
 main() {
+  log_session_start
+
   check_prereqs
   sync_veeam_keys
 
@@ -630,6 +751,7 @@ main() {
   verify_all_metadata_or_abort
 
   log "Veeam VSA reposync completed successfully."
+  log_session_end
 }
 
 main "$@"
@@ -947,7 +1069,7 @@ cleanup_installation() {
     systemctl disable --now veeam-vsa-reposync.service 2>/dev/null || log "WARNING: Failed to disable service"
   fi
 
-  rm -f "${SYSTEMD_TIMER}" "${SYSTEMD_SERVICE}" "${NGINX_CONF}" "${UPSTREAM_REPO_FILE}" "${REPOSYNC_SCRIPT}"
+  rm -f "${SYSTEMD_TIMER}" "${SYSTEMD_SERVICE}" "${NGINX_CONF}" "${UPSTREAM_REPO_FILE}" "${REPOSYNC_SCRIPT}" "${REPOSYNC_LOGROTATE}"
   rm -rf "${KEY_LOCAL_DIR}" "${LE_WEBROOT}"
 
   if command -v nginx >/dev/null 2>&1; then
@@ -967,6 +1089,7 @@ cleanup_installation() {
   [[ -d "/etc/systemd/system" ]] && systemctl daemon-reload >/dev/null 2>&1 || true
 
   log "Cleanup complete. User data at ${REPO_ROOT} was not removed."
+  log "Log file preserved at: ${REPOSYNC_LOGFILE}"
   log "============================================================"
 }
 
@@ -1004,16 +1127,19 @@ main() {
   # 3) Upstream repo configuration
   create_upstream_repo_file
 
-  # 4) Reposync script generation (with injected configuration)
+  # 4) Logrotate configuration
+  create_logrotate_config
+
+  # 5) Reposync script generation (with injected configuration)
   create_reposync_script
 
-  # 5) Directory preparation
+  # 6) Directory preparation
   log "Ensuring repo root directory ${REPO_ROOT}"
   mkdir -p "${REPO_ROOT}"
   chown root:root "${MOUNT_POINT}" "${MOUNT_POINT}/repo" "${REPO_ROOT}" || true
   chmod 0755 "${MOUNT_POINT}" "${MOUNT_POINT}/repo" "${REPO_ROOT}" || true
 
-  # 6) Network and security configuration
+  # 7) Network and security configuration
   [[ "${ENABLE_HTTPS}" == "true" ]] && mkdir -p "${LE_WEBROOT}" && chmod 0755 "${LE_WEBROOT}"
 
   configure_nginx "http"
@@ -1025,10 +1151,10 @@ main() {
     configure_nginx "https"
   fi
 
-  # 7) Systemd automation setup
+  # 8) Systemd automation setup
   create_systemd_units
 
-  # 8) Connectivity test
+  # 9) Connectivity test
   check_connectivity "${ENABLE_HTTPS}"
 
   log "============================================================"
@@ -1041,6 +1167,7 @@ main() {
   log ""
   log "Hourly sync is handled by systemd timer: veeam-vsa-reposync.timer"
   log "Check status with: systemctl status veeam-vsa-reposync.timer"
+  log "Sync logs available at: ${REPOSYNC_LOGFILE}"
   log "You need to run initial repo-sync (this will download ~30 GB on first run) with:"
   log "${REPOSYNC_SCRIPT}"
   log "============================================================"

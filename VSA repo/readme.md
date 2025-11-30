@@ -123,9 +123,33 @@ curl -I https://veeamrepo.test.local/vsa/9.2/vbr/13.0/mandatory/   # only when H
 - **Clients**: Point VSA installations to `http://<REPO_HOST_IP>/vsa/...` (or `https://<FQDN>/vsa/...` when TLS is enabled)
 
 ### Sync Frequency
-To change sync interval (default 1 hour):
-1. Edit `OnUnitActiveSec=1h` in generated systemd unit file
-2. Reload systemd: `systemctl daemon-reload`
+
+The default sync schedule is **hourly**
+To change the sync interval, edit the timer file:
+```bash
+/etc/systemd/system/veeam-vsa-reposync.timer
+```
+Modify the `OnCalendar=` line. Examples:
+```ini
+# Every hour (default)
+OnCalendar=hourly
+
+# Every 6 hours
+OnCalendar=*-*-* 00/6:00:00
+
+# Daily at 3 AM
+OnCalendar=*-*-* 03:00:00
+```
+
+Then reload and restart the timer:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl restart veeam-vsa-reposync.timer
+
+# Verify next scheduled run
+systemctl list-timers | grep veeam
+```
 
 ### Reposync Logging
 The reposync script logs all activity to a persistent log file with automatic rotation

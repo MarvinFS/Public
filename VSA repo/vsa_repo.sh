@@ -1042,9 +1042,7 @@ EOF
 Description=Run Veeam VSA repository mirror sync hourly
 
 [Timer]
-OnBootSec=15min
-OnUnitActiveSec=1h
-Unit=veeam-vsa-reposync.service
+OnCalendar=hourly
 Persistent=true
 
 [Install]

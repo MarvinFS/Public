@@ -178,3 +178,17 @@ logrotate -f /etc/logrotate.d/veeam-vsa-reposync
 # Search for package changes
 grep -E '\[Added\]|\[Removed\]' /var/log/veeam-vsa-reposync.log
 ```
+
+## ✍ Contributions
+
+We welcome contributions from the community! We encourage you to create [issues](https://github.com/VeeamHub/veeam-vsa-repo-mirror/issues/new/choose) for Bugs & Feature Requests and submit Pull Requests. For more detailed information, refer to our [Contributing Guide](CONTRIBUTING.md).
+
+## 🤝🏾 License
+
+* [MIT License](LICENSE)
+
+## 🤔 Questions
+
+If you have any questions or something is unclear, please don't hesitate to [create an issue](https://github.com/VeeamHub/veeam-vsa-repo-mirror/issues/new/choose) and let us know!
+
+

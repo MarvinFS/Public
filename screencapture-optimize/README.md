@@ -21,14 +21,14 @@ Perfect for:
 ### Before Optimization
 *Original screen recording with pauses and idle time:*
 
-<video src="demo/2025-12-09_23-57-27.mp4" controls width="100%"></video>
+[▶️ Watch Original Video (2:52, 11.96 MB)](demo/2025-12-09_23-57-27.mp4)
 
 ### After Optimization
 *Same recording with frozen frames removed - notice how much shorter and more engaging it is:*
 
-<video src="demo/2025-12-09_23-57-27_optimized.mp4" controls width="100%"></video>
+[▶️ Watch Optimized Video (0:54, 3.71 MB)](demo/2025-12-09_23-57-27_optimized.mp4)
 
-> 💡 **Tip:** Click the fullscreen button (⛶) in the video player to view in fullscreen mode.
+> 💡 **Result:** 69% smaller file size, removed 2 minutes of idle time!
 
 ## Requirements
 

@@ -16,6 +16,20 @@ Perfect for:
 - Reducing file sizes by cutting idle time
 - Preparing tutorials where you want to skip loading screens
 
+## Demo
+
+### Before Optimization
+*Original screen recording with pauses and idle time:*
+
+<video src="demo/2025-12-09_23-57-27.mp4" controls width="100%"></video>
+
+### After Optimization
+*Same recording with frozen frames removed - notice how much shorter and more engaging it is:*
+
+<video src="demo/2025-12-09_23-57-27_optimized.mp4" controls width="100%"></video>
+
+> 💡 **Tip:** Click the fullscreen button (⛶) in the video player to view in fullscreen mode.
+
 ## Requirements
 
 - **PowerShell 5.1+** (Windows) or PowerShell Core 7+ (cross-platform)

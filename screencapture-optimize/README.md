@@ -61,20 +61,51 @@ The script automatically searches for ffmpeg in:
 3. `%LOCALAPPDATA%\ffmpeg\bin`, `%ProgramFiles%\ffmpeg\bin`
 4. System PATH
 
-## Installation
+## How to Run
 
-1. Download `screencapture-optimize.ps1` to any folder
-2. Run from PowerShell:
+### Option 1: Run Directly from GitHub (No Download Required)
+
+Run this one-liner in PowerShell to fetch and execute the script directly:
 
 ```powershell
-# If path has no spaces:
-.\screencapture-optimize.ps1 -InputFile "your-recording.mp4"
-
-# If path contains spaces, use & (call operator):
-& "D:\My Scripts\screencapture-optimize.ps1" -InputFile "your-recording.mp4"
+# Fetch and run with your video file
+irm https://raw.githubusercontent.com/MarvinFS/Public/main/screencapture-optimize/screencapture-optimize.ps1 | iex; screencapture-optimize -InputFile "your-recording.mp4"
 ```
 
-> **Important:** When the script path contains spaces, you MUST prefix with `&` otherwise PowerShell treats it as a string, not a command.
+Or with all options:
+
+```powershell
+irm https://raw.githubusercontent.com/MarvinFS/Public/main/screencapture-optimize/screencapture-optimize.ps1 | iex; screencapture-optimize -InputFile "video.mp4" -Resolution HD -OutputFormat Gif -NoiseThreshold Auto
+```
+
+### Option 2: Download and Run Locally
+
+```powershell
+# Download the script
+Invoke-WebRequest -Uri "https://raw.githubusercontent.com/MarvinFS/Public/main/screencapture-optimize/screencapture-optimize.ps1" -OutFile "screencapture-optimize.ps1"
+
+# Run it
+& .\screencapture-optimize.ps1 -InputFile "your-recording.mp4"
+```
+
+### Option 3: Run with Execution Policy Bypass
+
+If you get execution policy errors:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File ".\screencapture-optimize.ps1" -InputFile "your-recording.mp4"
+```
+
+Or from cmd.exe:
+
+```cmd
+powershell -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/MarvinFS/Public/main/screencapture-optimize/screencapture-optimize.ps1 | iex; screencapture-optimize -InputFile 'video.mp4'"
+```
+
+> **Note:** When the script path contains spaces, use `&` (call operator):
+> ```powershell
+> & "D:\My Scripts\screencapture-optimize.ps1" -InputFile "video.mp4"
+> ```
 
 ## Parameters
 

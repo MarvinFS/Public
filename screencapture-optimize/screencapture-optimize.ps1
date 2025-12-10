@@ -55,6 +55,18 @@
     & .\screencapture-optimize.ps1 -InputFile "recording.mp4" -NoiseThreshold Auto -DebugFreezes
 
 .NOTES
+    HOW TO RUN:
+    
+    Option 1 - Run directly from GitHub (no download):
+    irm https://raw.githubusercontent.com/MarvinFS/Public/main/screencapture-optimize/screencapture-optimize.ps1 | iex; screencapture-optimize -InputFile "video.mp4"
+    
+    Option 2 - Download and run locally:
+    Invoke-WebRequest -Uri "https://raw.githubusercontent.com/MarvinFS/Public/main/screencapture-optimize/screencapture-optimize.ps1" -OutFile "screencapture-optimize.ps1"
+    & .\screencapture-optimize.ps1 -InputFile "video.mp4"
+    
+    Option 3 - With execution policy bypass:
+    powershell -ExecutionPolicy Bypass -File ".\screencapture-optimize.ps1" -InputFile "video.mp4"
+    
     When running from PowerShell with a path containing spaces, you must use the & (call) operator:
     & "C:\path with spaces\screencapture-optimize.ps1" -InputFile "video.mp4"
 #>

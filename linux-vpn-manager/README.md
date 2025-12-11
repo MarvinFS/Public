@@ -1,7 +1,27 @@
-# Linux VPN Manager v6
+# Linux VPN Manager
 
-A streamlined, unified VPN management solution for Linux servers with full auto installer and text menu management
-(for server owners, who wants to just deploy VPN and forget)
+**One-liner install on stock Linux** that deploys production-ready VPN with zero manual configuration.
+
+## What It Does
+
+- **Installs & configures 4 VPN protocols**:
+  - XRay VLESS+REALITY – Best-in-class obfuscation (no domain needed, mimics real TLS)
+  - WireGuard – Fast modern VPN (supports AmneziaWG 1.5 client config export)
+  - OpenVPN – Classic SSL VPN
+  - Shadowsocks – Encrypted proxy - pretty much outdated already
+  
+- **Auto-optimizes server**:
+  - BBR congestion control
+  - TCP buffer tuning for throughput
+  - IP forwarding & firewall rules
+  - sysctl network optimizations
+  - auto MSS clumping and much more...
+
+- **Comprehensive user management** (menu-based):
+  - Add / remove / list clients
+  - Export client configs (files, QR codes, share links)
+  
+Target: Server owners who want to deploy VPN and forget - zero manual config needed.
 
 ## Prerequisites
 

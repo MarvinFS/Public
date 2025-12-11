@@ -142,8 +142,8 @@ run_install() {
 # ============================================================================
 
 load_params() {
-    [[ ! -f ${WG_PARAMS} ]] && { log_error "WireGuard not installed"; exit 1; }
-    source ${WG_PARAMS}
+    [[ ! -f "${WG_PARAMS}" ]] && { log_error "WireGuard not installed"; exit 1; }
+    source "${WG_PARAMS}"
 }
 
 get_next_ip() {
@@ -156,7 +156,7 @@ get_next_ip() {
 }
 
 create_client() {
-    [[ -f ${WG_PARAMS} ]] && source ${WG_PARAMS}
+    [[ -f "${WG_PARAMS}" ]] && source "${WG_PARAMS}"
     
     echo ""
     read -rp "Client name [client1]: " CLIENT_NAME
@@ -164,7 +164,7 @@ create_client() {
     [[ -z "${CLIENT_NAME}" ]] && { log_error "Invalid name"; return 1; }
     [[ -f "${CLIENT_DIR}/${CLIENT_NAME}.conf" ]] && { log_error "Client exists"; return 1; }
     
-    mkdir -p ${CLIENT_DIR}
+    mkdir -p "${CLIENT_DIR}"
     
     CLIENT_PRIV_KEY=$(wg genkey)
     CLIENT_PUB_KEY=$(echo "${CLIENT_PRIV_KEY}" | wg pubkey)
@@ -360,9 +360,9 @@ main_menu() {
         echo -e "${GREEN}╚════════════════════════════════════════╝${NC}"
         echo ""
         
-        if [[ -f ${WG_PARAMS} ]]; then
-            source ${WG_PARAMS}
-            service_is_active wg-quick@${SERVER_WG_NIC} && echo -e "  Status: ${GREEN}Running${NC}" || echo -e "  Status: ${RED}Stopped${NC}"
+        if [[ -f "${WG_PARAMS}" ]]; then
+            source "${WG_PARAMS}"
+            service_is_active "wg-quick@${SERVER_WG_NIC}" && echo -e "  Status: ${GREEN}Running${NC}" || echo -e "  Status: ${RED}Stopped${NC}"
             echo ""
             echo "  1) Add client"
             echo "  2) Remove client"

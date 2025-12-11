@@ -112,16 +112,16 @@ start_openvpn() {
 }
 
 create_client() {
-    [[ -f ${OVPN_PARAMS} ]] && source ${OVPN_PARAMS}
+    [[ -f "${OVPN_PARAMS}" ]] && source "${OVPN_PARAMS}"
     
     echo ""
     read -rp "Client name [client1]: " CLIENT_NAME
     CLIENT_NAME=$(sanitize_client_name "${CLIENT_NAME:-client1}")
     [[ -z "${CLIENT_NAME}" ]] && { log_error "Invalid name"; return 1; }
     
-    mkdir -p ${CLIENT_DIR}
+    mkdir -p "${CLIENT_DIR}"
     
-    cd ${EASYRSA_DIR}
+    cd "${EASYRSA_DIR}"
     ./easyrsa --batch build-client-full "${CLIENT_NAME}" nopass
     
     cat > ${CLIENT_DIR}/${CLIENT_NAME}.ovpn << EOF
@@ -184,8 +184,8 @@ run_install() {
 # ============================================================================
 
 load_params() {
-    [[ ! -f ${OVPN_PARAMS} ]] && { log_error "OpenVPN not installed"; exit 1; }
-    source ${OVPN_PARAMS}
+    [[ ! -f "${OVPN_PARAMS}" ]] && { log_error "OpenVPN not installed"; exit 1; }
+    source "${OVPN_PARAMS}"
 }
 
 list_clients() {

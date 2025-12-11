@@ -169,9 +169,9 @@ create_xray_config() {
         short_ids_json+="]"
     fi
     
-    source ${XRAY_PARAMS}
+    source "${XRAY_PARAMS}"
     
-    cat > ${XRAY_CONFIG} << EOF
+    cat > "${XRAY_CONFIG}" << EOF
 {
     "log": {
         "loglevel": "warning"
@@ -237,14 +237,14 @@ run_install() {
     configure_server
     
     # Reload params to ensure variables are set
-    if [[ -f ${XRAY_PARAMS} ]]; then
-        source ${XRAY_PARAMS}
+    if [[ -f "${XRAY_PARAMS}" ]]; then
+        source "${XRAY_PARAMS}"
     else
         log_error "Params file not found: ${XRAY_PARAMS}"
         exit 1
     fi
     
-    firewall_open_port ${XRAY_PORT} tcp || true
+    firewall_open_port "${XRAY_PORT}" tcp || true
     start_xray
     
     echo ""
@@ -314,7 +314,7 @@ show_client_config() {
     local client_file="${CLIENT_DIR}/${name}.conf"
     [[ ! -f "${client_file}" ]] && { log_error "Client '${name}' not found"; return 1; }
     
-    source ${XRAY_PARAMS}
+    source "${XRAY_PARAMS}"
     
     # Source client file but preserve the name we were given
     local CLIENT_UUID CLIENT_SHORT_ID CREATED_DATE
@@ -444,21 +444,27 @@ revoke_client() {
 # ============================================================================
 
 load_params() {
-    [[ ! -f ${XRAY_PARAMS} ]] && { log_error "XRay not installed"; exit 1; }
-    source ${XRAY_PARAMS}
+    [[ ! -f "${XRAY_PARAMS}" ]] && { log_error "XRay not installed"; exit 1; }
+    source "${XRAY_PARAMS}"
 }
 
 change_port() {
     load_params
     
+    local NEW_PORT
     read -rp "New port [${XRAY_PORT}]: " NEW_PORT
     NEW_PORT=${NEW_PORT:-$XRAY_PORT}
     
-    sed -i "s/^XRAY_PORT=.*/XRAY_PORT=${NEW_PORT}/" ${XRAY_PARAMS}
+    if ! validate_port "${NEW_PORT}"; then
+        log_error "Invalid port. Must be 1-65535"
+        return 1
+    fi
+    
+    sed -i "s|^XRAY_PORT=.*|XRAY_PORT=${NEW_PORT}|" "${XRAY_PARAMS}"
     XRAY_PORT=${NEW_PORT}
     
     create_xray_config
-    firewall_open_port ${NEW_PORT} tcp
+    firewall_open_port "${NEW_PORT}" tcp
     systemctl restart xray
     
     log_success "Port changed to ${NEW_PORT}"
@@ -473,7 +479,7 @@ change_server_address() {
     read -rp "New server address: " NEW_ADDRESS
     [[ -z "${NEW_ADDRESS}" ]] && { log_error "Address required"; return 1; }
     
-    sed -i "s/^SERVER_ADDRESS=.*/SERVER_ADDRESS=\"${NEW_ADDRESS}\"/" ${XRAY_PARAMS}
+    sed -i "s|^SERVER_ADDRESS=.*|SERVER_ADDRESS=\"${NEW_ADDRESS}\"|" "${XRAY_PARAMS}"
     SERVER_ADDRESS="${NEW_ADDRESS}"
     
     log_success "Server address changed to ${NEW_ADDRESS}"
@@ -488,8 +494,8 @@ regenerate_keys() {
     
     generate_keys
     
-    sed -i "s/^PRIVATE_KEY=.*/PRIVATE_KEY='${PRIVATE_KEY}'/" ${XRAY_PARAMS}
-    sed -i "s/^PUBLIC_KEY=.*/PUBLIC_KEY='${PUBLIC_KEY}'/" ${XRAY_PARAMS}
+    sed -i "s|^PRIVATE_KEY=.*|PRIVATE_KEY='${PRIVATE_KEY}'|" "${XRAY_PARAMS}"
+    sed -i "s|^PUBLIC_KEY=.*|PUBLIC_KEY='${PUBLIC_KEY}'|" "${XRAY_PARAMS}"
     
     create_xray_config
     systemctl restart xray

@@ -142,11 +142,11 @@ start_shadowsocks() {
 }
 
 generate_client_config() {
-    source ${SS_PARAMS}
+    source "${SS_PARAMS}"
     
     local SS_URL="ss://$(echo -n "${SS_METHOD}:${SS_PASSWORD}" | base64 -w0)@${PUBLIC_IP}:${SS_PORT}"
     
-    cat > ${CLIENT_DIR}/client-config.json << EOF
+    cat > "${CLIENT_DIR}/client-config.json" << EOF
 {
     "server": "${PUBLIC_IP}",
     "server_port": ${SS_PORT},
@@ -201,8 +201,8 @@ run_install() {
 # ============================================================================
 
 load_params() {
-    [[ ! -f ${SS_PARAMS} ]] && { log_error "Shadowsocks not installed"; exit 1; }
-    source ${SS_PARAMS}
+    [[ ! -f "${SS_PARAMS}" ]] && { log_error "Shadowsocks not installed"; exit 1; }
+    source "${SS_PARAMS}"
 }
 
 show_config() {
@@ -213,17 +213,21 @@ show_config() {
 change_password() {
     load_params
     
-    local NEW_PASS=$(generate_password 32)
+    local NEW_PASS
+    NEW_PASS=$(generate_password 32)
     echo -e "New password: ${CYAN}${NEW_PASS}${NC}"
     read -rp "Use this? [Y/n]: " use_pass
     [[ "${use_pass}" =~ ^[Nn]$ ]] && read -rp "Enter password: " NEW_PASS
     
-    local tmp=$(mktemp)
-    jq --arg pw "${NEW_PASS}" '.password = $pw' ${SS_CONFIG} > "$tmp" && mv "$tmp" ${SS_CONFIG}
-    chown shadowsocks:${GROUP_NAME} ${SS_CONFIG}
-    chmod 600 ${SS_CONFIG}
+    local tmp
+    tmp=$(mktemp)
+    trap "rm -f '$tmp'" RETURN
     
-    sed -i "s/^SS_PASSWORD=.*/SS_PASSWORD=\"${NEW_PASS}\"/" ${SS_PARAMS}
+    jq --arg pw "${NEW_PASS}" '.password = $pw' "${SS_CONFIG}" > "$tmp" && mv "$tmp" "${SS_CONFIG}"
+    chown shadowsocks:"${GROUP_NAME}" "${SS_CONFIG}"
+    chmod 600 "${SS_CONFIG}"
+    
+    sed -i "s|^SS_PASSWORD=.*|SS_PASSWORD=\"${NEW_PASS}\"|" "${SS_PARAMS}"
     SS_PASSWORD="${NEW_PASS}"
     
     systemctl restart shadowsocks
@@ -234,18 +238,27 @@ change_password() {
 change_port() {
     load_params
     
+    local NEW_PORT
     read -rp "New port [${SS_PORT}]: " NEW_PORT
     NEW_PORT=${NEW_PORT:-$SS_PORT}
     
-    local tmp=$(mktemp)
-    jq --argjson port "${NEW_PORT}" '.server_port = $port' ${SS_CONFIG} > "$tmp" && mv "$tmp" ${SS_CONFIG}
-    chown shadowsocks:${GROUP_NAME} ${SS_CONFIG}
-    chmod 600 ${SS_CONFIG}
+    if ! validate_port "${NEW_PORT}"; then
+        log_error "Invalid port. Must be 1-65535"
+        return 1
+    fi
     
-    sed -i "s/^SS_PORT=.*/SS_PORT=${NEW_PORT}/" ${SS_PARAMS}
+    local tmp
+    tmp=$(mktemp)
+    trap "rm -f '$tmp'" RETURN
     
-    firewall_open_port ${NEW_PORT} tcp
-    firewall_open_port ${NEW_PORT} udp
+    jq --argjson port "${NEW_PORT}" '.server_port = $port' "${SS_CONFIG}" > "$tmp" && mv "$tmp" "${SS_CONFIG}"
+    chown shadowsocks:"${GROUP_NAME}" "${SS_CONFIG}"
+    chmod 600 "${SS_CONFIG}"
+    
+    sed -i "s|^SS_PORT=.*|SS_PORT=${NEW_PORT}|" "${SS_PARAMS}"
+    
+    firewall_open_port "${NEW_PORT}" tcp
+    firewall_open_port "${NEW_PORT}" udp
     
     systemctl restart shadowsocks
     log_success "Port changed to ${NEW_PORT}"

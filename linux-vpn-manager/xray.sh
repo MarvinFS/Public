@@ -275,35 +275,36 @@ create_client() {
     load_params
     
     echo ""
-    read -rp "Client name: " CLIENT_NAME
-    [[ -z "${CLIENT_NAME}" ]] && { log_error "Name required"; return 1; }
+    read -rp "Client name: " input_name
+    [[ -z "${input_name}" ]] && { log_error "Name required"; return 1; }
     
-    CLIENT_NAME=$(sanitize_client_name "${CLIENT_NAME}")
-    local client_file="${CLIENT_DIR}/${CLIENT_NAME}.conf"
+    # Use unique variable names to avoid being overwritten by source commands
+    local new_client_name=$(sanitize_client_name "${input_name}")
+    local new_client_file="${CLIENT_DIR}/${new_client_name}.conf"
     
-    [[ -f "${client_file}" ]] && { log_error "Client '${CLIENT_NAME}' already exists"; return 1; }
+    [[ -f "${new_client_file}" ]] && { log_error "Client '${new_client_name}' already exists"; return 1; }
     
-    local CLIENT_UUID=$(xray uuid)
-    local CLIENT_SHORT_ID=$(generate_short_id)
-    local CREATED_DATE=$(date +%Y-%m-%d)
+    local new_client_uuid=$(xray uuid)
+    local new_client_short_id=$(generate_short_id)
+    local new_created_date=$(date +%Y-%m-%d)
     
     # Save client config
-    cat > "${client_file}" << EOF
-CLIENT_NAME="${CLIENT_NAME}"
-CLIENT_UUID="${CLIENT_UUID}"
-CLIENT_SHORT_ID="${CLIENT_SHORT_ID}"
-CREATED_DATE="${CREATED_DATE}"
+    cat > "${new_client_file}" << EOF
+CLIENT_NAME="${new_client_name}"
+CLIENT_UUID="${new_client_uuid}"
+CLIENT_SHORT_ID="${new_client_short_id}"
+CREATED_DATE="${new_created_date}"
 EOF
-    chmod 600 "${client_file}"
+    chmod 600 "${new_client_file}"
     
-    # Rebuild server config
+    # Rebuild server config (this sources all client files, will set CLIENT_NAME etc)
     create_xray_config
     systemctl restart xray
     
-    log_success "Client '${CLIENT_NAME}' created"
+    log_success "Client '${new_client_name}' created"
     
     # Show client config
-    show_client_config "${CLIENT_NAME}"
+    show_client_config "${new_client_name}"
 }
 
 show_client_config() {
@@ -314,7 +315,12 @@ show_client_config() {
     [[ ! -f "${client_file}" ]] && { log_error "Client '${name}' not found"; return 1; }
     
     source ${XRAY_PARAMS}
+    
+    # Source client file but preserve the name we were given
+    local CLIENT_UUID CLIENT_SHORT_ID CREATED_DATE
     source "${client_file}"
+    # Use the passed name, not the one from the file (in case of variable collision)
+    local CLIENT_NAME="${name}"
     
     # Build VLESS URL (profile name: server-username)
     local PROFILE_NAME="${SERVER_ADDRESS}-${CLIENT_NAME}"
@@ -412,23 +418,25 @@ revoke_client() {
     
     list_clients
     
-    read -rp "Client name to revoke: " CLIENT_NAME
-    [[ -z "${CLIENT_NAME}" ]] && return
+    read -rp "Client name to revoke: " input_name
+    [[ -z "${input_name}" ]] && return
     
-    local client_file="${CLIENT_DIR}/${CLIENT_NAME}.conf"
-    [[ ! -f "${client_file}" ]] && { log_error "Client '${CLIENT_NAME}' not found"; return 1; }
+    # Use unique variable names to avoid being overwritten by source commands
+    local revoke_name="${input_name}"
+    local revoke_file="${CLIENT_DIR}/${revoke_name}.conf"
+    [[ ! -f "${revoke_file}" ]] && { log_error "Client '${revoke_name}' not found"; return 1; }
     
-    confirm_action "Revoke client '${CLIENT_NAME}'?" || return
+    confirm_action "Revoke client '${revoke_name}'?" || return
     
-    rm -f "${client_file}"
-    rm -f "${CLIENT_DIR}/${CLIENT_NAME}-vless.txt"
-    rm -f "${CLIENT_DIR}/${CLIENT_NAME}-config.json"
+    rm -f "${revoke_file}"
+    rm -f "${CLIENT_DIR}/${revoke_name}-vless.txt"
+    rm -f "${CLIENT_DIR}/${revoke_name}-config.json"
     
     # Rebuild server config
     create_xray_config
     systemctl restart xray
     
-    log_success "Client '${CLIENT_NAME}' revoked"
+    log_success "Client '${revoke_name}' revoked"
 }
 
 # ============================================================================

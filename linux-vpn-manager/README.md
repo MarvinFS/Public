@@ -35,10 +35,10 @@ Target: Server owners who want to deploy VPN and forget - zero manual config nee
 
 ```bash
 # Using curl
-curl -fsSL https://raw.githubusercontent.com/MarvinFS/Public/main/vpn-manager/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/MarvinFS/Public/main/linux-vpn-manager/install.sh | sudo bash
 
 # Using wget (for minimal systems)
-wget -qO- https://raw.githubusercontent.com/MarvinFS/Public/main/vpn-manager/install.sh | sudo bash
+wget -qO- https://raw.githubusercontent.com/MarvinFS/Public/main/linux-vpn-manager/install.sh | sudo bash
 ```
 
 This downloads all scripts to `/opt/vpn-manager/` and creates the `vpn-manager` command.
@@ -48,7 +48,7 @@ This downloads all scripts to `/opt/vpn-manager/` and creates the `vpn-manager` 
 ```bash
 # Download all scripts at once
 mkdir -p /opt/vpn-manager && cd /opt/vpn-manager
-curl -fsSL https://raw.githubusercontent.com/MarvinFS/Public/main/vpn-manager/{vpn-manager,common,wireguard,openvpn,shadowsocks,xray}.sh -O
+curl -fsSL https://raw.githubusercontent.com/MarvinFS/Public/main/linux-vpn-manager/{vpn-manager,common,wireguard,openvpn,shadowsocks,xray}.sh -O
 chmod +x *.sh
 
 # Run the manager
@@ -59,7 +59,7 @@ sudo ./vpn-manager.sh
 ```bash
 mkdir -p /opt/vpn-manager && cd /opt/vpn-manager
 for f in vpn-manager common wireguard openvpn shadowsocks xray; do
-  wget -q "https://raw.githubusercontent.com/MarvinFS/Public/main/vpn-manager/${f}.sh"
+  wget -q "https://raw.githubusercontent.com/MarvinFS/Public/main/linux-vpn-manager/${f}.sh"
 done
 chmod +x *.sh
 sudo ./vpn-manager.sh

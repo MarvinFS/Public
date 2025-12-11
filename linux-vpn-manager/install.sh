@@ -4,8 +4,8 @@
 # Downloads all required scripts and launches the manager
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/MarvinFS/Public/main/vpn-manager/install.sh | sudo bash
-#   wget -qO- https://raw.githubusercontent.com/MarvinFS/Public/main/vpn-manager/install.sh | sudo bash
+#   curl -fsSL https://raw.githubusercontent.com/MarvinFS/Public/main/linux-vpn-manager/install.sh | sudo bash
+#   wget -qO- https://raw.githubusercontent.com/MarvinFS/Public/main/linux-vpn-manager/install.sh | sudo bash
 #
 
 set -e
@@ -17,7 +17,7 @@ YELLOW='\033[1;33m'
 CYAN='\033[0;36m'
 NC='\033[0m'
 
-BASE_URL="https://raw.githubusercontent.com/MarvinFS/Public/main/vpn-manager"
+BASE_URL="https://raw.githubusercontent.com/MarvinFS/Public/main/linux-vpn-manager"
 INSTALL_DIR="/opt/vpn-manager"
 
 SCRIPTS=(

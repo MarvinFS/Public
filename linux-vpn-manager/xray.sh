@@ -343,10 +343,10 @@ show_client_config() {
     echo "${VLESS_URL}" > "${CLIENT_DIR}/${CLIENT_NAME}-vless.txt"
     
     # Generate QR code
-    command -v qrencode &>/dev/null && {
+    if command -v qrencode &>/dev/null; then
         echo -e "${GREEN}QR Code (scan with AmneziaVPN mobile):${NC}"
         echo "${VLESS_URL}" | qrencode -t ansiutf8
-    }
+    fi
     
     # Save JSON config for reference
     cat > "${CLIENT_DIR}/${CLIENT_NAME}-config.json" << EOF

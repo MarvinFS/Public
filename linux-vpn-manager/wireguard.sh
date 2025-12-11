@@ -182,8 +182,15 @@ AllowedIPs = ${CLIENT_IPV4}/32$([[ -n "${SERVER_WG_IPV6}" ]] && echo ",${CLIENT_
 EOF
 
     echo ""
-    echo -e "${YELLOW}AmneziaWG adds obfuscation for censorship bypass.${NC}"
-    read -rp "Enable AmneziaWG? [y/N]: " AWG
+    echo -e "${CYAN}Server address for client connections:${NC}"
+    echo -e "  Can be: domain (vpn.example.com), DDNS (myvpn.ddns.net), or IP"
+    read -rp "Server address [${SERVER_PUB_IP:-$PUBLIC_IP}]: " CLIENT_ENDPOINT
+    CLIENT_ENDPOINT=${CLIENT_ENDPOINT:-${SERVER_PUB_IP:-$PUBLIC_IP}}
+    
+    echo ""
+    echo -e "${YELLOW}AmneziaWG 1.5 adds obfuscation for censorship bypass.${NC}"
+    echo -e "${YELLOW}NOTE: Requires AmneziaVPN 4.8.2.1+ or AmneziaWG 1.5+ client!${NC}"
+    read -rp "Enable AmneziaWG 1.5? [y/N]: " AWG
     
     if [[ "${AWG}" =~ ^[Yy]$ ]]; then
         cat > ${CLIENT_DIR}/${CLIENT_NAME}.conf << EOF
@@ -194,18 +201,17 @@ DNS = ${CLIENT_DNS}
 Jc = ${AWG_JC}
 Jmin = ${AWG_JMIN}
 Jmax = ${AWG_JMAX}
-S1 = ${AWG_S1}
-S2 = ${AWG_S2}
-H1 = ${AWG_H1}
-H2 = ${AWG_H2}
-H3 = ${AWG_H3}
-H4 = ${AWG_H4}
+I1 = ${AWG_I1}
+I2 = ${AWG_I2}
+I3 = ${AWG_I3}
+I4 = ${AWG_I4}
+I5 = ${AWG_I5}
 MTU = ${AWG_MTU}
 
 [Peer]
 PublicKey = ${SERVER_PUB_KEY}
 PresharedKey = ${CLIENT_PSK}
-Endpoint = ${SERVER_PUB_IP:-$PUBLIC_IP}:${SERVER_PORT}
+Endpoint = ${CLIENT_ENDPOINT}:${SERVER_PORT}
 AllowedIPs = 0.0.0.0/0$([[ -n "${SERVER_WG_IPV6}" ]] && echo ",::/0")
 PersistentKeepalive = 15
 EOF
@@ -220,7 +226,7 @@ DNS = ${CLIENT_DNS}
 [Peer]
 PublicKey = ${SERVER_PUB_KEY}
 PresharedKey = ${CLIENT_PSK}
-Endpoint = ${SERVER_PUB_IP:-$PUBLIC_IP}:${SERVER_PORT}
+Endpoint = ${CLIENT_ENDPOINT}:${SERVER_PORT}
 AllowedIPs = 0.0.0.0/0$([[ -n "${SERVER_WG_IPV6}" ]] && echo ",::/0")
 PersistentKeepalive = 25
 EOF
@@ -235,10 +241,11 @@ EOF
     cat ${CLIENT_DIR}/${CLIENT_NAME}.conf
     echo ""
     
-    [[ "${AWG_ENABLED}" != "true" ]] && command -v qrencode &>/dev/null && {
+    # Show QR code only for standard WireGuard (not AmneziaWG)
+    if [[ "${AWG_ENABLED}" != "true" ]] && command -v qrencode &>/dev/null; then
         echo -e "${CYAN}QR Code:${NC}"
         qrencode -t ansiutf8 < ${CLIENT_DIR}/${CLIENT_NAME}.conf
-    }
+    fi
 }
 
 remove_client() {
@@ -373,18 +380,18 @@ main_menu() {
         
         if [[ -f ${WG_PARAMS} ]]; then
             case ${choice} in
-                1) create_client ;;
-                2) remove_client ;;
-                3) show_client ;;
-                4) list_clients ;;
-                5) show_status ;;
-                6) systemctl restart wg-quick@${SERVER_WG_NIC}; log_success "Restarted" ;;
+                1) create_client; press_enter ;;
+                2) remove_client; press_enter ;;
+                3) show_client; press_enter ;;
+                4) list_clients; press_enter ;;
+                5) show_status; press_enter ;;
+                6) systemctl restart wg-quick@${SERVER_WG_NIC}; log_success "Restarted"; press_enter ;;
                 7) uninstall_wireguard ;;
                 0) exit 0 ;;
             esac
         else
             case ${choice} in
-                1) run_install ;;
+                1) run_install; press_enter ;;
                 0) exit 0 ;;
             esac
         fi

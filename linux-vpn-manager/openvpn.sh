@@ -192,9 +192,10 @@ list_clients() {
     echo ""
     echo -e "${GREEN}=== OpenVPN Clients ===${NC}"
     local count=0
+    local name
     for cert in ${EASYRSA_DIR}/pki/issued/*.crt; do
         [[ -f "$cert" ]] || continue
-        local name=$(basename "$cert" .crt)
+        name=$(basename "$cert" .crt)
         [[ "$name" == "server" ]] && continue
         count=$((count + 1))
         echo "  ${count}) ${name}"

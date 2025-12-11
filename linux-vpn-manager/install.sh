@@ -90,8 +90,9 @@ done
 # Make executable
 chmod +x *.sh
 
-# Create symlink for easy access
-ln -sf "${INSTALL_DIR}/vpn-manager.sh" /usr/local/bin/vpn-manager 2>/dev/null || true
+# Create symlink for easy access (/usr/bin is always in PATH, /usr/local/bin might not be)
+ln -sf "${INSTALL_DIR}/vpn-manager.sh" /usr/bin/vpn-manager 2>/dev/null || \
+    ln -sf "${INSTALL_DIR}/vpn-manager.sh" /usr/local/bin/vpn-manager 2>/dev/null || true
 
 echo ""
 echo -e "${GREEN}[SUCCESS] Installation complete!${NC}"

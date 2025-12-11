@@ -28,9 +28,16 @@ FLOW="xtls-rprx-vision"
 install_xray() {
     log_info "Installing XRay via official script..."
     
-    bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install
+    # Run install script - ignore non-zero exit codes from warnings about missing files
+    bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install || true
     
-    command -v xray &>/dev/null && log_success "XRay installed" || { log_error "Installation failed"; exit 1; }
+    # Verify xray binary is actually installed
+    if ! command -v xray &>/dev/null; then
+        log_error "XRay installation failed - binary not found"
+        exit 1
+    fi
+    
+    log_success "XRay installed"
     
     # Show version
     xray version | head -1
@@ -279,14 +286,15 @@ create_client() {
     [[ -z "${input_name}" ]] && { log_error "Name required"; return 1; }
     
     # Use unique variable names to avoid being overwritten by source commands
-    local new_client_name=$(sanitize_client_name "${input_name}")
-    local new_client_file="${CLIENT_DIR}/${new_client_name}.conf"
+    local new_client_name new_client_file new_client_uuid new_client_short_id new_created_date
+    new_client_name=$(sanitize_client_name "${input_name}")
+    new_client_file="${CLIENT_DIR}/${new_client_name}.conf"
     
     [[ -f "${new_client_file}" ]] && { log_error "Client '${new_client_name}' already exists"; return 1; }
     
-    local new_client_uuid=$(xray uuid)
-    local new_client_short_id=$(generate_short_id)
-    local new_created_date=$(date +%Y-%m-%d)
+    new_client_uuid=$(xray uuid)
+    new_client_short_id=$(generate_short_id)
+    new_created_date=$(date +%Y-%m-%d)
     
     # Save client config
     cat > "${new_client_file}" << EOF
@@ -660,7 +668,8 @@ show_update_status() {
     echo -e "${GREEN}=== XRay Update Status ===${NC}"
     echo ""
     
-    local current=$(xray version 2>/dev/null | head -1 | awk '{print $2}')
+    local current
+    current=$(xray version 2>/dev/null | head -1 | awk '{print $2}')
     echo -e "Current version: ${CYAN}${current}${NC}"
     
     # Fetch latest version from GitHub API
@@ -696,7 +705,8 @@ show_update_status() {
 manual_update() {
     log_info "Checking for XRay updates..."
     
-    local current=$(xray version 2>/dev/null | head -1 | awk '{print $2}')
+    local current
+    current=$(xray version 2>/dev/null | head -1 | awk '{print $2}')
     echo -e "Current version: ${CYAN}${current}${NC}"
     
     # Fetch latest version from GitHub API
@@ -728,7 +738,8 @@ manual_update() {
     
     bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install
     
-    local new=$(xray version 2>/dev/null | head -1 | awk '{print $2}')
+    local new
+    new=$(xray version 2>/dev/null | head -1 | awk '{print $2}')
     
     if [[ "${current}" != "${new}" ]]; then
         log_success "Updated to ${new}"

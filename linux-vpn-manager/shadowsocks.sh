@@ -20,8 +20,9 @@ SS_VERSION="v1.21.2"
 install_shadowsocks() {
     log_info "Installing shadowsocks-rust ${SS_VERSION}..."
     
-    local ARCH=$(uname -m)
-    local DOWNLOAD_URL=""
+    local ARCH DOWNLOAD_URL
+    ARCH=$(uname -m)
+    DOWNLOAD_URL=""
     case ${ARCH} in
         x86_64) DOWNLOAD_URL="https://github.com/shadowsocks/shadowsocks-rust/releases/download/${SS_VERSION}/shadowsocks-${SS_VERSION}.x86_64-unknown-linux-gnu.tar.xz" ;;
         aarch64) DOWNLOAD_URL="https://github.com/shadowsocks/shadowsocks-rust/releases/download/${SS_VERSION}/shadowsocks-${SS_VERSION}.aarch64-unknown-linux-gnu.tar.xz" ;;
@@ -144,7 +145,8 @@ start_shadowsocks() {
 generate_client_config() {
     source "${SS_PARAMS}"
     
-    local SS_URL="ss://$(echo -n "${SS_METHOD}:${SS_PASSWORD}" | base64 -w0)@${PUBLIC_IP}:${SS_PORT}"
+    local SS_URL
+    SS_URL="ss://$(echo -n "${SS_METHOD}:${SS_PASSWORD}" | base64 -w0)@${PUBLIC_IP}:${SS_PORT}"
     
     cat > "${CLIENT_DIR}/client-config.json" << EOF
 {
@@ -221,7 +223,7 @@ change_password() {
     
     local tmp
     tmp=$(mktemp)
-    trap "rm -f '$tmp'" RETURN
+    trap 'rm -f "$tmp"' RETURN
     
     jq --arg pw "${NEW_PASS}" '.password = $pw' "${SS_CONFIG}" > "$tmp" && mv "$tmp" "${SS_CONFIG}"
     chown shadowsocks:"${GROUP_NAME}" "${SS_CONFIG}"
@@ -249,7 +251,7 @@ change_port() {
     
     local tmp
     tmp=$(mktemp)
-    trap "rm -f '$tmp'" RETURN
+    trap 'rm -f "$tmp"' RETURN
     
     jq --argjson port "${NEW_PORT}" '.server_port = $port' "${SS_CONFIG}" > "$tmp" && mv "$tmp" "${SS_CONFIG}"
     chown shadowsocks:"${GROUP_NAME}" "${SS_CONFIG}"

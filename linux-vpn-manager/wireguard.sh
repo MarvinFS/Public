@@ -170,7 +170,8 @@ create_client() {
     CLIENT_PUB_KEY=$(echo "${CLIENT_PRIV_KEY}" | wg pubkey)
     CLIENT_PSK=$(wg genpsk)
     
-    local next_ip=$(get_next_ip)
+    local next_ip
+    next_ip=$(get_next_ip)
     CLIENT_IPV4="${SERVER_WG_IPV4%.*}.${next_ip}"
     [[ -n "${SERVER_WG_IPV6}" ]] && CLIENT_IPV6="${SERVER_WG_IPV6%::*}::${next_ip}"
     
@@ -298,7 +299,8 @@ get_client_name() {
     
     # Check if input is a number
     if [[ "${input}" =~ ^[0-9]+$ ]]; then
-        local idx=$((input - 1))
+        local idx
+        idx=$((input - 1))
         if [[ ${idx} -ge 0 && ${idx} -lt ${#CLIENT_LIST[@]} ]]; then
             CLIENT_NAME="${CLIENT_LIST[$idx]}"
         else

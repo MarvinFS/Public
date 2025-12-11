@@ -65,17 +65,25 @@ echo -e "${CYAN}>>> Downloading scripts...${NC}"
 for script in "${SCRIPTS[@]}"; do
     echo -n "    ${script}... "
     if [[ -n "${DOWNLOAD_OUT}" ]]; then
-        ${DOWNLOAD} "${BASE_URL}/${script}" ${DOWNLOAD_OUT} "${script}" 2>/dev/null
+        # curl: -f fails on HTTP errors, -o outputs to file
+        if ${DOWNLOAD} "${BASE_URL}/${script}" ${DOWNLOAD_OUT} "${script}"; then
+            echo -e "${GREEN}OK${NC}"
+        else
+            echo -e "${RED}FAILED${NC}"
+            echo -e "${RED}[ERROR] Failed to download ${script}${NC}"
+            echo -e "${RED}URL: ${BASE_URL}/${script}${NC}"
+            exit 1
+        fi
     else
-        ${DOWNLOAD} "${script}" "${BASE_URL}/${script}" 2>/dev/null
-    fi
-    
-    if [[ -f "${script}" ]]; then
-        echo -e "${GREEN}OK${NC}"
-    else
-        echo -e "${RED}FAILED${NC}"
-        echo -e "${RED}[ERROR] Failed to download ${script}${NC}"
-        exit 1
+        # wget: -qO outputs to file
+        if ${DOWNLOAD} "${script}" "${BASE_URL}/${script}"; then
+            echo -e "${GREEN}OK${NC}"
+        else
+            echo -e "${RED}FAILED${NC}"
+            echo -e "${RED}[ERROR] Failed to download ${script}${NC}"
+            echo -e "${RED}URL: ${BASE_URL}/${script}${NC}"
+            exit 1
+        fi
     fi
 done
 

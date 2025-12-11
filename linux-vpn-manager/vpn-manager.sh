@@ -1,7 +1,6 @@
 #!/bin/bash
 #
 # Linux VPN Server Manager - Unified Entry Point
-# Version: 6.0
 #
 # Supports: WireGuard, OpenVPN, Shadowsocks, XRay (VLESS+REALITY)
 #

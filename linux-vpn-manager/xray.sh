@@ -1,7 +1,6 @@
 #!/bin/bash
 #
 # XRay (VLESS + REALITY) - Install & Manage
-# Version: 1.0
 #
 # Multi-user support with unique shortIds per client for tracking
 # Compatible with AmneziaVPN client (Windows/Android/iOS)

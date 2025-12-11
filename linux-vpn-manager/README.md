@@ -233,6 +233,10 @@ See [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) for common issues:
 
 MIT License - See LICENSE file for details.
 
+## Credits
+
+- **WireGuard installer** based on [wireguard-install](https://github.com/angristan/wireguard-install) by angristan
+
 ## Contributing
 
 1. Fork the repository

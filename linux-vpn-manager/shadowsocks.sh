@@ -1,7 +1,6 @@
 #!/bin/bash
 #
 # Shadowsocks VPN - Install & Manage (Combined)
-# Version: 5.0
 #
 
 set -e

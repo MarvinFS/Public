@@ -3,7 +3,6 @@
 # Linux VPN Server Manager - Common Functions Library
 # Shared functions used by all VPN scripts (includes optimizations)
 #
-# Version: 5.0
 # Updated: December 2025
 #
 

@@ -1,7 +1,10 @@
 #!/bin/bash
 #
 # WireGuard VPN - Install & Manage (Combined)
-# Version: 5.0
+#
+# Based on wireguard-install by angristan
+# https://github.com/angristan/wireguard-install
+# Modified and integrated into Linux VPN Manager
 #
 
 set -e

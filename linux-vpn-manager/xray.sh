@@ -21,6 +21,7 @@ REALITY_SERVER_NAME="browser.yandex.com"
 REALITY_FINGERPRINT="chrome"
 FLOW="xtls-rprx-vision"
 
+
 # ============================================================================
 # INSTALLATION FUNCTIONS
 # ============================================================================

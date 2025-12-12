@@ -31,11 +31,14 @@ install_xray() {
     # Run install script - ignore non-zero exit codes from warnings about missing files
     bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install || true
     
-    # Verify xray binary is actually installed
-    if ! command -v xray &>/dev/null; then
+    # Verify xray binary is actually installed (check both PATH and direct location)
+    if ! command -v xray &>/dev/null && [[ ! -x /usr/local/bin/xray ]]; then
         log_error "XRay installation failed - binary not found"
         exit 1
     fi
+    
+    # Ensure /usr/local/bin is in PATH for this session
+    export PATH="/usr/local/bin:$PATH"
     
     log_success "XRay installed"
     

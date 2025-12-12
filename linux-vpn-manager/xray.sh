@@ -68,9 +68,16 @@ create_xray_service() {
     systemctl stop xray 2>/dev/null || true
     systemctl disable xray 2>/dev/null || true
     
-    # Remove default service drop-ins that override our config
+    # Remove default service and ALL drop-ins that override our config
     rm -rf /etc/systemd/system/xray.service.d
     rm -rf /etc/systemd/system/xray@.service.d
+    rm -f /etc/systemd/system/xray.service
+    rm -f /etc/systemd/system/xray@.service
+    
+    # Ensure xray user owns config directories
+    mkdir -p "${XRAY_DIR}" "${CLIENT_DIR}"
+    chown -R xray:"${GROUP_NAME}" "${XRAY_DIR}" 2>/dev/null || true
+    chown -R xray:"${GROUP_NAME}" /etc/vpn/xray 2>/dev/null || true
     
     cat > /etc/systemd/system/xray.service << EOF
 [Unit]
@@ -93,6 +100,9 @@ NoNewPrivileges=true
 [Install]
 WantedBy=multi-user.target
 EOF
+    
+    # Reload systemd to pick up new service file
+    systemctl daemon-reload
 
     systemctl daemon-reload
     log_success "Custom service created"
@@ -278,8 +288,8 @@ run_install() {
 # ============================================================================
 
 generate_short_id() {
-    # Generate 8-character hex shortId
-    head -c 4 /dev/urandom | xxd -p
+    # Generate 8-character hex shortId (pure shell, no external deps)
+    od -An -tx1 -N4 /dev/urandom | tr -d ' \n'
 }
 
 create_client() {

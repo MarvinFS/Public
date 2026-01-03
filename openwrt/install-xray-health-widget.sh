@@ -8,9 +8,10 @@
 #
 # COMPONENTS INSTALLED:
 #   - LuCI status widget (JavaScript)
-#   - RPC backend handler (Lua)
+#   - RPC backend handler (Shell script)
 #   - RPC ACL permissions
 #   - Init.d service script
+#   - Sysupgrade.conf entries (for firmware update persistence)
 
 set -e
 
@@ -23,6 +24,7 @@ RPC_PATH="/usr/libexec/rpcd/xray-health"
 ACL_PATH="/usr/share/rpcd/acl.d/luci-app-xray-health.json"
 INITD_PATH="/etc/init.d/xray-health"
 DAEMON_PATH="/usr/local/sbin/check-xray.sh"
+SYSUPGRADE_CONF="/etc/sysupgrade.conf"
 
 # Colors for output
 RED='\033[0;31m'
@@ -49,6 +51,86 @@ log_error() {
 die() {
     log_error "$*"
     exit 1
+}
+
+###############################################################################
+# SYSUPGRADE.CONF MANAGEMENT
+###############################################################################
+
+add_to_sysupgrade_conf() {
+    local entry="$1"
+    
+    # Check if entry already exists
+    if grep -Fxq "$entry" "$SYSUPGRADE_CONF" 2>/dev/null; then
+        return 0  # Already exists, skip
+    fi
+    
+    # Add entry
+    echo "$entry" >> "$SYSUPGRADE_CONF"
+    return 1  # Was added
+}
+
+update_sysupgrade_conf() {
+    log_info "Updating sysupgrade.conf for firmware update persistence..."
+    
+    if [ ! -f "$SYSUPGRADE_CONF" ]; then
+        log_warn "Creating $SYSUPGRADE_CONF"
+        cat > "$SYSUPGRADE_CONF" <<'EOF'
+## This file contains files and directories that should
+## be preserved during an upgrade.
+
+EOF
+    fi
+    
+    local added_count=0
+    
+    # Add xray-health specific entries
+    if add_to_sysupgrade_conf "$DAEMON_PATH"; then
+        log_info "  Added: $DAEMON_PATH"
+        added_count=$((added_count + 1))
+    fi
+    
+    if add_to_sysupgrade_conf "/etc/xray-health.state"; then
+        log_info "  Added: /etc/xray-health.state"
+        added_count=$((added_count + 1))
+    fi
+    
+    if add_to_sysupgrade_conf "/etc/xray-health-logrotate"; then
+        log_info "  Added: /etc/xray-health-logrotate"
+        added_count=$((added_count + 1))
+    fi
+    
+    if add_to_sysupgrade_conf "/root/xray-health-persistent.log*"; then
+        log_info "  Added: /root/xray-health-persistent.log*"
+        added_count=$((added_count + 1))
+    fi
+    
+    # Add widget and RPC backend
+    if add_to_sysupgrade_conf "$WIDGET_PATH"; then
+        log_info "  Added: $WIDGET_PATH"
+        added_count=$((added_count + 1))
+    fi
+    
+    if add_to_sysupgrade_conf "$RPC_PATH"; then
+        log_info "  Added: $RPC_PATH"
+        added_count=$((added_count + 1))
+    fi
+    
+    if add_to_sysupgrade_conf "$ACL_PATH"; then
+        log_info "  Added: $ACL_PATH"
+        added_count=$((added_count + 1))
+    fi
+    
+    if add_to_sysupgrade_conf "$INITD_PATH"; then
+        log_info "  Added: $INITD_PATH"
+        added_count=$((added_count + 1))
+    fi
+    
+    if [ $added_count -eq 0 ]; then
+        log_info "  All entries already present in $SYSUPGRADE_CONF"
+    else
+        log_info "  Added $added_count new entries to $SYSUPGRADE_CONF"
+    fi
 }
 
 ###############################################################################
@@ -373,6 +455,7 @@ install_all() {
     install_rpc_backend
     install_acl
     install_initd
+    update_sysupgrade_conf
     
     log_info ""
     log_info "=========================================="
@@ -395,9 +478,13 @@ install_all() {
     log_info "4. Refresh your LuCI interface (Ctrl+F5)"
     log_info "   The widget will appear on Status -> Overview page"
     log_info ""
+    log_info "FIRMWARE UPDATE PERSISTENCE:"
+    log_info "  All files have been added to $SYSUPGRADE_CONF"
+    log_info "  The widget and daemon will survive firmware upgrades!"
+    log_info ""
     log_info "To check daemon status:"
     log_info "   /etc/init.d/xray-health status"
-    log_info "   tail -f /tmp/xray-health.log"
+    log_info "   logread -e check-xray"
 }
 
 ###############################################################################
@@ -424,9 +511,13 @@ uninstall_all() {
     
     # Clean up runtime files
     rm -f /var/run/xray-health.pid
-    rm -f /tmp/xray-health.log
-    rm -f /tmp/xray-health.state
+    rm -f /etc/xray-health.state
+    rm -f /etc/xray-health-logrotate
+    rm -f /root/xray-health-persistent.log*
     rm -rf /tmp/run/xray-health/
+    
+    log_warn "NOTE: Entries in $SYSUPGRADE_CONF were NOT removed"
+    log_warn "Remove manually if needed"
     
     log_info ""
     log_info "Uninstallation complete!"

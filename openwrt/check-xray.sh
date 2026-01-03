@@ -46,7 +46,7 @@
 #
 # SYSTEM LOGS:
 #   View real-time logs:  logread -f -e 'check-xray'
-#   View recent logs:     logread -e 'check-xray'
+#   View recent logs:     logread -e 'check-xray' 
 
 ###############################################################################
 # CONFIGURATION

@@ -2,6 +2,8 @@
 
 Automated health monitoring and failover system for Xray tunnels on OpenWRT routers.
 
+![alt text](image.png)
+
 ---
 
 ## ⚠️ IMPORTANT: Configuration Required

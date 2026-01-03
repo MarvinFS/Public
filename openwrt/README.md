@@ -4,8 +4,6 @@ Configuration scripts and guides for OpenWrt routers with Xray transparent proxy
 
 **Target**: GL.iNet GL-MT6000 (Flint 2) running OpenWrt 24.10.5 but can be used for any capable hardware.
 
-```
-
 ## Automation Scripts
 
 ### [dns-speed.sh](dns-speed.sh)

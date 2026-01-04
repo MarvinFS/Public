@@ -378,6 +378,92 @@ Traffic arrives
 └─ No match ───────────────────────► Default outbound (proxy)
 ```
 
+### 5.5 Using Custom Remote Rule-sets
+
+Beyond the built-in rule-sets (like `geosite-google`, `geoip-ru`, etc.), Throne allows you to add **custom remote rule-set URLs** from third-party sources or your own servers.
+
+**Use cases:**
+- Community-maintained block lists (e.g., Re-filter-lists for Russia-specific routing)
+- Region-specific filters not in standard geo databases
+- Custom corporate/organizational routing rules
+- Specialized content filtering lists
+
+### Format Requirements
+
+Custom rule-sets **must** be in `.srs` (sing-box rule-set) binary format. This is the same format used by sing-box core.
+
+**Compatible sources:**
+- GitHub repositories with pre-compiled `.srs` files
+- Custom web servers hosting `.srs` rule-sets
+- CDN-hosted rule-set collections
+
+**Not supported:**
+- Plain text domain lists
+- `.dat` files (XRAY/V2Ray format)
+- JSON arrays (must be pre-compiled to `.srs`)
+
+### Adding Custom URLs via UI
+
+1. **Routing** → **Routing Settings** → **Route** tab
+2. Select your routing profile (e.g., "Bypass Russia")
+3. Click **Edit** button
+4. Switch to **Advanced** tab (not Basic)
+5. Select the rule where you want to add custom rule-sets, or click **New** to create a new rule
+6. In the rule attributes section, find the **rule_set** field
+7. Edit the `rule_set` array to include your custom URLs
+
+![Route Profile - Custom rule-sets](throne-screenshots/route-profile-advanced-geo-abroad.png)
+*Example: Route profile showing custom Re-filter URLs in the rule_set attribute*
+
+### Example: Re-filter-lists (Russia-specific)
+
+The [Re-filter-lists](https://github.com/1andrevich/Re-filter-lists) project provides additional routing rules for bypassing Russian censorship:
+
+**JSON structure:**
+
+```json
+{
+  "action": "route",
+  "outbound": "proxy",
+  "name": "Custom Re-filter Routing",
+  "rule_set": [
+    "https://github.com/1andrevich/Re-filter-lists/releases/latest/download/ruleset-domain-refilter_domains.srs",
+    "https://github.com/1andrevich/Re-filter-lists/releases/latest/download/ruleset-ip-refilter_ipsum.srs"
+  ]
+}
+```
+
+**What each URL provides:**
+- `ruleset-domain-refilter_domains.srs` — Domain-based routing rules for blocked sites
+- `ruleset-ip-refilter_ipsum.srs` — IP-based routing rules for blocked IP addresses
+
+### Mixing Built-in and Custom Rule-sets
+
+You can combine built-in rule-sets with custom URLs in the same rule:
+
+```json
+{
+  "action": "route",
+  "outbound": "proxy",
+  "name": "Combined Geo + Custom Routing",
+  "rule_set": [
+    "geosite-google",
+    "geosite-openai",
+    "geosite-bing",
+    "https://github.com/1andrevich/Re-filter-lists/releases/latest/download/ruleset-domain-refilter_domains.srs"
+  ]
+}
+```
+
+This allows you to leverage both Throne's comprehensive built-in databases and specialized community lists.
+
+### Download and Caching
+
+- Custom rule-sets are downloaded on first connection
+- Cached locally for subsequent connections
+- Re-downloaded on Throne restart or when cache expires
+- Failed downloads will prevent profile activation (check Connections tab for errors)
+
 ---
 
 ## 6. Adding Custom Domain Overrides

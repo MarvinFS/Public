@@ -149,7 +149,7 @@ Other clients that support VLESS+REALITY:
 
 | Platform | Client |
 |----------|--------|
-| Windows | [v2rayN](https://github.com/2dust/v2rayN/releases), [Nekoray](https://github.com/MatsuriDayo/nekoray/releases) |
+| Windows | [Throne](https://github.com/nicejudy/nicejudy-throne-gui/releases) - see [setup guide](https://github.com/MarvinFS/Public/blob/main/throne/README.md), [v2rayN](https://github.com/2dust/v2rayN/releases) |
 | macOS | [V2rayU](https://github.com/yanue/V2rayU/releases) |
 | Android | [v2rayNG](https://github.com/2dust/v2rayNG/releases) |
 | iOS | Shadowrocket (paid), Streisand |

@@ -5,7 +5,7 @@ Last updated: 2026-01
 This guide covers connecting to your VPN server from various platforms.
 
 > **Part of Linux VPN Manager** - See [README.md](../README.md) for server side documentation.
-
+ 
 ## Project Structure
 
 ```

@@ -211,14 +211,22 @@ remove_client() {
     load_params
     list_clients
     read -rp "Client to remove: " CLIENT_NAME
-    
+
     [[ ! -f "${EASYRSA_DIR}/pki/issued/${CLIENT_NAME}.crt" ]] && { log_error "Not found"; return 1; }
-    
-    cd ${EASYRSA_DIR}
-    ./easyrsa --batch revoke "${CLIENT_NAME}" 2>/dev/null || true
-    ./easyrsa --batch gen-crl 2>/dev/null || true
+
+    cd "${EASYRSA_DIR}" || { log_error "Cannot access easy-rsa directory"; return 1; }
+
+    if ! ./easyrsa --batch revoke "${CLIENT_NAME}" 2>&1; then
+        log_error "Failed to revoke certificate for ${CLIENT_NAME}"
+        return 1
+    fi
+
+    if ! ./easyrsa --batch gen-crl 2>&1; then
+        log_error "Failed to regenerate CRL"
+        return 1
+    fi
+
     rm -f "${CLIENT_DIR}/${CLIENT_NAME}.ovpn"
-    
     log_success "Client '${CLIENT_NAME}' removed"
 }
 

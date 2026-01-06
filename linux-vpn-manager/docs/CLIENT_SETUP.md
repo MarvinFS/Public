@@ -1,13 +1,15 @@
 # Client Setup Guide
 
+Last updated: 2026-01
+
 This guide covers connecting to your VPN server from various platforms.
 
-> **Part of Linux VPN Manager v6** - See [README.md](../README.md) for server side documentation.
+> **Part of Linux VPN Manager** - See [README.md](../README.md) for server side documentation.
 
 ## Project Structure
 
 ```
-linux-vpn-manager-v4/
+linux-vpn-manager/
 ├── vpn-manager.sh          # Main entry point
 ├── common.sh               # Shared library
 ├── wireguard.sh            # WireGuard install + management including configs for AmneziaWG 1.5

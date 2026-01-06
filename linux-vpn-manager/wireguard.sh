@@ -63,8 +63,7 @@ configure_server() {
     get_server_nic
     
     # Generate keys
-    mkdir -p ${WG_DIR}
-    chmod 700 ${WG_DIR}
+    install -d -m 700 "${WG_DIR}"
     SERVER_PRIV_KEY=$(wg genkey)
     SERVER_PUB_KEY=$(echo "${SERVER_PRIV_KEY}" | wg pubkey)
     
@@ -260,7 +259,7 @@ remove_client() {
     
     confirm_action "Remove client '${CLIENT_NAME}'?" || return 0
     
-    sed -i "/### Client: ${CLIENT_NAME}/,/^$/d" "${WG_DIR}/${SERVER_WG_NIC}.conf"
+    sed -i -- "/^### Client: ${CLIENT_NAME}$/,/^$/d" "${WG_DIR}/${SERVER_WG_NIC}.conf"
     rm -f "${CLIENT_DIR}/${CLIENT_NAME}.conf"
     wg syncconf ${SERVER_WG_NIC} <(wg-quick strip ${SERVER_WG_NIC})
     

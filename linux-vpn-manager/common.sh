@@ -79,23 +79,57 @@ check_os() {
 
 get_public_ip() {
     PUBLIC_IP=""
-    for source in "https://api.ipify.org" "https://ifconfig.me" "https://icanhazip.com"; do
-        PUBLIC_IP=$(curl -4 -s --max-time 5 "${source}" 2>/dev/null | tr -d '[:space:]')
+    local services=("https://api.ipify.org" "https://ifconfig.me" "https://icanhazip.com")
+
+    # Try IPv4 first
+    for source in "${services[@]}"; do
+        PUBLIC_IP=$(curl -4 -s --connect-timeout 5 --max-time 10 "${source}" 2>/dev/null | tr -d '[:space:]')
         [[ "${PUBLIC_IP}" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] && break
         PUBLIC_IP=""
     done
-    
+
+    # Fallback to IPv6 if no IPv4
     if [[ -z "${PUBLIC_IP}" ]]; then
-        log_warning "Could not detect public IP"
+        for source in "${services[@]}"; do
+            PUBLIC_IP=$(curl -6 -s --connect-timeout 5 --max-time 10 "${source}" 2>/dev/null | tr -d '[:space:]')
+            # Basic IPv6 validation (contains colons)
+            [[ "${PUBLIC_IP}" =~ : ]] && break
+            PUBLIC_IP=""
+        done
+    fi
+
+    if [[ -z "${PUBLIC_IP}" ]]; then
+        log_warning "Could not detect public IP automatically"
         read -rp "Enter server's public IP: " PUBLIC_IP
     fi
     export PUBLIC_IP
 }
 
 get_server_nic() {
-    SERVER_NIC=$(ip -4 route ls | grep default | grep -Po '(?<=dev )(\S+)' | head -1)
-    [[ -z "${SERVER_NIC}" ]] && SERVER_NIC=$(ip link | grep -v lo | grep 'state UP' | head -1 | awk -F': ' '{print $2}')
-    [[ -z "${SERVER_NIC}" ]] && { log_error "Could not detect network interface"; exit 1; }
+    # Allow environment override
+    if [[ -n "${SERVER_NIC:-}" ]]; then
+        export SERVER_NIC
+        return 0
+    fi
+
+    # Method 1: Route to external IP
+    SERVER_NIC=$(ip route get 1.1.1.1 2>/dev/null | grep -oP 'dev \K\S+' | head -1)
+
+    # Method 2: Default route
+    if [[ -z "${SERVER_NIC}" ]]; then
+        SERVER_NIC=$(ip -4 route show default 2>/dev/null | grep -oP 'dev \K\S+' | head -1)
+    fi
+
+    # Method 3: First UP interface (excluding lo)
+    if [[ -z "${SERVER_NIC}" ]]; then
+        SERVER_NIC=$(ip link show up 2>/dev/null | grep -v lo | grep -oP '^\d+: \K[^:@]+' | head -1)
+    fi
+
+    if [[ -z "${SERVER_NIC}" ]]; then
+        log_error "Could not detect network interface"
+        log_info "Set SERVER_NIC environment variable manually"
+        exit 1
+    fi
     export SERVER_NIC
 }
 
@@ -154,10 +188,43 @@ firewall_open_port() {
 
 generate_password() { head -c 100 /dev/urandom | base64 | tr -dc 'a-zA-Z0-9' | head -c "${1:-32}"; }
 
+verify_checksum() {
+    local file="$1" expected="$2"
+    local actual
+    actual=$(sha256sum "$file" 2>/dev/null | awk '{print $1}')
+    if [[ "$actual" != "$expected" ]]; then
+        log_error "Checksum mismatch for $file"
+        log_error "Expected: $expected"
+        log_error "Got: $actual"
+        return 1
+    fi
+    log_success "Checksum verified"
+}
+
+try_command() {
+    local desc="$1"
+    shift
+    if "$@" 2>&1; then
+        log_success "$desc"
+        return 0
+    else
+        log_warning "$desc failed (continuing)"
+        return 0
+    fi
+}
+
 sanitize_client_name() {
     local name="$1" max_length="${2:-32}"
-    name=$(echo "${name}" | tr -dc 'a-zA-Z0-9_-')
-    echo "${name:0:${max_length}}"
+    # Strict allowlist: only letters, numbers, underscore, hyphen
+    if [[ ! "$name" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+        log_error "Invalid client name. Use only letters, numbers, underscore, hyphen."
+        return 1
+    fi
+    if [[ ${#name} -gt ${max_length} ]]; then
+        log_error "Client name too long (max ${max_length} characters)"
+        return 1
+    fi
+    echo "$name"
 }
 
 validate_port() {
@@ -184,12 +251,20 @@ detect_installed() {
     OPENVPN_INSTALLED=false
     SHADOWSOCKS_INSTALLED=false
     XRAY_INSTALLED=false
-    
-    [[ -f /etc/wireguard/params ]] || service_is_active wg-quick@wg0 && WIREGUARD_INSTALLED=true
-    [[ -f /etc/openvpn/server.conf ]] || service_is_active openvpn-server@server && OPENVPN_INSTALLED=true
-    [[ -f /etc/shadowsocks/config.json ]] || service_is_active shadowsocks && SHADOWSOCKS_INSTALLED=true
-    [[ -f /etc/xray/params ]] || service_is_active xray && XRAY_INSTALLED=true
-    
+
+    if [[ -f /etc/wireguard/params ]] || service_is_active wg-quick@wg0; then
+        WIREGUARD_INSTALLED=true
+    fi
+    if [[ -f /etc/openvpn/server.conf ]] || service_is_active openvpn-server@server; then
+        OPENVPN_INSTALLED=true
+    fi
+    if [[ -f /etc/shadowsocks/config.json ]] || service_is_active shadowsocks; then
+        SHADOWSOCKS_INSTALLED=true
+    fi
+    if [[ -f /etc/xray/params ]] || service_is_active xray; then
+        XRAY_INSTALLED=true
+    fi
+
     export WIREGUARD_INSTALLED OPENVPN_INSTALLED SHADOWSOCKS_INSTALLED XRAY_INSTALLED
 }
 
@@ -198,10 +273,23 @@ detect_installed() {
 # ============================================================================
 
 apply_kernel_optimizations() {
-    log_info "Applying kernel optimizations..."
-    
+    # Quick/silent version - calls verbose version with flag
+    apply_system_optimizations false
+}
+
+apply_system_optimizations() {
+    local verbose="${1:-true}"
+
+    [[ "$verbose" == "true" ]] && {
+        echo ""
+        echo -e "${GREEN}=== Applying Network Optimizations ===${NC}"
+        echo ""
+    }
+
+    # Write sysctl config
     cat > /etc/sysctl.d/99-vpn-optimizations.conf << 'EOF'
-# VPN System Optimizations v5.0
+# VPN System Optimizations
+# Generated by Linux VPN Manager
 net.core.default_qdisc = fq
 net.ipv4.tcp_congestion_control = bbr
 net.ipv4.tcp_fastopen = 3
@@ -218,7 +306,18 @@ net.ipv6.conf.all.forwarding = 1
 EOF
 
     sysctl -p /etc/sysctl.d/99-vpn-optimizations.conf >/dev/null 2>&1
-    log_success "Kernel optimizations applied"
+
+    # MSS Clamping for existing VPN interfaces
+    [[ -e /sys/class/net/wg0 ]] && apply_mss_clamping wg0
+    [[ -e /sys/class/net/tun0 ]] && apply_mss_clamping tun0
+
+    save_iptables_rules
+
+    if [[ "$verbose" == "true" ]]; then
+        log_success "All optimizations applied"
+    else
+        log_success "Kernel optimizations applied"
+    fi
 }
 
 apply_mss_clamping() {
@@ -239,80 +338,8 @@ save_iptables_rules() {
 }
 
 apply_all_optimizations() {
-    echo ""
-    echo -e "${GREEN}=== Applying Network Optimizations ===${NC}"
-    echo ""
-    
-    # Clear existing file and add header
-    echo "# VPN System Optimizations v5.0" > /etc/sysctl.d/99-vpn-optimizations.conf
-    echo "# Generated by Linux VPN Manager" >> /etc/sysctl.d/99-vpn-optimizations.conf
-    echo "" >> /etc/sysctl.d/99-vpn-optimizations.conf
-    
-    # BBR & Kernel
-    echo -n "  - Enabling BBR congestion control... "
-    echo "net.core.default_qdisc = fq" >> /etc/sysctl.d/99-vpn-optimizations.conf
-    echo "net.ipv4.tcp_congestion_control = bbr" >> /etc/sysctl.d/99-vpn-optimizations.conf
-    echo -e "${GREEN}done${NC}"
-    
-    echo -n "  - Enabling TCP Fast Open... "
-    echo "net.ipv4.tcp_fastopen = 3" >> /etc/sysctl.d/99-vpn-optimizations.conf
-    echo -e "${GREEN}done${NC}"
-    
-    echo -n "  - Enabling TCP TIME-WAIT reuse... "
-    echo "net.ipv4.tcp_tw_reuse = 1" >> /etc/sysctl.d/99-vpn-optimizations.conf
-    echo -e "${GREEN}done${NC}"
-    
-    echo -n "  - Enabling MTU probing... "
-    echo "net.ipv4.tcp_mtu_probing = 1" >> /etc/sysctl.d/99-vpn-optimizations.conf
-    echo -e "${GREEN}done${NC}"
-    
-    echo -n "  - Tuning TCP read buffers (4K-16M)... "
-    echo "net.ipv4.tcp_rmem = 4096 1048576 16777216" >> /etc/sysctl.d/99-vpn-optimizations.conf
-    echo -e "${GREEN}done${NC}"
-    
-    echo -n "  - Tuning TCP write buffers (4K-16M)... "
-    echo "net.ipv4.tcp_wmem = 4096 1048576 16777216" >> /etc/sysctl.d/99-vpn-optimizations.conf
-    echo -e "${GREEN}done${NC}"
-    
-    echo -n "  - Increasing socket buffer limits... "
-    echo "net.core.rmem_max = 16777216" >> /etc/sysctl.d/99-vpn-optimizations.conf
-    echo "net.core.wmem_max = 16777216" >> /etc/sysctl.d/99-vpn-optimizations.conf
-    echo -e "${GREEN}done${NC}"
-    
-    echo -n "  - Increasing connection backlog... "
-    echo "net.core.somaxconn = 4096" >> /etc/sysctl.d/99-vpn-optimizations.conf
-    echo "net.core.netdev_max_backlog = 16384" >> /etc/sysctl.d/99-vpn-optimizations.conf
-    echo -e "${GREEN}done${NC}"
-    
-    echo -n "  - Enabling IP forwarding (IPv4+IPv6)... "
-    echo "net.ipv4.ip_forward = 1" >> /etc/sysctl.d/99-vpn-optimizations.conf
-    echo "net.ipv6.conf.all.forwarding = 1" >> /etc/sysctl.d/99-vpn-optimizations.conf
-    echo -e "${GREEN}done${NC}"
-    
-    echo -n "  - Applying sysctl settings... "
-    sysctl -p /etc/sysctl.d/99-vpn-optimizations.conf >/dev/null 2>&1
-    echo -e "${GREEN}done${NC}"
-    
-    # MSS Clamping
-    if [[ -e /sys/class/net/wg0 ]]; then
-        echo -n "  - Adding MSS clamping for wg0... "
-        apply_mss_clamping wg0
-        echo -e "${GREEN}done${NC}"
-    fi
-    
-    if [[ -e /sys/class/net/tun0 ]]; then
-        echo -n "  - Adding MSS clamping for tun0... "
-        apply_mss_clamping tun0
-        echo -e "${GREEN}done${NC}"
-    fi
-    
-    echo -n "  - Saving iptables rules... "
-    save_iptables_rules
-    echo -e "${GREEN}done${NC}"
-    
-    echo ""
-    echo -e "${GREEN}✓ All optimizations applied successfully${NC}"
-    return 0
+    # Alias for verbose optimization (backwards compatibility)
+    apply_system_optimizations true
 }
 
 # ============================================================================
@@ -329,7 +356,7 @@ AWG_MTU=1320
 export AWG_JC AWG_JMIN AWG_JMAX AWG_I1 AWG_I2 AWG_I3 AWG_I4 AWG_I5 AWG_MTU
 
 # ============================================================================
-# TRAP HANDLERS
+# TRAP HANDLERS & ROLLBACK
 # ============================================================================
 
 _CLEANUP_FUNCTIONS=()
@@ -337,6 +364,34 @@ register_cleanup() { _CLEANUP_FUNCTIONS+=("$1"); }
 _run_cleanup() { for func in "${_CLEANUP_FUNCTIONS[@]}"; do "${func}" 2>/dev/null || true; done; }
 setup_traps() { trap _run_cleanup EXIT; trap 'exit 1' INT TERM; }
 
-# Version
-VPN_MANAGER_VERSION="5.0"
-export VPN_MANAGER_VERSION
+# Rollback infrastructure for installation failures
+declare -a ROLLBACK_STACK=()
+
+rollback_add() {
+    ROLLBACK_STACK+=("$*")
+}
+
+rollback_clear() {
+    ROLLBACK_STACK=()
+}
+
+rollback_execute() {
+    local exit_code=$?
+    if [[ $exit_code -ne 0 && ${#ROLLBACK_STACK[@]} -gt 0 ]]; then
+        log_warning "Operation failed, rolling back changes..."
+        for ((i=${#ROLLBACK_STACK[@]}-1; i>=0; i--)); do
+            log_info "Rollback: ${ROLLBACK_STACK[i]}"
+            eval "${ROLLBACK_STACK[i]}" 2>/dev/null || true
+        done
+        log_success "Rollback completed"
+    fi
+    ROLLBACK_STACK=()
+    return $exit_code
+}
+
+# Enable rollback trap (call at start of installation functions)
+enable_rollback() {
+    trap rollback_execute EXIT
+}
+
+# Last updated: 2026-01

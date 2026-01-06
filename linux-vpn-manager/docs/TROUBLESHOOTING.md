@@ -1,11 +1,13 @@
 # Troubleshooting Guide
 
-> **Part of Linux VPN Manager v6** - See [README.md](../README.md) for full documentation.
+Last updated: 2026-01
+
+> **Part of Linux VPN Manager** - See [README.md](../README.md) for full documentation.
 
 ## Project Structure
 
 ```
-linux-vpn-manager-v4/
+linux-vpn-manager/
 ├── vpn-manager.sh          # Main entry point
 ├── common.sh               # Shared library
 ├── wireguard.sh            # WireGuard install + management
@@ -151,7 +153,7 @@ netfilter-persistent save
 systemctl status xray
 
 # Check XRay config syntax
-xray -test -config /usr/local/etc/xray/config.json
+xray -test -config /etc/xray/config.json
 
 # View active clients
 ls /etc/vpn/xray/clients/
@@ -391,7 +393,7 @@ iptables -t nat -L POSTROUTING -n -v
 iptables -L FORWARD -n -v
 
 # XRay config test
-xray -test -config /usr/local/etc/xray/config.json
+xray -test -config /etc/xray/config.json
 
 # XRay verbose logging (edit config.json)
 # Change "loglevel": "warning" to "loglevel": "debug"

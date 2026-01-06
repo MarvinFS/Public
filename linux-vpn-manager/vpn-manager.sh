@@ -59,10 +59,10 @@ show_status() {
 
 restart_all() {
     log_info "Restarting all services..."
-    systemctl restart wg-quick@wg0 2>/dev/null && log_success "WireGuard" || true
-    systemctl restart openvpn-server@server 2>/dev/null && log_success "OpenVPN" || true
-    systemctl restart shadowsocks 2>/dev/null && log_success "Shadowsocks" || true
-    systemctl restart xray 2>/dev/null && log_success "XRay" || true
+    try_command "WireGuard" systemctl restart wg-quick@wg0
+    try_command "OpenVPN" systemctl restart openvpn-server@server
+    try_command "Shadowsocks" systemctl restart shadowsocks
+    try_command "XRay" systemctl restart xray
 }
 
 stop_all() {
@@ -76,10 +76,10 @@ stop_all() {
 
 start_all() {
     log_info "Starting all services..."
-    systemctl start wg-quick@wg0 2>/dev/null && log_success "WireGuard" || true
-    systemctl start openvpn-server@server 2>/dev/null && log_success "OpenVPN" || true
-    systemctl start shadowsocks 2>/dev/null && log_success "Shadowsocks" || true
-    systemctl start xray 2>/dev/null && log_success "XRay" || true
+    try_command "WireGuard" systemctl start wg-quick@wg0
+    try_command "OpenVPN" systemctl start openvpn-server@server
+    try_command "Shadowsocks" systemctl start shadowsocks
+    try_command "XRay" systemctl start xray
 }
 
 # ============================================================================
@@ -92,7 +92,7 @@ main_menu() {
     while true; do
         clear
         echo -e "${GREEN}╔════════════════════════════════════════════════════════════╗${NC}"
-        echo -e "${GREEN}║          Linux VPN Server Manager v6.0                     ║${NC}"
+        echo -e "${GREEN}║          Linux VPN Server Manager                          ║${NC}"
         echo -e "${GREEN}║    WireGuard • OpenVPN • Shadowsocks • XRay                ║${NC}"
         echo -e "${GREEN}╚════════════════════════════════════════════════════════════╝${NC}"
         

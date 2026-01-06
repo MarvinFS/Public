@@ -19,25 +19,45 @@ SS_VERSION="v1.21.2"
 
 install_shadowsocks() {
     log_info "Installing shadowsocks-rust ${SS_VERSION}..."
-    
-    local ARCH DOWNLOAD_URL
+
+    local ARCH DOWNLOAD_URL CHECKSUM_URL
     ARCH=$(uname -m)
-    DOWNLOAD_URL=""
     case ${ARCH} in
-        x86_64) DOWNLOAD_URL="https://github.com/shadowsocks/shadowsocks-rust/releases/download/${SS_VERSION}/shadowsocks-${SS_VERSION}.x86_64-unknown-linux-gnu.tar.xz" ;;
-        aarch64) DOWNLOAD_URL="https://github.com/shadowsocks/shadowsocks-rust/releases/download/${SS_VERSION}/shadowsocks-${SS_VERSION}.aarch64-unknown-linux-gnu.tar.xz" ;;
+        x86_64)
+            DOWNLOAD_URL="https://github.com/shadowsocks/shadowsocks-rust/releases/download/${SS_VERSION}/shadowsocks-${SS_VERSION}.x86_64-unknown-linux-gnu.tar.xz"
+            CHECKSUM_URL="${DOWNLOAD_URL}.sha256"
+            ;;
+        aarch64)
+            DOWNLOAD_URL="https://github.com/shadowsocks/shadowsocks-rust/releases/download/${SS_VERSION}/shadowsocks-${SS_VERSION}.aarch64-unknown-linux-gnu.tar.xz"
+            CHECKSUM_URL="${DOWNLOAD_URL}.sha256"
+            ;;
         *) log_error "Unsupported architecture: ${ARCH}"; exit 1 ;;
     esac
-    
+
     cd /tmp
     rm -rf ss-download && mkdir ss-download && cd ss-download
+
     wget -q --show-progress -O shadowsocks.tar.xz "${DOWNLOAD_URL}"
+
+    # Try to download and verify checksum
+    if wget -q -O shadowsocks.tar.xz.sha256 "${CHECKSUM_URL}" 2>/dev/null; then
+        local expected_checksum
+        expected_checksum=$(awk '{print $1}' shadowsocks.tar.xz.sha256)
+        if ! verify_checksum shadowsocks.tar.xz "$expected_checksum"; then
+            log_error "Checksum verification failed - aborting installation"
+            cd /tmp && rm -rf ss-download
+            exit 1
+        fi
+    else
+        log_warning "No checksum file available - skipping verification"
+    fi
+
     tar -xf shadowsocks.tar.xz
-    
+
     for bin in ssserver sslocal ssurl; do
         [[ -f ${bin} ]] && install -m 755 ${bin} /usr/bin/
     done
-    
+
     cd /tmp && rm -rf ss-download
     command -v ssserver &>/dev/null && log_success "shadowsocks-rust installed" || { log_error "Installation failed"; exit 1; }
 }

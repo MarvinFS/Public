@@ -68,17 +68,22 @@ create_xray_service() {
     systemctl stop xray 2>/dev/null || true
     systemctl disable xray 2>/dev/null || true
     
-    # Remove default service and ALL drop-ins that override our config
+    # Remove ALL xray service files from everywhere
     rm -rf /etc/systemd/system/xray.service.d
     rm -rf /etc/systemd/system/xray@.service.d
     rm -f /etc/systemd/system/xray.service
     rm -f /etc/systemd/system/xray@.service
+    rm -f /usr/lib/systemd/system/xray.service
+    rm -f /usr/lib/systemd/system/xray@.service
+    rm -rf /usr/lib/systemd/system/xray.service.d
+    rm -rf /usr/lib/systemd/system/xray@.service.d
     
     # Ensure xray user owns config directories
     mkdir -p "${XRAY_DIR}" "${CLIENT_DIR}"
     chown -R xray:"${GROUP_NAME}" "${XRAY_DIR}" 2>/dev/null || true
     chown -R xray:"${GROUP_NAME}" /etc/vpn/xray 2>/dev/null || true
     
+    # Create our custom service
     cat > /etc/systemd/system/xray.service << EOF
 [Unit]
 Description=XRay VLESS+REALITY Server
@@ -102,8 +107,6 @@ WantedBy=multi-user.target
 EOF
     
     # Reload systemd to pick up new service file
-    systemctl daemon-reload
-
     systemctl daemon-reload
     log_success "Custom service created"
 }
@@ -167,29 +170,33 @@ create_xray_config() {
     # Build clients array from client files
     local clients_json="[]"
     local short_ids_json="[\"\"]"  # Default empty shortId for REALITY
-    
+
     if [[ -d ${CLIENT_DIR} ]] && ls ${CLIENT_DIR}/*.conf &>/dev/null 2>&1; then
-        # Build clients array
+        # Build clients array - extract values without sourcing to avoid scope pollution
         clients_json="["
         short_ids_json="["
         local first=true
-        
+        local client_uuid client_short_id
+
         for client_file in ${CLIENT_DIR}/*.conf; do
-            source "$client_file"
+            # Extract values using grep/cut instead of source
+            client_uuid=$(grep "^CLIENT_UUID=" "$client_file" | cut -d= -f2 | tr -d '"')
+            client_short_id=$(grep "^CLIENT_SHORT_ID=" "$client_file" | cut -d= -f2 | tr -d '"')
+
             if [[ "$first" == "true" ]]; then
                 first=false
             else
                 clients_json+=","
                 short_ids_json+=","
             fi
-            clients_json+="{\"id\":\"${CLIENT_UUID}\",\"flow\":\"${FLOW}\"}"
-            short_ids_json+="\"${CLIENT_SHORT_ID}\""
+            clients_json+="{\"id\":\"${client_uuid}\",\"flow\":\"${FLOW}\"}"
+            short_ids_json+="\"${client_short_id}\""
         done
-        
+
         clients_json+="]"
         short_ids_json+="]"
     fi
-    
+
     source "${XRAY_PARAMS}"
     
     cat > "${XRAY_CONFIG}" << EOF
@@ -415,22 +422,26 @@ EOF
 
 list_clients() {
     load_params
-    
+
     echo ""
     echo -e "${GREEN}=== XRay Clients ===${NC}"
     echo ""
-    
+
     if [[ ! -d ${CLIENT_DIR} ]] || ! ls ${CLIENT_DIR}/*.conf &>/dev/null 2>&1; then
         echo -e "  ${YELLOW}No clients configured${NC}"
         return
     fi
-    
+
     printf "  %-20s %-10s %-12s\n" "NAME" "SHORT_ID" "CREATED"
     printf "  %-20s %-10s %-12s\n" "--------------------" "----------" "------------"
-    
+
+    local client_name client_short_id created_date
     for client_file in ${CLIENT_DIR}/*.conf; do
-        source "$client_file"
-        printf "  %-20s %-10s %-12s\n" "${CLIENT_NAME}" "${CLIENT_SHORT_ID}" "${CREATED_DATE}"
+        # Extract values without sourcing to avoid scope pollution
+        client_name=$(grep "^CLIENT_NAME=" "$client_file" | cut -d= -f2 | tr -d '"')
+        client_short_id=$(grep "^CLIENT_SHORT_ID=" "$client_file" | cut -d= -f2 | tr -d '"')
+        created_date=$(grep "^CREATED_DATE=" "$client_file" | cut -d= -f2 | tr -d '"')
+        printf "  %-20s %-10s %-12s\n" "${client_name}" "${client_short_id}" "${created_date}"
     done
     echo ""
 }
@@ -542,15 +553,36 @@ show_status() {
 uninstall_xray() {
     log_warning "This will remove XRay and all configurations!"
     confirm_action "Continue?" || return
-    
+
     systemctl stop xray 2>/dev/null || true
     systemctl disable xray 2>/dev/null || true
-    
+
+    # Remove auto-update timer if enabled
+    systemctl stop xray-update.timer 2>/dev/null || true
+    systemctl disable xray-update.timer 2>/dev/null || true
+    rm -f /etc/systemd/system/xray-update.timer
+    rm -f /etc/systemd/system/xray-update.service
+    rm -f /usr/local/bin/xray-update.sh
+
     # Use official uninstall
     bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ remove --purge 2>/dev/null || true
-    
+
+    # Remove service file
+    rm -f /etc/systemd/system/xray.service
+
+    # Remove configs
     rm -rf ${XRAY_DIR} /etc/vpn/xray
-    
+
+    # Remove firewall rules
+    if command -v ufw &>/dev/null && ufw status | grep -q "active"; then
+        ufw delete allow 443/tcp 2>/dev/null || true
+    fi
+    if command -v firewall-cmd &>/dev/null && systemctl is-active --quiet firewalld; then
+        firewall-cmd --permanent --remove-port=443/tcp 2>/dev/null || true
+        firewall-cmd --reload 2>/dev/null || true
+    fi
+
+    systemctl daemon-reload
     log_success "XRay uninstalled"
 }
 

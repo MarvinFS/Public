@@ -261,7 +261,7 @@ detect_installed() {
     if [[ -f /etc/shadowsocks/config.json ]] || service_is_active shadowsocks; then
         SHADOWSOCKS_INSTALLED=true
     fi
-    if [[ -f /etc/xray/params ]] || service_is_active xray; then
+    if [[ -f /usr/local/etc/xray/params ]] || service_is_active xray; then
         XRAY_INSTALLED=true
     fi
 

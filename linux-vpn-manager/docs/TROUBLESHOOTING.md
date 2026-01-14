@@ -153,7 +153,7 @@ netfilter-persistent save
 systemctl status xray
 
 # Check XRay config syntax
-xray -test -config /etc/xray/config.json
+xray -test -config /usr/local/etc/xray/config.json
 
 # View active clients
 ls /etc/vpn/xray/clients/
@@ -373,9 +373,9 @@ sudo ./xray.sh
 systemctl stop wg-quick@wg0 openvpn-server@server shadowsocks xray
 
 # Remove configs (CAUTION: deletes all user configs!)
-rm -rf /etc/wireguard /etc/openvpn /etc/shadowsocks /etc/xray
+rm -rf /etc/wireguard /etc/openvpn /etc/shadowsocks
 rm -rf /etc/vpn  # Client configs
-rm -rf /usr/local/etc/xray
+rm -rf /usr/local/etc/xray  # XRay config
 
 # Reinstall using vpn-manager.sh
 sudo ./vpn-manager.sh
@@ -393,7 +393,7 @@ iptables -t nat -L POSTROUTING -n -v
 iptables -L FORWARD -n -v
 
 # XRay config test
-xray -test -config /etc/xray/config.json
+xray -test -config /usr/local/etc/xray/config.json
 
 # XRay verbose logging (edit config.json)
 # Change "loglevel": "warning" to "loglevel": "debug"

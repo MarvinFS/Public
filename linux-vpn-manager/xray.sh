@@ -10,7 +10,7 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/common.sh" || { echo "ERROR: common.sh not found"; exit 1; }
 
-XRAY_DIR="/etc/xray"
+XRAY_DIR="/usr/local/etc/xray"
 XRAY_CONFIG="${XRAY_DIR}/config.json"
 XRAY_PARAMS="${XRAY_DIR}/params"
 CLIENT_DIR="/etc/vpn/xray/clients"

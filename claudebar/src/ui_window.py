@@ -22,7 +22,7 @@ from currency import (
 from claude_check import check_claude_status, get_status_message, ClaudeStatus
 
 # GitHub repository URL
-GITHUB_URL = "https://github.com/MarvinFS/ClaudeBar"
+GITHUB_URL = "https://github.com/MarvinFS/Public/tree/main/claudebar"
 
 
 def _get_resources_path() -> Path:

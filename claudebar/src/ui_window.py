@@ -17,12 +17,27 @@ from models import UsageSnapshot, OpenAISnapshot, CombinedSnapshot, Engine
 from config import Config, save_config
 from currency import (
     format_currency, get_exchange_rates, get_supported_currencies,
-    CURRENCIES, ExchangeRates
+    get_currency_symbol, CURRENCIES, ExchangeRates
 )
 from claude_check import check_claude_status, get_status_message, ClaudeStatus
 
 # GitHub repository URL
 GITHUB_URL = "https://github.com/MarvinFS/Public/tree/main/claudebar"
+
+
+def _get_dpi_scale() -> float:
+    """Get the Windows DPI scale factor (1.0 = 100%, 1.5 = 150%, etc.)."""
+    if sys.platform != "win32":
+        return 1.0
+    try:
+        import ctypes
+        # Get DPI from the default monitor
+        hdc = ctypes.windll.user32.GetDC(0)
+        dpi = ctypes.windll.gdi32.GetDeviceCaps(hdc, 88)  # LOGPIXELSX
+        ctypes.windll.user32.ReleaseDC(0, hdc)
+        return dpi / 96.0  # 96 DPI = 100%
+    except Exception:
+        return 1.0
 
 
 def _get_resources_path() -> Path:
@@ -153,7 +168,7 @@ class SettingsDialog:
         self.dialog = tk.Toplevel(parent)
         self.dialog.title("Settings")
         self.dialog.configure(bg="#0f0f0f")
-        self.dialog.geometry("300x300")
+        self.dialog.geometry("300x420")
         self.dialog.resizable(False, False)
         self.dialog.transient(parent)
         self.dialog.grab_set()
@@ -185,6 +200,35 @@ class SettingsDialog:
                         font=("Segoe UI", 14, "bold"),
                         fg="#ffffff", bg="#0f0f0f")
         title.pack(anchor=tk.W, pady=(0, 20))
+
+        # Engines section
+        engines_label = tk.Label(frame, text="Enabled Engines",
+                                font=("Segoe UI", 10),
+                                fg="#9ca3af", bg="#0f0f0f")
+        engines_label.pack(anchor=tk.W)
+
+        engines_frame = tk.Frame(frame, bg="#0f0f0f")
+        engines_frame.pack(fill=tk.X, pady=(5, 15))
+
+        self.claude_var = tk.BooleanVar(value=self.config.claude_enabled)
+        claude_cb = tk.Checkbutton(engines_frame, text="Claude",
+                                   variable=self.claude_var,
+                                   font=("Segoe UI", 10),
+                                   fg="#ffffff", bg="#0f0f0f",
+                                   activebackground="#0f0f0f",
+                                   activeforeground="#ffffff",
+                                   selectcolor="#1a1a1a")
+        claude_cb.pack(side=tk.LEFT)
+
+        self.codex_var = tk.BooleanVar(value=self.config.codex_enabled)
+        codex_cb = tk.Checkbutton(engines_frame, text="Codex",
+                                  variable=self.codex_var,
+                                  font=("Segoe UI", 10),
+                                  fg="#ffffff", bg="#0f0f0f",
+                                  activebackground="#0f0f0f",
+                                  activeforeground="#ffffff",
+                                  selectcolor="#1a1a1a")
+        codex_cb.pack(side=tk.LEFT, padx=(10, 0))
 
         # Currency selection
         currency_frame = tk.Frame(frame, bg="#0f0f0f")
@@ -226,6 +270,12 @@ class SettingsDialog:
                                 relief=tk.FLAT)
         refresh_entry.pack(anchor=tk.W, pady=(5, 0))
 
+        # Validation error label (hidden by default)
+        self.error_label = tk.Label(frame, text="",
+                                    font=("Segoe UI", 9),
+                                    fg="#EF4444", bg="#0f0f0f")
+        self.error_label.pack(anchor=tk.W, pady=(5, 0))
+
         # Buttons
         button_frame = tk.Frame(frame, bg="#0f0f0f")
         button_frame.pack(fill=tk.X, pady=(20, 0))
@@ -262,6 +312,16 @@ class SettingsDialog:
 
     def _save(self):
         """Save settings."""
+        # Validate at least one engine is enabled
+        claude_enabled = self.claude_var.get()
+        codex_enabled = self.codex_var.get()
+
+        if not claude_enabled and not codex_enabled:
+            self.error_label.config(text="At least one engine must be enabled")
+            return
+
+        self.config.claude_enabled = claude_enabled
+        self.config.codex_enabled = codex_enabled
         self.config.currency = self.currency_var.get()
         try:
             self.config.refresh_interval = int(self.refresh_var.get())
@@ -310,6 +370,10 @@ class ClaudeBarWindow:
         self._weekly_label: Optional[tk.Label] = None
         self._session_reset: Optional[tk.Label] = None
         self._weekly_reset: Optional[tk.Label] = None
+        self._extra_frame: Optional[tk.Frame] = None
+        self._extra_bar: Optional[ModernProgressBar] = None
+        self._extra_label: Optional[tk.Label] = None
+        self._extra_amount: Optional[tk.Label] = None
         self._today_cost: Optional[tk.Label] = None
         self._today_tokens: Optional[tk.Label] = None
         self._month_cost: Optional[tk.Label] = None
@@ -324,6 +388,15 @@ class ClaudeBarWindow:
         self._claude_icon: Optional[ImageTk.PhotoImage] = None
         self._openai_icon: Optional[ImageTk.PhotoImage] = None
         self._engine_label: Optional[tk.Label] = None
+        self._engine_frame: Optional[tk.Frame] = None
+
+        # Transition overlay state (black overlay instead of alpha transparency)
+        self._transition_overlay: Optional[tk.Frame] = None
+        self._transition_id: Optional[str] = None
+        self._transition_direction: str = "out"  # "in" = showing overlay, "out" = hiding overlay
+        self._transition_progress: int = 0
+        self._pending_update_callback: Optional[Callable] = None
+        self._last_extra_visible: Optional[bool] = None  # Track extra usage visibility
 
         # Colors
         self.bg_color = "#0f0f0f"
@@ -371,29 +444,20 @@ class ClaudeBarWindow:
         self._window.title("ClaudeBar")
         self._window.configure(bg=self.bg_color)
 
-        # Window size and position (increased height for larger icon + footer buttons)
-        window_width = 380
-        window_height = 580
-
-        # Position near system tray (bottom-right)
-        screen_width = self._window.winfo_screenwidth()
-        screen_height = self._window.winfo_screenheight()
-        x = screen_width - window_width - 20
-        y = screen_height - window_height - 60
-
-        self._window.geometry(f"{window_width}x{window_height}+{x}+{y}")
+        # Fixed width, dynamic height
+        self._window_width = 380
         self._window.resizable(False, False)
         self._window.attributes('-topmost', True)
         self._window.overrideredirect(True)
 
         # Main container with border
-        main_frame = tk.Frame(self._window, bg=self.bg_color,
+        self._main_frame = tk.Frame(self._window, bg=self.bg_color,
                              highlightbackground="#3a3a3a",
                              highlightthickness=1)
-        main_frame.pack(fill=tk.BOTH, expand=True)
+        self._main_frame.pack(fill=tk.BOTH, expand=True)
 
         # Content
-        content = tk.Frame(main_frame, bg=self.bg_color)
+        content = tk.Frame(self._main_frame, bg=self.bg_color)
         content.pack(fill=tk.BOTH, expand=True, padx=16, pady=16)
 
         self._create_header(content)
@@ -402,6 +466,13 @@ class ClaudeBarWindow:
         self._create_cost_section(content)
         self._create_footer(content)
 
+        # Create black overlay for transitions (covers content during engine switch)
+        # Use place() to position absolutely covering entire window
+        self._transition_overlay = tk.Frame(self._window, bg="#000000")
+        self._transition_overlay.place(relx=0, rely=0, relwidth=1, relheight=1)
+        # Lower it below all content initially (hidden)
+        self._transition_overlay.lower()
+
         # Bindings - FocusOut disabled as it interferes with button clicks
         # self._window.bind('<FocusOut>', self._on_focus_out)
         self._window.bind('<Escape>', lambda e: self.hide())
@@ -409,6 +480,89 @@ class ClaudeBarWindow:
 
         # Load initial data
         self._load_initial_data()
+
+    def _update_window_size(self):
+        """Update window size based on content and position near system tray."""
+        if not self._window or not self._window.winfo_exists():
+            return
+
+        # Let tkinter calculate required sizes
+        self._window.update_idletasks()
+
+        # Get required height from content
+        required_height = self._main_frame.winfo_reqheight()
+
+        # Add some padding and ensure minimum height
+        window_height = max(500, required_height + 4)  # +4 for border
+
+        # Position near system tray (bottom-right)
+        screen_width = self._window.winfo_screenwidth()
+        screen_height = self._window.winfo_screenheight()
+        x = screen_width - self._window_width - 20
+        y = screen_height - window_height - 60
+
+        self._window.geometry(f"{self._window_width}x{window_height}+{x}+{y}")
+
+    def _transition_step(self):
+        """Single step of overlay transition animation."""
+        if not self._window or not self._window.winfo_exists():
+            self._transition_id = None
+            self._pending_update_callback = None
+            return
+
+        # Move to next step
+        self._transition_progress += 1
+
+        if self._transition_direction == "in":
+            # Fading to black (showing overlay)
+            if self._transition_progress >= 6:  # ~100ms per phase
+                # Overlay fully visible, execute callback
+                self._transition_id = None
+                if self._pending_update_callback:
+                    callback = self._pending_update_callback
+                    self._pending_update_callback = None
+                    try:
+                        callback()
+                    except Exception as e:
+                        print(f"Transition callback error: {e}")
+                    # Start fade from black
+                    self._start_transition("out")
+            else:
+                self._transition_id = self._window.after(16, self._transition_step)
+        else:
+            # Fading from black (hiding overlay)
+            if self._transition_progress >= 6:  # ~100ms per phase
+                # Lower overlay back below content
+                if self._transition_overlay:
+                    self._transition_overlay.lower()
+                self._transition_id = None
+            else:
+                self._transition_id = self._window.after(16, self._transition_step)
+
+    def _start_transition(self, direction: str, callback: Optional[Callable] = None):
+        """Start overlay transition."""
+        self._transition_direction = direction
+        self._transition_progress = 0
+
+        if callback:
+            self._pending_update_callback = callback
+
+        if direction == "in" and self._transition_overlay:
+            # Lift overlay above content to cover it
+            self._transition_overlay.lift()
+
+        if self._transition_id is None:
+            self._transition_step()
+
+    def _fade_update(self, update_func: Callable):
+        """Cover content with black overlay, apply update, uncover."""
+        if not self._window or not self._window.winfo_viewable():
+            # Window not visible, just apply update directly
+            update_func()
+            return
+
+        # Start transition to black, with callback to apply changes
+        self._start_transition("in", update_func)
 
     def _load_initial_data(self):
         """Load exchange rates and Claude status."""
@@ -467,6 +621,15 @@ class ClaudeBarWindow:
     def _reset_link_flag(self):
         """Reset the link opening flag."""
         self._opening_link = False
+
+    def _get_enabled_engines(self) -> list[Engine]:
+        """Get list of enabled engines from config."""
+        engines = []
+        if self.config.claude_enabled:
+            engines.append(Engine.CLAUDE)
+        if self.config.codex_enabled:
+            engines.append(Engine.CODEX)
+        return engines
 
     def _create_header(self, parent):
         """Create the header with title, engine toggle, and GitHub link."""
@@ -541,48 +704,58 @@ class ClaudeBarWindow:
         github_btn.bind("<Enter>", lambda e: github_btn.config(fg="#FCD34D"))
         github_btn.bind("<Leave>", lambda e: github_btn.config(fg=self.accent_color))
 
-        # Engine toggle buttons
-        engine_frame = tk.Frame(right_frame, bg=self.bg_color)
-        engine_frame.pack(side=tk.TOP, anchor=tk.E, pady=(8, 0))
+        # Engine toggle buttons (only show if more than one engine enabled)
+        enabled_engines = self._get_enabled_engines()
 
-        # Load engine icons
-        self._claude_icon = self._load_engine_icon(_CLAUDE_ICON_PATH, _CLAUDE_ICON_URL, 20)
-        self._openai_icon = self._load_engine_icon(_OPENAI_ICON_PATH, _OPENAI_ICON_URL, 20)
+        # Set active engine to first enabled if current is disabled
+        if self._active_engine not in enabled_engines and enabled_engines:
+            self._active_engine = enabled_engines[0]
 
-        # Claude button
-        claude_bg = self.active_engine_bg if self._active_engine == Engine.CLAUDE else self.inactive_engine_bg
-        self._claude_btn = tk.Label(engine_frame, text=" Claude" if not self._claude_icon else "",
-                                    image=self._claude_icon if self._claude_icon else None,
-                                    compound=tk.LEFT,
-                                    font=("Segoe UI", 9),
-                                    fg=self.text_primary, bg=claude_bg,
-                                    padx=8, pady=4, cursor="hand2")
-        if not self._claude_icon:
-            self._claude_btn.config(text="Claude")
-        self._claude_btn.pack(side=tk.LEFT, padx=(0, 4))
-        self._claude_btn.bind("<Button-1>", lambda e: self._on_engine_select(Engine.CLAUDE))
+        if len(enabled_engines) > 1:
+            self._engine_frame = tk.Frame(right_frame, bg=self.bg_color)
+            self._engine_frame.pack(side=tk.TOP, anchor=tk.E, pady=(8, 0))
 
-        # OpenAI/Codex button
-        openai_bg = self.active_engine_bg if self._active_engine == Engine.CODEX else self.inactive_engine_bg
-        self._openai_btn = tk.Label(engine_frame, text=" Codex" if not self._openai_icon else "",
-                                    image=self._openai_icon if self._openai_icon else None,
-                                    compound=tk.LEFT,
-                                    font=("Segoe UI", 9),
-                                    fg=self.text_primary, bg=openai_bg,
-                                    padx=8, pady=4, cursor="hand2")
-        if not self._openai_icon:
-            self._openai_btn.config(text="Codex")
-        self._openai_btn.pack(side=tk.LEFT)
-        self._openai_btn.bind("<Button-1>", lambda e: self._on_engine_select(Engine.CODEX))
+            # Load engine icons
+            self._claude_icon = self._load_engine_icon(_CLAUDE_ICON_PATH, _CLAUDE_ICON_URL, 20)
+            self._openai_icon = self._load_engine_icon(_OPENAI_ICON_PATH, _OPENAI_ICON_URL, 20)
+
+            btn_padx = 8
+            btn_gap = 4
+
+            # Claude button (if enabled)
+            if self.config.claude_enabled:
+                claude_bg = self.active_engine_bg if self._active_engine == Engine.CLAUDE else self.inactive_engine_bg
+                self._claude_btn = tk.Label(self._engine_frame, text=" Claude" if not self._claude_icon else "",
+                                            image=self._claude_icon if self._claude_icon else None,
+                                            compound=tk.LEFT,
+                                            font=("Segoe UI", 9),
+                                            fg=self.text_primary, bg=claude_bg,
+                                            padx=btn_padx, pady=4, cursor="hand2")
+                if not self._claude_icon:
+                    self._claude_btn.config(text="Claude")
+                self._claude_btn.pack(side=tk.LEFT, padx=(0, btn_gap))
+                self._claude_btn.bind("<Button-1>", lambda e: self._on_engine_select(Engine.CLAUDE))
+
+            # OpenAI/Codex button (if enabled)
+            if self.config.codex_enabled:
+                openai_bg = self.active_engine_bg if self._active_engine == Engine.CODEX else self.inactive_engine_bg
+                self._openai_btn = tk.Label(self._engine_frame, text=" Codex" if not self._openai_icon else "",
+                                            image=self._openai_icon if self._openai_icon else None,
+                                            compound=tk.LEFT,
+                                            font=("Segoe UI", 9),
+                                            fg=self.text_primary, bg=openai_bg,
+                                            padx=btn_padx, pady=4, cursor="hand2")
+                if not self._openai_icon:
+                    self._openai_btn.config(text="Codex")
+                self._openai_btn.pack(side=tk.LEFT)
+                self._openai_btn.bind("<Button-1>", lambda e: self._on_engine_select(Engine.CODEX))
 
     def _on_engine_select(self, engine: Engine):
-        """Handle engine selection."""
+        """Handle engine selection with smooth fade transition."""
         if self._active_engine == engine:
             return
 
-        self._active_engine = engine
-
-        # Update button backgrounds
+        # Update button backgrounds immediately (this is the "tab" change)
         if self._claude_btn:
             bg = self.active_engine_bg if engine == Engine.CLAUDE else self.inactive_engine_bg
             self._claude_btn.config(bg=bg)
@@ -590,12 +763,21 @@ class ClaudeBarWindow:
             bg = self.active_engine_bg if engine == Engine.CODEX else self.inactive_engine_bg
             self._openai_btn.config(bg=bg)
 
-        # Notify callback
-        if self.on_engine_change:
-            self.on_engine_change(engine)
+        def apply_engine_change():
+            self._active_engine = engine
 
-        # Update display with current data
-        self._refresh_display()
+            # Notify callback
+            if self.on_engine_change:
+                self.on_engine_change(engine)
+
+            # Update status display for new engine
+            self._update_status_display()
+
+            # Update display with current data (this will also resize)
+            self._refresh_display_immediate()
+
+        # Use fade transition for smooth content change
+        self._fade_update(apply_engine_change)
 
     def _create_status_section(self, parent):
         """Create Claude connection status section."""
@@ -617,21 +799,61 @@ class ClaudeBarWindow:
         self._status_text.pack(side=tk.LEFT, padx=(8, 0))
 
     def _update_status_display(self):
-        """Update the status display."""
-        if self._claude_status and self._status_indicator and self._status_text:
-            if self._claude_status.authenticated:
-                self._status_indicator.config(fg="#10B981")
-                text = "Connected"
-                if self._claude_status.plan:
-                    text += f" · {self._claude_status.plan}"
-            elif self._claude_status.installed:
-                self._status_indicator.config(fg="#F59E0B")
-                text = "Not logged in"
-            else:
-                self._status_indicator.config(fg="#EF4444")
-                text = "Claude CLI not found"
+        """Update the status display based on active engine."""
+        if not self._status_indicator or not self._status_text:
+            return
 
-            self._status_text.config(text=text)
+        if self._active_engine == Engine.CLAUDE:
+            # Show Claude connection status
+            if self._claude_status:
+                if self._claude_status.authenticated:
+                    self._status_indicator.config(fg="#10B981")
+                    text = "Connected"
+                    # Get plan from status or infer from extra usage
+                    plan = self._claude_status.plan
+                    if not plan and self._snapshot and self._snapshot.extra_enabled:
+                        plan = "Max"  # Extra usage is a Max feature
+                    if plan:
+                        text += f" · {plan}"
+                elif self._claude_status.installed:
+                    self._status_indicator.config(fg="#F59E0B")
+                    text = "Not logged in"
+                else:
+                    self._status_indicator.config(fg="#EF4444")
+                    text = "Claude CLI not found"
+                self._status_text.config(text=text)
+            else:
+                self._status_indicator.config(fg="#6b7280")
+                self._status_text.config(text="Checking...")
+        elif self._active_engine == Engine.CODEX:
+            # Show Codex connection status
+            if self._openai_snapshot:
+                if self._openai_snapshot.available:
+                    self._status_indicator.config(fg="#10B981")
+                    text = "Connected"
+                    # Show plan type if available
+                    if self._openai_snapshot.plan_type:
+                        text += f" · {self._openai_snapshot.plan_type.title()}"
+                    elif self._openai_snapshot.credits_remaining is not None:
+                        text += f" · ${self._openai_snapshot.credits_remaining:.2f} credits"
+                    self._status_text.config(text=text)
+                elif self._openai_snapshot.error_message:
+                    self._status_indicator.config(fg="#EF4444")
+                    # Show shorter error message
+                    err = self._openai_snapshot.error_message
+                    if "Run 'codex login'" in err:
+                        text = "Not logged in"
+                    elif "token expired" in err.lower():
+                        text = "Token expired"
+                    else:
+                        text = "Connection error"
+                    self._status_text.config(text=text)
+                else:
+                    self._status_indicator.config(fg="#F59E0B")
+                    self._status_text.config(text="Not configured")
+            else:
+                self._status_indicator.config(fg="#6b7280")
+                self._status_text.config(text="Checking...")
 
     def _create_section_title(self, parent, text):
         """Create a section title."""
@@ -656,7 +878,7 @@ class ClaudeBarWindow:
         session_header = tk.Frame(session_frame, bg=self.bg_color)
         session_header.pack(fill=tk.X, pady=(0, 6))
 
-        self._session_label = tk.Label(session_header, text="Session · 0% used",
+        self._session_label = tk.Label(session_header, text="5-Hour · 0% used",
                                        font=("Segoe UI", 11),
                                        fg=self.text_secondary, bg=self.bg_color)
         self._session_label.pack(side=tk.LEFT)
@@ -690,6 +912,27 @@ class ClaudeBarWindow:
         self._weekly_bar = ModernProgressBar(weekly_frame, width=348, height=20,
                                             bg=self.bg_color)
         self._weekly_bar.pack()
+
+        # Extra usage (initially hidden, shown only when enabled)
+        self._extra_frame = tk.Frame(parent, bg=self.bg_color)
+        # Don't pack yet - will be shown conditionally in _refresh_display
+
+        extra_header = tk.Frame(self._extra_frame, bg=self.bg_color)
+        extra_header.pack(fill=tk.X, pady=(14, 6))
+
+        self._extra_label = tk.Label(extra_header, text="Extra · 0% used",
+                                     font=("Segoe UI", 11),
+                                     fg=self.text_secondary, bg=self.bg_color)
+        self._extra_label.pack(side=tk.LEFT)
+
+        self._extra_amount = tk.Label(extra_header, text="",
+                                      font=("Segoe UI", 9),
+                                      fg=self.text_muted, bg=self.bg_color)
+        self._extra_amount.pack(side=tk.RIGHT)
+
+        self._extra_bar = ModernProgressBar(self._extra_frame, width=348, height=20,
+                                           bg=self.bg_color)
+        self._extra_bar.pack()
 
         self._create_separator(parent)
 
@@ -820,10 +1063,36 @@ class ClaudeBarWindow:
             SettingsDialog(self._window, self.config, self._on_settings_saved)
 
     def _on_settings_saved(self):
-        """Handle settings save."""
+        """Handle settings save with smooth transition."""
         self._exchange_rates = get_exchange_rates()
+
+        # Hide window first for smoother transition
+        if self._window:
+            self._window.withdraw()
+            # Small delay to ensure window is hidden before destruction
+            self._window.after(50, self._rebuild_window)
+        else:
+            self._rebuild_window()
+
+    def _rebuild_window(self):
+        """Rebuild window after settings change."""
+        # Destroy old window
+        if self._window:
+            self._window.destroy()
+            self._window = None
+            # Reset UI element references
+            self._claude_btn = None
+            self._openai_btn = None
+            self._engine_frame = None
+            self._last_extra_visible = None  # Reset layout tracking
+
+        # Recreate and show
+        self._create_window()
         if self._snapshot:
             self.update(self._snapshot)
+        if self._openai_snapshot:
+            self.update_openai(self._openai_snapshot)
+        self.show()
 
     def _on_exit_click(self):
         """Handle exit button."""
@@ -874,11 +1143,32 @@ class ClaudeBarWindow:
         self._refresh_display()
 
     def _refresh_display(self):
-        """Refresh the display based on active engine and current data."""
+        """Refresh display, using fade if layout structure changes."""
+        if not self._window or not self._window.winfo_exists():
+            return
+
+        # Check if extra usage visibility will change (layout change)
+        new_extra_visible = False
+        if self._active_engine == Engine.CLAUDE and self._snapshot:
+            new_extra_visible = self._snapshot.extra_enabled
+
+        layout_changed = (self._last_extra_visible is not None and
+                         self._last_extra_visible != new_extra_visible)
+
+        if layout_changed and self._window.winfo_viewable():
+            # Use fade for layout changes
+            self._fade_update(self._refresh_display_immediate)
+        else:
+            # Direct update for data-only changes
+            self._refresh_display_immediate()
+
+    def _refresh_display_immediate(self):
+        """Refresh the display immediately (no fade)."""
         if not self._window or not self._window.winfo_exists():
             return
 
         # Get data for active engine
+        snapshot = None  # Track for extra usage visibility check
         if self._active_engine == Engine.CLAUDE:
             snapshot = self._snapshot
             if not snapshot:
@@ -893,7 +1183,7 @@ class ClaudeBarWindow:
             month_cost = snapshot.month_cost_usd
             month_tokens = snapshot.month_tokens.total_tokens
             timestamp = snapshot.timestamp
-        else:
+        elif self._active_engine == Engine.CODEX:
             openai = self._openai_snapshot
             if not openai:
                 # Show placeholder when no OpenAI data
@@ -911,9 +1201,9 @@ class ClaudeBarWindow:
                 session_reset = openai.session_reset
                 weekly_pct = openai.weekly_percent
                 weekly_reset = openai.weekly_reset
-                today_cost = 0.0  # OpenAI doesn't provide cost breakdown via API
+                today_cost = openai.today_cost_usd  # From log parsing
                 today_tokens = openai.today_total_tokens
-                month_cost = 0.0
+                month_cost = openai.month_cost_usd
                 month_tokens = openai.month_total_tokens
                 timestamp = openai.timestamp
 
@@ -923,7 +1213,7 @@ class ClaudeBarWindow:
         if self._session_bar and self._session_label:
             self._session_bar.set_value(session_pct, animate=False)
             self._session_label.config(
-                text=f"Session · {session_pct:.0f}% used"
+                text=f"5-Hour · {session_pct:.0f}% used"
             )
         if self._session_reset:
             if session_reset:
@@ -942,25 +1232,48 @@ class ClaudeBarWindow:
             else:
                 self._weekly_reset.config(text="")
 
-        # Update costs with currency conversion
-        # Note: OpenAI/Codex doesn't provide cost data via API, only tokens from local logs
-        is_codex = self._active_engine == Engine.CODEX
-        if self._today_cost:
-            if is_codex:
-                self._today_cost.config(text="N/A")
+        # Update extra usage section (Claude only)
+        # Track visibility changes for resize optimization
+        extra_visible = False
+        if self._extra_frame and self._extra_bar and self._extra_label and self._extra_amount:
+            if self._active_engine == Engine.CLAUDE and snapshot and snapshot.extra_enabled:
+                extra_visible = True
+                # Show extra usage frame
+                if not self._extra_frame.winfo_ismapped():
+                    self._extra_frame.pack(fill=tk.X, after=self._weekly_bar.master)
+
+                # Update extra usage values
+                extra_pct = snapshot.extra_percent
+                extra_used = snapshot.extra_used
+                extra_limit = snapshot.extra_limit
+                extra_currency = snapshot.extra_currency.upper()
+
+                self._extra_bar.set_value(extra_pct, animate=False)
+                self._extra_label.config(text=f"Extra · {extra_pct:.0f}% used")
+
+                # Format amount with proper currency symbol
+                symbol = get_currency_symbol(extra_currency)
+                self._extra_amount.config(text=f"{symbol}{extra_used:.2f} / {symbol}{extra_limit:.2f}")
             else:
-                cost_str = format_currency(today_cost, currency, self._exchange_rates)
-                self._today_cost.config(text=cost_str)
+                # Hide extra usage frame
+                if self._extra_frame.winfo_ismapped():
+                    self._extra_frame.pack_forget()
+
+        # Track if layout changed
+        layout_changed = self._last_extra_visible != extra_visible
+        self._last_extra_visible = extra_visible
+
+        # Update costs with currency conversion
+        if self._today_cost:
+            cost_str = format_currency(today_cost, currency, self._exchange_rates)
+            self._today_cost.config(text=cost_str)
         if self._today_tokens:
             tokens = self._format_tokens(today_tokens)
             self._today_tokens.config(text=f"{tokens} tokens")
 
         if self._month_cost:
-            if is_codex:
-                self._month_cost.config(text="N/A")
-            else:
-                cost_str = format_currency(month_cost, currency, self._exchange_rates)
-                self._month_cost.config(text=cost_str)
+            cost_str = format_currency(month_cost, currency, self._exchange_rates)
+            self._month_cost.config(text=cost_str)
         if self._month_tokens:
             tokens = self._format_tokens(month_tokens)
             self._month_tokens.config(text=f"{tokens} tokens")
@@ -968,8 +1281,14 @@ class ClaudeBarWindow:
         # Update timestamp
         if self._updated_label:
             time_str = timestamp.strftime("%H:%M")
-            engine_name = "Claude" if self._active_engine == Engine.CLAUDE else "Codex"
+            engine_names = {Engine.CLAUDE: "Claude", Engine.CODEX: "Codex"}
+            engine_name = engine_names.get(self._active_engine, "Unknown")
             self._updated_label.config(text=f"{engine_name} · Updated at {time_str}")
+
+        # Only resize window when layout structure changes (extra usage visibility)
+        # This prevents flickering on regular data updates
+        if layout_changed:
+            self._update_window_size()
 
     def show(self, snapshot: Optional[UsageSnapshot] = None):
         """Show the window."""
@@ -982,6 +1301,8 @@ class ClaudeBarWindow:
         if self._window:
             # Apply any pending updates before showing
             self._apply_snapshot_update()
+            # Update window size based on content before showing
+            self._update_window_size()
             self._window.deiconify()
             self._window.lift()
             self._window.focus_force()

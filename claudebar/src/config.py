@@ -17,6 +17,9 @@ class Config:
     show_notifications: bool = True
     start_minimized: bool = True
     currency: str = "USD"  # USD, EUR, RUB, RON
+    # Engine toggles
+    claude_enabled: bool = True
+    codex_enabled: bool = True
 
 
 def get_config_dir() -> Path:

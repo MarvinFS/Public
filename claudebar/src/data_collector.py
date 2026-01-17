@@ -28,7 +28,7 @@ class DataCollector:
         snapshot = UsageSnapshot(timestamp=datetime.now())
         errors = []
 
-        # Fetch OAuth usage data (session/weekly limits)
+        # Fetch OAuth usage data (session/weekly limits and extra usage)
         try:
             oauth_data = fetch_oauth_usage()
             if oauth_data.is_valid:
@@ -38,6 +38,13 @@ class DataCollector:
                 if oauth_data.weekly:
                     snapshot.weekly_percent = oauth_data.weekly.percent
                     snapshot.weekly_reset = oauth_data.weekly.reset_str
+                # Pass extra usage data to snapshot
+                if oauth_data.extra:
+                    snapshot.extra_enabled = oauth_data.extra.enabled
+                    snapshot.extra_percent = oauth_data.extra.percent
+                    snapshot.extra_used = oauth_data.extra.used_credits
+                    snapshot.extra_limit = oauth_data.extra.monthly_limit
+                    snapshot.extra_currency = oauth_data.extra.currency
                 snapshot.cli_available = True
             else:
                 snapshot.cli_available = False
@@ -96,6 +103,7 @@ class DataCollector:
                 snapshot.weekly_percent = openai_data.weekly_percent
                 snapshot.weekly_reset = openai_data.weekly_reset
                 snapshot.credits_remaining = openai_data.credits_remaining
+                snapshot.plan_type = openai_data.plan_type
                 snapshot.available = True
             else:
                 snapshot.available = False
@@ -105,17 +113,19 @@ class DataCollector:
             snapshot.available = False
             snapshot.error_message = str(e)
 
-        # Fetch token usage from local JSONL logs
+        # Fetch token usage and costs from local JSONL logs
         try:
             today_usage = get_today_codex_usage()
             snapshot.today_input_tokens = today_usage.input_tokens
             snapshot.today_output_tokens = today_usage.output_tokens
             snapshot.today_cached_tokens = today_usage.cached_input_tokens
             snapshot.today_reasoning_tokens = today_usage.reasoning_tokens
+            snapshot.today_cost_usd = today_usage.cost_usd
 
             month_usage = get_month_codex_usage()
             snapshot.month_input_tokens = month_usage.input_tokens
             snapshot.month_output_tokens = month_usage.output_tokens
+            snapshot.month_cost_usd = month_usage.cost_usd
         except Exception:
             pass  # Token counts are optional, don't fail if logs unavailable
 
@@ -128,7 +138,7 @@ class DataCollector:
         return self._last_openai_snapshot
 
     def collect_combined(self) -> CombinedSnapshot:
-        """Collect data from both Claude and OpenAI."""
+        """Collect data from Claude and OpenAI/Codex."""
         claude_snapshot = self.collect()
         openai_snapshot = self.collect_openai()
 

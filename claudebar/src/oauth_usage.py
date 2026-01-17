@@ -11,13 +11,15 @@ from pathlib import Path
 @dataclass
 class UsageWindow:
     """Usage window with utilization and reset time."""
-    utilization: float  # Already a percentage (0-100)
+    utilization: float  # API returns percentage directly (0-100)
     resets_at: Optional[datetime] = None
 
     @property
     def percent(self) -> float:
         """Get utilization as percentage (0-100)."""
-        return self.utilization  # Already a percentage
+        # Anthropic OAuth API returns utilization already as percentage (0-100)
+        # Capped at 100 for display purposes (can exceed with extra usage)
+        return min(100.0, self.utilization)
 
     @property
     def reset_str(self) -> Optional[str]:
@@ -48,16 +50,15 @@ class UsageWindow:
 class ExtraUsage:
     """Extra usage (paid overage) information."""
     enabled: bool = False
-    monthly_limit: float = 0.0
-    used_credits: float = 0.0
+    monthly_limit: float = 0.0  # In actual currency (already divided from cents)
+    used_credits: float = 0.0   # In actual currency (already divided from cents)
+    utilization: float = 0.0    # Percentage from API (0-100)
     currency: str = "usd"
 
     @property
-    def utilization(self) -> float:
-        """Get utilization as ratio (0-1)."""
-        if self.monthly_limit <= 0:
-            return 0.0
-        return min(1.0, self.used_credits / self.monthly_limit)
+    def percent(self) -> float:
+        """Get utilization as percentage (0-100)."""
+        return min(100.0, self.utilization)
 
 
 @dataclass
@@ -66,6 +67,7 @@ class OAuthUsageData:
     session: Optional[UsageWindow] = None  # five_hour
     weekly: Optional[UsageWindow] = None   # seven_day
     extra: Optional[ExtraUsage] = None
+    plan_type: Optional[str] = None  # subscription tier
     error: Optional[str] = None
 
     @property
@@ -120,7 +122,7 @@ def parse_reset_time(resets_at_str: Optional[str]) -> Optional[datetime]:
         return None
 
 
-def fetch_oauth_usage(access_token: Optional[str] = None) -> OAuthUsageData:
+def fetch_oauth_usage(access_token: Optional[str] = None, debug: bool = False) -> OAuthUsageData:
     """Fetch usage data from Anthropic OAuth API."""
     if access_token is None:
         access_token = load_access_token()
@@ -144,6 +146,14 @@ def fetch_oauth_usage(access_token: Optional[str] = None) -> OAuthUsageData:
         with urllib.request.urlopen(req, timeout=10) as response:
             data = json.loads(response.read().decode("utf-8"))
 
+        # Debug logging to verify API response format
+        if debug:
+            print(f"DEBUG OAuth API response: {json.dumps(data, indent=2)}")
+            if "five_hour" in data:
+                print(f"DEBUG five_hour.utilization = {data['five_hour'].get('utilization')}")
+            if "seven_day" in data:
+                print(f"DEBUG seven_day.utilization = {data['seven_day'].get('utilization')}")
+
         # Parse session (five_hour)
         session = None
         if "five_hour" in data:
@@ -163,20 +173,31 @@ def fetch_oauth_usage(access_token: Optional[str] = None) -> OAuthUsageData:
             )
 
         # Parse extra usage
+        # API returns monthly_limit and used_credits in CENTS, divide by 100
         extra = None
         if "extra_usage" in data:
             eu = data["extra_usage"]
             extra = ExtraUsage(
                 enabled=eu.get("is_enabled", False),
-                monthly_limit=eu.get("monthly_limit", 0.0),
-                used_credits=eu.get("used_credits", 0.0),
+                monthly_limit=eu.get("monthly_limit", 0.0) / 100.0,  # cents → currency
+                used_credits=eu.get("used_credits", 0.0) / 100.0,    # cents → currency
+                utilization=eu.get("utilization", 0.0),              # API returns percentage
                 currency=eu.get("currency", "usd"),
             )
+
+        # Extract plan type from various possible fields
+        plan_type = (
+            data.get("plan_type") or
+            data.get("plan") or
+            data.get("subscription_type") or
+            data.get("tier")
+        )
 
         return OAuthUsageData(
             session=session,
             weekly=weekly,
             extra=extra,
+            plan_type=plan_type,
         )
 
     except urllib.error.HTTPError as e:

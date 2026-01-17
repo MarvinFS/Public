@@ -6,6 +6,20 @@ import time
 from pathlib import Path
 from typing import Optional
 
+# Enable DPI awareness on Windows before any GUI imports
+# This must be called before creating any tkinter windows
+if sys.platform == "win32":
+    try:
+        import ctypes
+        # SetProcessDpiAwareness(2) = Per-Monitor DPI Aware
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)
+    except Exception:
+        try:
+            # Fallback for older Windows versions
+            ctypes.windll.user32.SetProcessDPIAware()
+        except Exception:
+            pass
+
 # Add src directory to path for imports
 src_dir = Path(__file__).parent
 if str(src_dir) not in sys.path:

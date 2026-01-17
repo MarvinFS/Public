@@ -84,14 +84,10 @@ def check_claude_status() -> ClaudeStatus:
     """Perform a comprehensive check of Claude Code status."""
     status = ClaudeStatus()
 
-    # Check CLI installation
+    # Check CLI installation (optional - OAuth works without CLI in PATH)
     cli_path = find_claude_cli()
     status.cli_path = cli_path
     status.installed = cli_path is not None
-
-    if not status.installed:
-        status.error = "Claude Code CLI not installed"
-        return status
 
     # Check Claude directory exists
     claude_dir = get_claude_dir()
@@ -99,7 +95,7 @@ def check_claude_status() -> ClaudeStatus:
         status.error = "Claude data directory not found (~/.claude)"
         return status
 
-    # Check authentication
+    # Check authentication - this is what really matters for OAuth API
     auth_ok, creds = check_credentials()
     status.authenticated = auth_ok
 
@@ -107,19 +103,33 @@ def check_claude_status() -> ClaudeStatus:
         status.error = "Not logged in to Claude Code"
         return status
 
+    # If authenticated via OAuth, mark as installed even if CLI not in PATH
+    # The OAuth API works without the CLI executable
+    if auth_ok and creds and creds.get("claudeAiOauth"):
+        status.installed = True
+
     # Get additional info from credentials
     if creds:
         oauth = creds.get("claudeAiOauth", {})
         if isinstance(oauth, dict):
-            status.organization = oauth.get("organizationName")
+            status.organization = oauth.get("organizationName") or oauth.get("organization_name")
             status.email = oauth.get("email")
-            status.plan = oauth.get("plan") or oauth.get("planType")
+            # Try various field names for plan
+            status.plan = (
+                oauth.get("plan") or
+                oauth.get("planType") or
+                oauth.get("plan_type") or
+                oauth.get("subscriptionType") or
+                oauth.get("subscription_type") or
+                oauth.get("tier") or
+                oauth.get("accountType") or
+                oauth.get("account_type")
+            )
 
     # Get settings info
     settings = get_settings_info()
     if settings:
         # Could extract more info from settings
-
         pass
 
     return status

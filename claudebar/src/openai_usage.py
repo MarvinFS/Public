@@ -46,6 +46,7 @@ class OpenAIUsageData:
     five_hour: Optional[OpenAIUsageWindow] = None
     weekly: Optional[OpenAIUsageWindow] = None
     credits_remaining: Optional[float] = None
+    plan_type: Optional[str] = None  # "plus", "pro", "enterprise", "free"
     error: Optional[str] = None
 
     @property
@@ -203,6 +204,9 @@ def fetch_openai_usage(access_token: Optional[str] = None) -> OpenAIUsageData:
         with urllib.request.urlopen(req, timeout=10) as response:
             data = json.loads(response.read().decode("utf-8"))
 
+        # Parse plan type
+        plan_type = data.get("plan_type")
+
         # Parse rate_limit structure
         rate_limit = data.get("rate_limit", {})
 
@@ -245,6 +249,7 @@ def fetch_openai_usage(access_token: Optional[str] = None) -> OpenAIUsageData:
             five_hour=five_hour,
             weekly=weekly,
             credits_remaining=credits_balance,
+            plan_type=plan_type,
         )
 
     except urllib.error.HTTPError as e:

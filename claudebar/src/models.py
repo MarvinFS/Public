@@ -75,6 +75,13 @@ class UsageSnapshot:
     weekly_percent: float = 0.0
     weekly_reset: Optional[str] = None
 
+    # Extra usage (paid overage)
+    extra_enabled: bool = False
+    extra_percent: float = 0.0           # Utilization percentage (0-100)
+    extra_used: float = 0.0              # Used credits in actual currency
+    extra_limit: float = 0.0             # Monthly limit in actual currency
+    extra_currency: str = "usd"          # Currency code from API
+
     # Log-derived data
     today_cost_usd: float = 0.0
     month_cost_usd: float = 0.0
@@ -128,7 +135,12 @@ class OpenAISnapshot:
     month_input_tokens: int = 0
     month_output_tokens: int = 0
 
-    # Credits
+    # Cost calculations (from log parsing + pricing)
+    today_cost_usd: float = 0.0
+    month_cost_usd: float = 0.0
+
+    # Plan type and credits
+    plan_type: Optional[str] = None  # "plus", "pro", "enterprise", "free"
     credits_remaining: Optional[float] = None
 
     # Status

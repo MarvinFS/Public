@@ -1,11 +1,13 @@
-"""Parse Codex CLI session JSONL files for token usage."""
+"""Parse Codex CLI session JSONL files for token usage and cost calculation."""
 
 import json
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Optional, Dict
+
+from codex_pricing import calculate_cost
 
 
 @dataclass
@@ -15,17 +17,34 @@ class CodexTokenUsage:
     cached_input_tokens: int = 0
     output_tokens: int = 0
     reasoning_tokens: int = 0
+    cost_usd: float = 0.0
+    model_usage: Dict[str, dict] = field(default_factory=dict)  # model -> {input, output, cached, reasoning}
 
     @property
     def total_tokens(self) -> int:
         return self.input_tokens + self.output_tokens
 
     def __add__(self, other: "CodexTokenUsage") -> "CodexTokenUsage":
+        # Merge model_usage dicts
+        merged_models = dict(self.model_usage)
+        for model, usage in other.model_usage.items():
+            if model in merged_models:
+                merged_models[model] = {
+                    "input": merged_models[model].get("input", 0) + usage.get("input", 0),
+                    "output": merged_models[model].get("output", 0) + usage.get("output", 0),
+                    "cached": merged_models[model].get("cached", 0) + usage.get("cached", 0),
+                    "reasoning": merged_models[model].get("reasoning", 0) + usage.get("reasoning", 0),
+                }
+            else:
+                merged_models[model] = dict(usage)
+
         return CodexTokenUsage(
             input_tokens=self.input_tokens + other.input_tokens,
             cached_input_tokens=self.cached_input_tokens + other.cached_input_tokens,
             output_tokens=self.output_tokens + other.output_tokens,
             reasoning_tokens=self.reasoning_tokens + other.reasoning_tokens,
+            cost_usd=self.cost_usd + other.cost_usd,
+            model_usage=merged_models,
         )
 
 
@@ -40,9 +59,10 @@ def get_codex_sessions_dir() -> Path:
 def parse_session_file(file_path: Path) -> CodexTokenUsage:
     """Parse a single Codex session JSONL file for token usage.
 
-    Returns the final token count from the session (cumulative).
+    Returns the final token count from the session (cumulative) with cost calculation.
     """
     usage = CodexTokenUsage()
+    model = "gpt-4o"  # Default model if not found
 
     try:
         with open(file_path, "r", encoding="utf-8") as f:
@@ -52,6 +72,12 @@ def parse_session_file(file_path: Path) -> CodexTokenUsage:
                     continue
                 try:
                     entry = json.loads(line)
+
+                    # Extract model from conversation_item entries
+                    if entry.get("type") == "conversation_item":
+                        payload = entry.get("payload", {})
+                        if payload.get("model"):
+                            model = payload["model"]
 
                     # Look for event_msg with token_count type
                     if entry.get("type") != "event_msg":
@@ -68,12 +94,33 @@ def parse_session_file(file_path: Path) -> CodexTokenUsage:
 
                     total_usage = info.get("total_token_usage", {})
                     if total_usage:
+                        input_tokens = total_usage.get("input_tokens", 0)
+                        cached_tokens = total_usage.get("cached_input_tokens", 0)
+                        output_tokens = total_usage.get("output_tokens", 0)
+                        reasoning_tokens = total_usage.get("reasoning_output_tokens", 0)
+
+                        # Calculate cost for this session
+                        cost = calculate_cost(
+                            model=model,
+                            input_tokens=input_tokens,
+                            output_tokens=output_tokens,
+                            cached_input_tokens=cached_tokens,
+                            reasoning_tokens=reasoning_tokens,
+                        )
+
                         # Update with latest cumulative values
                         usage = CodexTokenUsage(
-                            input_tokens=total_usage.get("input_tokens", 0),
-                            cached_input_tokens=total_usage.get("cached_input_tokens", 0),
-                            output_tokens=total_usage.get("output_tokens", 0),
-                            reasoning_tokens=total_usage.get("reasoning_output_tokens", 0),
+                            input_tokens=input_tokens,
+                            cached_input_tokens=cached_tokens,
+                            output_tokens=output_tokens,
+                            reasoning_tokens=reasoning_tokens,
+                            cost_usd=cost,
+                            model_usage={model: {
+                                "input": input_tokens,
+                                "output": output_tokens,
+                                "cached": cached_tokens,
+                                "reasoning": reasoning_tokens,
+                            }},
                         )
                 except json.JSONDecodeError:
                     continue

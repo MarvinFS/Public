@@ -1,8 +1,8 @@
 # ClaudeBar
 
-Windows system tray application for tracking Claude Code and OpenAI Codex usage statistics
+Windows system tray application for tracking Claude Code and OpenAI Codex usage statistics.
 
-Inspired by [CodexBar](https://github.com/steipete/CodexBar), which runs only on MACOS
+Inspired by [CodexBar](https://github.com/steipete/CodexBar), which runs only on macOS.
 
 ![ClaudeBar Main Window](mainwindow.jpg)
 
@@ -16,6 +16,16 @@ Engine selection buttons in the header allow switching between Claude and Codex 
 
 The tray icon displays a custom app icon if one exists at `resources/icons/app_icon.png`, otherwise it generates a dynamic icon that changes color based on usage level.
 
+## Supported Engines
+
+ClaudeBar currently supports two AI coding assistants:
+
+**Claude Code** tracks session and weekly usage limits, token counts per model, and costs calculated from JSONL logs. Requires Claude Code CLI to be installed and authenticated.
+
+**OpenAI Codex** tracks session and weekly rate limits, token usage, and estimated costs from local logs. Requires Codex CLI with `codex login` completed.
+
+Note: GitHub Copilot support was investigated but the Copilot API does not provide usage metrics for individual accounts. The metrics API is only available for organization and enterprise accounts. Individual users can view their Copilot usage at github.com/settings/copilot.
+
 ## Requirements
 
 ClaudeBar requires Python 3.11 or higher and runs on Windows 10 and 11. You need Claude Code CLI installed for Claude tracking, and optionally Codex CLI with `codex login` completed for OpenAI tracking.
@@ -28,6 +38,8 @@ Navigate to the claudebar directory and install dependencies:
 cd claudebar
 pip install -r requirements.txt
 ```
+
+Dependencies are minimal: pystray for system tray functionality, Pillow for image handling, and pyinstaller for building executables.
 
 ## Running
 
@@ -47,7 +59,7 @@ Use the build script to create a portable executable:
 .\build.ps1
 ```
 
-The executable will be created at `dist/ClaudeBar.exe`. To also install to Windows startup folder:
+The executable will be created at `dist/ClaudeBar.exe` (approximately 20MB). To also install to Windows startup folder:
 
 ```powershell
 .\build.ps1 -Install
@@ -58,6 +70,8 @@ For a clean rebuild:
 ```powershell
 .\build.ps1 -Clean
 ```
+
+The build excludes numpy, scipy, and other heavy optional dependencies to keep the executable size small.
 
 ## Customizing the Icon
 
@@ -75,11 +89,13 @@ Configuration is stored in `%LOCALAPPDATA%\ClaudeBar\config.json` with the follo
   "critical_threshold": 95,
   "show_notifications": true,
   "start_minimized": true,
-  "currency": "USD"
+  "currency": "USD",
+  "claude_enabled": true,
+  "codex_enabled": true
 }
 ```
 
-The refresh_interval controls how often data updates automatically in seconds. Warning and critical thresholds determine when the tray icon changes from green to yellow to red. Currency can be set to USD, EUR, RUB, or RON for cost display.
+The refresh_interval controls how often data updates automatically in seconds. Warning and critical thresholds determine when the tray icon changes from green to yellow to red. Currency can be set to USD, EUR, RUB, or RON for cost display. Engine toggles allow enabling or disabling Claude and Codex tracking independently.
 
 ## Tray Context Menu
 
@@ -89,7 +105,7 @@ Right-clicking the tray icon shows a quick summary of usage for both providers. 
 
 Claude usage data comes from three sources. The OAuth API at api.anthropic.com provides session and weekly usage percentages using tokens from the Claude CLI credentials file at `~/.claude/.credentials.json`. JSONL logs in `~/.claude/projects/` provide token counts per model for cost calculation. The daily_stats.json file provides API-reported costs which are more accurate for billing purposes.
 
-OpenAI/Codex usage data comes from the ChatGPT backend API using OAuth tokens from the Codex CLI credentials at `~/.codex/auth.json`. Users must run `codex login` to authenticate before this data becomes available.
+OpenAI/Codex usage data comes from the ChatGPT backend API using OAuth tokens from the Codex CLI credentials at `~/.codex/auth.json`. Local JSONL logs at `~/.codex/` provide token counts and cost estimates. Users must run `codex login` to authenticate before this data becomes available.
 
 ## Troubleshooting
 

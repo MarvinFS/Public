@@ -1,33 +1,35 @@
 # -*- mode: python ; coding: utf-8 -*-
-"""PyInstaller specification for ClaudeBar."""
 
-import sys
-from pathlib import Path
+import os
+spec_dir = os.path.dirname(os.path.abspath(SPEC))
+project_dir = os.path.dirname(spec_dir)
+src_dir = os.path.join(project_dir, 'src')
+resources_dir = os.path.join(project_dir, 'resources')
 
 block_cipher = None
 
-# Get the project root directory
-spec_dir = Path(SPECPATH)
-project_root = spec_dir.parent
-src_dir = project_root / "src"
-
-resources_dir = project_root / "resources"
-
 a = Analysis(
-    [str(src_dir / "main.py")],
-    pathex=[str(src_dir)],
+    [os.path.join(src_dir, 'main.py')],
+    pathex=[src_dir],
     binaries=[],
-    datas=[(str(resources_dir), "resources")],
-    hiddenimports=[
-        "pystray._win32",
-        "PIL._tkinter_finder",
-    ],
+    datas=[(resources_dir, 'resources')],
+    hiddenimports=['PIL._tkinter_finder'],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
     excludes=[
-        "unittest",
-        "pydoc",
+        'numpy',
+        'scipy',
+        'pandas',
+        'matplotlib',
+        'PyYAML',
+        'yaml',
+        'pytest',
+        'unittest',
+        'doctest',
+        'pydoc',
+        'xmlrpc',
+        'multiprocessing',
     ],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
@@ -44,18 +46,18 @@ exe = EXE(
     a.zipfiles,
     a.datas,
     [],
-    name="ClaudeBar",
+    name='ClaudeBar',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
     upx=True,
     upx_exclude=[],
     runtime_tmpdir=None,
-    console=False,  # No console window
+    console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=str(project_root / "resources" / "icons" / "app_icon.ico"),
+    icon=os.path.join(resources_dir, 'icons', 'app_icon.ico'),
 )

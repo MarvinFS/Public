@@ -14,6 +14,7 @@ from config import get_config_dir
 CURRENCIES = {
     "USD": {"symbol": "$", "name": "US Dollar"},
     "EUR": {"symbol": "€", "name": "Euro"},
+    "GBP": {"symbol": "£", "name": "British Pound"},
     "RUB": {"symbol": "₽", "name": "Russian Ruble"},
     "RON": {"symbol": "lei", "name": "Romanian Leu"},
 }
@@ -22,6 +23,7 @@ CURRENCIES = {
 FALLBACK_RATES = {
     "USD": 1.0,
     "EUR": 0.92,
+    "GBP": 0.79,
     "RUB": 97.5,
     "RON": 4.58,
 }

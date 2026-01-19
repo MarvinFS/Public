@@ -2,8 +2,9 @@
 
 import json
 import urllib.request
+import urllib.parse
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
 from pathlib import Path
 
@@ -81,12 +82,16 @@ def get_credentials_path() -> Path:
     return Path.home() / ".claude" / ".credentials.json"
 
 
-def load_access_token() -> Optional[str]:
-    """Load OAuth access token from credentials file."""
+def load_credentials() -> tuple[Optional[str], Optional[str], Optional[datetime]]:
+    """Load OAuth credentials from file.
+
+    Returns:
+        Tuple of (access_token, refresh_token, expires_at).
+    """
     creds_path = get_credentials_path()
 
     if not creds_path.exists():
-        return None
+        return None, None, None
 
     try:
         with open(creds_path, "r", encoding="utf-8") as f:
@@ -94,18 +99,107 @@ def load_access_token() -> Optional[str]:
 
         oauth_data = data.get("claudeAiOauth", {})
         access_token = oauth_data.get("accessToken")
+        refresh_token = oauth_data.get("refreshToken")
 
-        # Check if token is expired
+        expires_dt = None
         expires_at = oauth_data.get("expiresAt", 0)
         if expires_at > 0:
-            # expiresAt is in milliseconds
             expires_dt = datetime.fromtimestamp(expires_at / 1000)
-            if datetime.now() > expires_dt:
-                return None  # Token expired
 
-        return access_token
+        return access_token, refresh_token, expires_dt
     except (json.JSONDecodeError, KeyError, TypeError):
+        return None, None, None
+
+
+def save_credentials(access_token: str, refresh_token: str, expires_at: datetime) -> bool:
+    """Save updated OAuth credentials to file."""
+    creds_path = get_credentials_path()
+
+    try:
+        # Read existing data
+        data = {}
+        if creds_path.exists():
+            with open(creds_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+
+        # Update OAuth data
+        data["claudeAiOauth"] = {
+            "accessToken": access_token,
+            "refreshToken": refresh_token,
+            "expiresAt": int(expires_at.timestamp() * 1000),  # Convert to milliseconds
+        }
+
+        # Write back
+        with open(creds_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+
+        return True
+    except (OSError, IOError, json.JSONDecodeError):
+        return False
+
+
+def refresh_access_token(refresh_token: str) -> Optional[tuple[str, str, datetime]]:
+    """Refresh the access token using refresh_token.
+
+    Returns:
+        Tuple of (new_access_token, new_refresh_token, new_expires_at) or None on failure.
+    """
+    url = "https://api.anthropic.com/api/oauth/token"
+
+    headers = {
+        "Content-Type": "application/x-www-form-urlencoded",
+        "User-Agent": "ClaudeBar/1.0",
+    }
+
+    # OAuth refresh token request body
+    body = urllib.parse.urlencode({
+        "grant_type": "refresh_token",
+        "refresh_token": refresh_token,
+    }).encode("utf-8")
+
+    try:
+        req = urllib.request.Request(url, data=body, headers=headers, method="POST")
+
+        with urllib.request.urlopen(req, timeout=10) as response:
+            data = json.loads(response.read().decode("utf-8"))
+
+        new_access_token = data.get("access_token")
+        new_refresh_token = data.get("refresh_token", refresh_token)  # May not be returned
+        expires_in = data.get("expires_in", 28800)  # Default 8 hours
+
+        if not new_access_token:
+            return None
+
+        expires_at = datetime.now() + timedelta(seconds=expires_in)
+        return new_access_token, new_refresh_token, expires_at
+
+    except (urllib.error.HTTPError, urllib.error.URLError, json.JSONDecodeError):
         return None
+
+
+def load_access_token() -> Optional[str]:
+    """Load OAuth access token from credentials file, refreshing if expired."""
+    access_token, refresh_token, expires_dt = load_credentials()
+
+    if not access_token:
+        return None
+
+    # Check if token is expired or about to expire (within 5 minutes)
+    if expires_dt:
+        buffer_time = timedelta(minutes=5)
+        if datetime.now() > (expires_dt - buffer_time):
+            # Token expired or about to expire, try to refresh
+            if refresh_token:
+                result = refresh_access_token(refresh_token)
+                if result:
+                    new_access_token, new_refresh_token, new_expires_at = result
+                    # Save updated credentials
+                    if save_credentials(new_access_token, new_refresh_token, new_expires_at):
+                        return new_access_token
+            # Refresh failed or no refresh token
+            return None
+
+    return access_token
 
 
 def parse_reset_time(resets_at_str: Optional[str]) -> Optional[datetime]:

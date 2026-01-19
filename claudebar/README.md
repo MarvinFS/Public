@@ -107,6 +107,14 @@ Claude usage data comes from three sources. The OAuth API at api.anthropic.com p
 
 OpenAI/Codex usage data comes from the ChatGPT backend API using OAuth tokens from the Codex CLI credentials at `~/.codex/auth.json`. Local JSONL logs at `~/.codex/` provide token counts and cost estimates. Users must run `codex login` to authenticate before this data becomes available.
 
+## OAuth Token Limitations
+
+ClaudeBar does not store any authentication credentials. It reads OAuth tokens from the Claude Code CLI credentials file at `~/.claude/.credentials.json`. These tokens have a maximum validity of approximately 8 hours. When the token expires, ClaudeBar cannot fetch fresh usage data from the Anthropic API.
+
+When the OAuth token expires, the app displays cached data with an amber indicator showing when the data was last refreshed (e.g., "cached from 2h ago"). The cached data persists in `%LOCALAPPDATA%\ClaudeBar\snapshot_cache.json` so usage information remains visible even when fresh data cannot be fetched.
+
+To refresh the OAuth token, simply open Claude Code CLI in any terminal. Claude Code automatically refreshes its tokens on startup, which allows ClaudeBar to fetch fresh data again. There is no way to refresh tokens from within ClaudeBar itself since the app intentionally avoids handling authentication to maintain simplicity and security.
+
 ## Troubleshooting
 
 If the tray icon is not visible, check the system tray overflow area by clicking the arrow in the taskbar. Windows may hide new tray icons by default.

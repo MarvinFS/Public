@@ -20,6 +20,7 @@ from currency import (
     get_currency_symbol, CURRENCIES, ExchangeRates
 )
 from claude_check import check_claude_status, get_status_message, ClaudeStatus
+from snapshot_cache import get_staleness_text
 
 # GitHub repository URL
 GITHUB_URL = "https://github.com/MarvinFS/Public/tree/main/claudebar"
@@ -347,7 +348,7 @@ class ClaudeBarWindow:
         self.config = config or Config()
 
         self._window: Optional[tk.Tk] = None
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         self._snapshot: Optional[UsageSnapshot] = None
         self._openai_snapshot: Optional[OpenAISnapshot] = None
         self._combined_snapshot: Optional[CombinedSnapshot] = None
@@ -356,6 +357,7 @@ class ClaudeBarWindow:
         self._exchange_rates: Optional[ExchangeRates] = None
         self._claude_status: Optional[ClaudeStatus] = None
         self._status_needs_update = False
+        self._oauth_error: Optional[str] = None  # Track OAuth errors for status display
 
         # Engine state
         self._active_engine: Engine = Engine.CLAUDE
@@ -379,6 +381,7 @@ class ClaudeBarWindow:
         self._month_cost: Optional[tk.Label] = None
         self._month_tokens: Optional[tk.Label] = None
         self._updated_label: Optional[tk.Label] = None
+        self._stale_label: Optional[tk.Label] = None
         self._logo_image: Optional[ImageTk.PhotoImage] = None
         self._opening_link = False  # Flag to prevent hide during link click
 
@@ -574,6 +577,18 @@ class ClaudeBarWindow:
                 self._status_needs_update = True
 
         threading.Thread(target=load, daemon=True).start()
+
+    def on_oauth_failure(self, error_msg: str):
+        """Handle OAuth failure by triggering status recheck (thread-safe)."""
+        with self._lock:
+            self._oauth_error = error_msg
+            self._status_needs_update = True
+
+    def on_oauth_success(self):
+        """Handle OAuth success by clearing error state (thread-safe)."""
+        with self._lock:
+            self._oauth_error = None
+            self._status_needs_update = True
 
     def _on_focus_out(self, event):
         """Handle focus out event."""
@@ -803,16 +818,43 @@ class ClaudeBarWindow:
         if not self._status_indicator or not self._status_text:
             return
 
+        # Check for OAuth error first (takes priority over cached status)
+        oauth_error = None
+        with self._lock:
+            oauth_error = self._oauth_error
+
+        if self._active_engine == Engine.CLAUDE and oauth_error:
+            # Show OAuth error status
+            self._status_indicator.config(fg="#EF4444")  # Red
+            if "refresh failed" in oauth_error.lower() or "token expired" in oauth_error.lower():
+                self._status_text.config(text="Session expired")
+            elif "not found" in oauth_error.lower() or "no oauth" in oauth_error.lower():
+                self._status_text.config(text="Not logged in")
+            else:
+                self._status_text.config(text="Connection error")
+            return
+
         if self._active_engine == Engine.CLAUDE:
             # Show Claude connection status
-            if self._claude_status:
+            # If we have valid OAuth data (cli_available=True), we're connected
+            # This takes priority over _claude_status which may be stale
+            if self._snapshot and self._snapshot.cli_available:
+                self._status_indicator.config(fg="#10B981")
+                text = "Connected"
+                # Get plan from status or infer from extra usage
+                plan = self._claude_status.plan if self._claude_status else None
+                if not plan and self._snapshot.extra_enabled:
+                    plan = "Max"  # Extra usage is a Max feature
+                if plan:
+                    text += f" · {plan}"
+                self._status_text.config(text=text)
+            elif self._claude_status:
                 if self._claude_status.authenticated:
                     self._status_indicator.config(fg="#10B981")
                     text = "Connected"
-                    # Get plan from status or infer from extra usage
                     plan = self._claude_status.plan
                     if not plan and self._snapshot and self._snapshot.extra_enabled:
-                        plan = "Max"  # Extra usage is a Max feature
+                        plan = "Max"
                     if plan:
                         text += f" · {plan}"
                 elif self._claude_status.installed:
@@ -1010,6 +1052,12 @@ class ClaudeBarWindow:
                                        fg=self.text_muted, bg=self.bg_color)
         self._updated_label.pack(side=tk.LEFT)
 
+        # Stale data warning (hidden by default)
+        self._stale_label = tk.Label(update_frame, text="",
+                                     font=("Segoe UI", 9),
+                                     fg="#F59E0B", bg=self.bg_color)
+        self._stale_label.pack(side=tk.LEFT, padx=(8, 0))
+
         # Buttons
         footer = tk.Frame(parent, bg=self.bg_color)
         footer.pack(fill=tk.X)
@@ -1169,6 +1217,8 @@ class ClaudeBarWindow:
 
         # Get data for active engine
         snapshot = None  # Track for extra usage visibility check
+        is_stale = False
+        stale_since = None
         if self._active_engine == Engine.CLAUDE:
             snapshot = self._snapshot
             if not snapshot:
@@ -1183,6 +1233,8 @@ class ClaudeBarWindow:
             month_cost = snapshot.month_cost_usd
             month_tokens = snapshot.month_tokens.total_tokens
             timestamp = snapshot.timestamp
+            is_stale = snapshot.is_stale
+            stale_since = snapshot.stale_since
         elif self._active_engine == Engine.CODEX:
             openai = self._openai_snapshot
             if not openai:
@@ -1206,6 +1258,8 @@ class ClaudeBarWindow:
                 month_cost = openai.month_cost_usd
                 month_tokens = openai.month_total_tokens
                 timestamp = openai.timestamp
+                is_stale = openai.is_stale
+                stale_since = openai.stale_since
 
         currency = self.config.currency
 
@@ -1278,12 +1332,20 @@ class ClaudeBarWindow:
             tokens = self._format_tokens(month_tokens)
             self._month_tokens.config(text=f"{tokens} tokens")
 
-        # Update timestamp
+        # Update timestamp and stale indicator
         if self._updated_label:
             time_str = timestamp.strftime("%H:%M")
             engine_names = {Engine.CLAUDE: "Claude", Engine.CODEX: "Codex"}
             engine_name = engine_names.get(self._active_engine, "Unknown")
             self._updated_label.config(text=f"{engine_name} · Updated at {time_str}")
+
+        # Update stale indicator
+        if self._stale_label:
+            if is_stale and stale_since:
+                stale_text = get_staleness_text(stale_since)
+                self._stale_label.config(text=f"(cached from {stale_text})")
+            else:
+                self._stale_label.config(text="")
 
         # Only resize window when layout structure changes (extra usage visibility)
         # This prevents flickering on regular data updates

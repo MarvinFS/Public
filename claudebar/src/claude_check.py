@@ -4,6 +4,7 @@ import json
 import shutil
 from pathlib import Path
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from typing import Optional
 
 from config import get_claude_dir
@@ -44,26 +45,67 @@ def find_claude_cli() -> Optional[str]:
     return None
 
 
-def check_credentials() -> tuple[bool, Optional[dict]]:
-    """Check if Claude credentials exist and are valid."""
+def check_credentials() -> tuple[bool, Optional[dict], Optional[str]]:
+    """Check if Claude credentials exist and are valid.
+
+    Returns:
+        Tuple of (is_valid, credentials_dict, error_message).
+        is_valid is True only if we can obtain a working access token.
+    """
     creds_path = get_claude_dir() / ".credentials.json"
 
     if not creds_path.exists():
-        return False, None
+        return False, None, "Credentials file not found"
 
     try:
         with open(creds_path, "r", encoding="utf-8") as f:
             creds = json.load(f)
 
-        # Check for required fields
-        if creds.get("claudeAiOauth"):
-            return True, creds
+        # Check for API key (always valid if present)
         if creds.get("apiKey"):
-            return True, creds
+            return True, creds, None
 
-        return False, creds
-    except (json.JSONDecodeError, IOError):
-        return False, None
+        # Check for OAuth credentials
+        oauth_data = creds.get("claudeAiOauth")
+        if not oauth_data:
+            return False, creds, "No OAuth credentials found"
+
+        # Check if access token exists
+        access_token = oauth_data.get("accessToken")
+        if not access_token:
+            return False, creds, "No access token"
+
+        # Check if token is expired
+        expires_at = oauth_data.get("expiresAt", 0)
+        if expires_at > 0:
+            expires_dt = datetime.fromtimestamp(expires_at / 1000)
+            buffer_time = timedelta(minutes=5)
+
+            if datetime.now() > (expires_dt - buffer_time):
+                # Token expired, try to refresh
+                refresh_token = oauth_data.get("refreshToken")
+                if not refresh_token:
+                    return False, creds, "Token expired, no refresh token"
+
+                # Try to refresh using oauth_usage module
+                try:
+                    from oauth_usage import refresh_access_token, save_credentials
+                    result = refresh_access_token(refresh_token)
+                    if result:
+                        new_access, new_refresh, new_expires = result
+                        save_credentials(new_access, new_refresh, new_expires)
+                        # Reload credentials after refresh
+                        with open(creds_path, "r", encoding="utf-8") as f:
+                            creds = json.load(f)
+                        return True, creds, None
+                    else:
+                        return False, creds, "Token refresh failed"
+                except Exception as e:
+                    return False, creds, f"Token refresh error: {str(e)}"
+
+        return True, creds, None
+    except (json.JSONDecodeError, IOError) as e:
+        return False, None, f"Error reading credentials: {str(e)}"
 
 
 def get_settings_info() -> dict:
@@ -96,7 +138,7 @@ def check_claude_status() -> ClaudeStatus:
         return status
 
     # Check authentication - this is what really matters for OAuth API
-    auth_ok, creds = check_credentials()
+    auth_ok, creds, _error = check_credentials()
     status.authenticated = auth_ok
 
     if not auth_ok:

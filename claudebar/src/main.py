@@ -86,6 +86,12 @@ class ClaudeBar:
             config=self.config,
         )
 
+        # Wire up OAuth callbacks from collector to tray/window
+        self.collector.set_oauth_callbacks(
+            on_failure=self.tray.on_oauth_failure,
+            on_success=self.tray.on_oauth_success,
+        )
+
         # Initial data collection
         self._refresh()
 

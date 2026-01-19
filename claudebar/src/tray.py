@@ -333,3 +333,13 @@ class TrayManager:
     def is_running(self) -> bool:
         """Check if the tray is running."""
         return self._running
+
+    def on_oauth_failure(self, error_msg: str) -> None:
+        """Forward OAuth failure to UI window (thread-safe)."""
+        if self._ui_window:
+            self._ui_window.on_oauth_failure(error_msg)
+
+    def on_oauth_success(self) -> None:
+        """Forward OAuth success to UI window (thread-safe)."""
+        if self._ui_window:
+            self._ui_window.on_oauth_success()

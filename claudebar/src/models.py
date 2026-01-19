@@ -94,6 +94,10 @@ class UsageSnapshot:
     logs_available: bool = True
     error_message: Optional[str] = None
 
+    # Staleness tracking (for cached data)
+    is_stale: bool = False
+    stale_since: Optional[datetime] = None
+
     @property
     def max_percent(self) -> float:
         """Return the higher of session or weekly percentage."""
@@ -146,6 +150,10 @@ class OpenAISnapshot:
     # Status
     available: bool = False
     error_message: Optional[str] = None
+
+    # Staleness tracking (for cached data)
+    is_stale: bool = False
+    stale_since: Optional[datetime] = None
 
     @property
     def today_total_tokens(self) -> int:

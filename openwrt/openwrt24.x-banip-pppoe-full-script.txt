@@ -1,0 +1,142 @@
+cat >/root/banip_pppoe_setup.sh <<'EOF'
+#!/bin/sh
+# banip_pppoe_setup.sh - OpenWrt 24.10.x - banIP 1.5.x
+# Target: GL.iNet GL-MT6000 with PPPoE uplink (pppoe-wan)
+# Behavior:
+#   - Deterministic (no autodetect)
+#   - IPv4 only (banIP v6 disabled)
+#   - Fetch via curl (avoid uclient-fetch issues)
+#   - autoblocklist disabled (no accumulating junk)
+#   - allowlist via /etc/banip/banip.allowlist (do NOT use UCI ban_allowlist)
+
+set -eu
+
+log() { printf '%s\n' "$*"; }
+
+need_cmd() {
+  command -v "$1" >/dev/null 2>&1 || {
+    log "ERROR: missing required command: $1"
+    exit 1
+  }
+}
+
+log "[1/10] Pre-flight checks..."
+need_cmd opkg
+need_cmd uci
+need_cmd nft
+need_cmd logread
+
+log "[2/10] opkg update + install packages..."
+opkg update >/dev/null
+
+# Install banIP + LuCI app + curl + CA bundle + jq (jq optional but useful)
+# Keep it robust even if some packages already exist
+opkg install banip luci-app-banip curl ca-bundle jq >/dev/null 2>&1 || {
+  # If jq fails for any reason, retry without jq
+  opkg install banip luci-app-banip curl ca-bundle >/dev/null
+}
+
+log "[3/10] Stop banIP and clean stale runtime state..."
+/etc/init.d/banip stop >/dev/null 2>&1 || true
+pkill -f banip-service.sh >/dev/null 2>&1 || true
+rm -rf /var/run/banip.lock /var/run/banip.pid /tmp/banIP-* >/dev/null 2>&1 || true
+
+log "[4/10] Apply deterministic banIP configuration for PPPoE..."
+# Important:
+# - ban_trigger must be UCI interface name (wan), not pppoe-wan
+# - ban_dev must be runtime device (pppoe-wan)
+# - disable v6 in banIP to avoid "processing" loops on partial/unstable v6
+# - do NOT use UCI ban_allowlist list on this build - it breaks banIP
+uci batch <<'UCI_EOF'
+set banip.global=banip
+
+# Enable service and banIP logic
+set banip.global.enabled='1'
+set banip.global.ban_enabled='1'
+
+# Deterministic behavior
+set banip.global.ban_autodetect='0'
+
+# PPPoE binding
+set banip.global.ban_trigger='wan'
+set banip.global.ban_ifv4='wan'
+set banip.global.ban_dev='pppoe-wan'
+
+# Protocols
+set banip.global.ban_protov4='1'
+set banip.global.ban_protov6='0'
+delete banip.global.ban_ifv6
+set banip.global.ban_ipv6='0'
+
+# Fetcher: use curl
+set banip.global.ban_fetchcmd='curl'
+set banip.global.ban_fetchretry='5'
+set banip.global.ban_fetchinsecure='1'
+
+# nft defaults (keep sane defaults)
+set banip.global.ban_nftpolicy='memory'
+set banip.global.ban_nftpriority='-100'
+set banip.global.ban_nftretry='5'
+set banip.global.ban_blockpolicy='drop'
+set banip.global.ban_nftloglevel='warn'
+
+# Disable dynamic autoblocklist (prevents long-term growth)
+set banip.global.ban_autoblocklist='0'
+
+# Keep autoallowlist enabled (safe)
+set banip.global.ban_autoallowlist='1'
+set banip.global.ban_autoallowuplink='subnet'
+
+# Feeds: minimal reliable baseline
+delete banip.global.ban_feed
+add_list banip.global.ban_feed='bogon'
+add_list banip.global.ban_feed='dshield'
+
+# Remove problematic/unsupported knobs if present
+delete banip.global.ban_allowlist
+UCI_EOF
+
+uci commit banip
+
+log "[5/10] Configure allowlist file (RFC1918 ranges) - idempotent..."
+mkdir -p /etc/banip
+touch /etc/banip/banip.allowlist
+chmod 0644 /etc/banip/banip.allowlist
+
+add_line_once() {
+  line="$1"
+  grep -qxF "$line" /etc/banip/banip.allowlist 2>/dev/null || echo "$line" >>/etc/banip/banip.allowlist
+}
+
+add_line_once "192.168.0.0/16"
+add_line_once "10.0.0.0/8"
+add_line_once "172.16.0.0/12"
+
+log "[6/10] Ensure banIP is enabled at boot + start service..."
+/etc/init.d/banip enable >/dev/null 2>&1 || true
+/etc/init.d/banip start >/dev/null 2>&1 || true
+
+log "[7/10] Wait for initial run..."
+sleep 3
+
+log "[8/10] Show banIP status..."
+/etc/init.d/banip status || true
+
+log "[9/10] Show banIP error file (if any)..."
+if [ -s /tmp/banIP-error ]; then
+  log "----- /tmp/banIP-error -----"
+  sed -n '1,200p' /tmp/banIP-error || true
+  log "----------------------------"
+else
+  log "No /tmp/banIP-error (good)."
+fi
+
+log "[10/10] Quick nft + log verification..."
+nft list table inet banIP 2>/dev/null | sed -n '1,120p' || log "No inet banIP table yet (check status/logs)."
+logread | grep -E "banIP-1\.5\.|banip" | tail -n 30 || true
+
+log "Done."
+EOF
+
+chmod 0755 /root/banip_pppoe_setup.sh
+/root/banip_pppoe_setup.sh

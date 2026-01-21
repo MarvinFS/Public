@@ -778,19 +778,50 @@ diagnose_connectivity() {
 failover_to_direct() {
     log_msg "==================== FAILOVER TO DIRECT INTERNET ===================="
     update_status 1 "failing-over" 0 "connected"
-    
+
     # Stop and disable xray
     stop_xray
     disable_xray
-    
-    # Restart firewall to clear xray nftables rules
-    # This removes DNS interception - dnsmasq will use upstream servers directly
+
+    # CRITICAL FIX #1: Remove xray nftables include file BEFORE firewall restart
+    # This file is auto-included by fw4 and creates TProxy rules even when xray is stopped
+    local xray_nft_file="/usr/share/nftables.d/table-pre/xray_core.nft"
+    if [ -f "$xray_nft_file" ]; then
+        log_msg "Removing xray nftables include file to prevent auto-inclusion..."
+        mv "$xray_nft_file" "${xray_nft_file}.disabled"
+    fi
+
+    # Restart firewall to rebuild rules WITHOUT xray chains
     log_msg "Restarting firewall to remove xray rules..."
     /etc/init.d/firewall restart >/dev/null 2>&1
-    
+
+    # Fallback: Manually delete xray nftables chains if they still exist
+    log_msg "Ensuring xray nftables chains are removed..."
+    nft delete chain inet fw4 xray_transparent_proxy 2>/dev/null || true
+    nft delete chain inet fw4 xray_prerouting 2>/dev/null || true
+    nft delete chain inet fw4 xray_output 2>/dev/null || true
+    nft delete chain inet fw4 tp_spec_wan_fw 2>/dev/null || true
+    nft delete chain inet fw4 tp_spec_wan_ac 2>/dev/null || true
+    nft delete chain inet fw4 tp_spec_lan_ac 2>/dev/null || true
+    nft delete chain inet fw4 tp_spec_lan_re 2>/dev/null || true
+    nft delete chain inet fw4 tp_spec_lan_dd 2>/dev/null || true
+    nft delete chain inet fw4 tp_spec_lan_fw 2>/dev/null || true
+    nft delete chain inet fw4 tp_spec_lan_mf 2>/dev/null || true
+
+    # CRITICAL FIX #2: Remove ip policy routing rules for marked packets
+    # These rules send fwmark 0xfb traffic to table 251 (TProxy routing)
+    # Without removing them, marked packets get blackholed
+    log_msg "Removing xray ip policy routing rules..."
+    ip rule del fwmark 0xfb lookup 251 2>/dev/null || true
+    ip rule del fwmark 0xfb lookup 251 2>/dev/null || true
+
+    # Flush connection tracking to clear stale marked connections
+    log_msg "Flushing connection tracking table..."
+    conntrack -F 2>/dev/null || true
+
     # Restart DNS services to ensure clean state
     restart_dns_services
-    
+
     update_status 1 "direct-mode" 0 "connected"
     log_msg "Failover complete - operating in direct internet mode"
     log_msg "DNS now routes directly to upstream servers (5.141.95.250, 5.141.95.254)"
@@ -799,8 +830,15 @@ failover_to_direct() {
 restore_tunnel() {
     log_msg "==================== RESTORING TUNNEL MODE ===================="
     update_status -1 "restoring"
-    
-    # Enable and start xray
+
+    # Restore xray nftables include file if it was disabled during failover
+    local xray_nft_file="/usr/share/nftables.d/table-pre/xray_core.nft"
+    if [ -f "${xray_nft_file}.disabled" ]; then
+        log_msg "Restoring xray nftables include file..."
+        mv "${xray_nft_file}.disabled" "$xray_nft_file"
+    fi
+
+    # Enable and start xray (xray init script recreates ip rules and triggers firewall)
     enable_xray
     if ! start_xray; then
         log_msg "ERROR: Failed to start xray during restore"
@@ -872,6 +910,14 @@ restore_command() {
     
     if [ "$force" = "--force" ]; then
         # Force restore without connectivity check
+
+        # Restore xray nftables include file if it was disabled during failover
+        local xray_nft_file="/usr/share/nftables.d/table-pre/xray_core.nft"
+        if [ -f "${xray_nft_file}.disabled" ]; then
+            log_msg "Restoring xray nftables include file..."
+            mv "${xray_nft_file}.disabled" "$xray_nft_file"
+        fi
+
         log_msg "Enabling and starting xray services..."
         enable_xray
         if ! start_xray; then

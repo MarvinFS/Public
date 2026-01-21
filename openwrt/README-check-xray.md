@@ -112,7 +112,12 @@ Without monitoring, your entire network loses internet connectivity until you ma
 │ 3. Failover Actions                                     │
 │    - Stop xray: /etc/init.d/xray_core stop             │
 │    - Disable autostart: /etc/init.d/xray_core disable  │
-│    - Restart firewall: removes nftables DNS intercept  │
+│    - Move xray_core.nft to .disabled (prevents fw4     │
+│      auto-include of TProxy rules)                     │
+│    - Restart firewall: rebuilds rules WITHOUT xray     │
+│    - Delete leftover nftables chains (fallback)        │
+│    - Remove ip policy routing rules (fwmark 0xfb)      │
+│    - Flush conntrack: clear stale marked connections   │
 │    - Restart dnsmasq: DNS flows to upstream ISP        │
 │    - Write state: /etc/xray-health.state (mode=direct) │
 └─────────────────────────────────────────────────────────┘
@@ -554,6 +559,63 @@ rm -f /var/run/xray-health.pid
 /etc/init.d/xray-health status
 ```
 
+### LAN Clients Can't Access Internet After Failover
+
+**Symptom:** After failover to direct mode, DNS works (can resolve domains) and ping works, but HTTP/HTTPS connections from LAN clients fail with timeouts or connection refused.
+
+**Root Cause:** The file `/usr/share/nftables.d/table-pre/xray_core.nft` is auto-included by fw4 on every firewall restart, even when xray is stopped. This causes:
+1. Traffic from br-lan gets marked with fwmark `0xfb`
+2. Marked traffic is TProxy'd to xray ports (TCP:1082, UDP:1084)
+3. Xray is stopped, so nothing listens on those ports
+4. Traffic is blackholed and connections fail
+
+**Diagnosis:**
+```bash
+# Check if xray nftables chains still exist
+nft list ruleset | grep -i xray
+
+# Check if ip policy routing rules exist
+ip rule show | grep 251
+
+# Check if xray_core.nft file exists (should be .disabled during failover)
+ls -la /usr/share/nftables.d/table-pre/xray_core.nft*
+```
+
+**Manual Fix (if automatic failover didn't work):**
+```bash
+# 1. Move the nftables include file
+mv /usr/share/nftables.d/table-pre/xray_core.nft /usr/share/nftables.d/table-pre/xray_core.nft.disabled
+
+# 2. Restart firewall
+/etc/init.d/firewall restart
+
+# 3. Delete any remaining nftables chains
+nft delete chain inet fw4 xray_transparent_proxy 2>/dev/null
+nft delete chain inet fw4 xray_prerouting 2>/dev/null
+nft delete chain inet fw4 xray_output 2>/dev/null
+
+# 4. Remove ip policy routing rules (CRITICAL)
+ip rule del fwmark 0xfb lookup 251 2>/dev/null
+ip rule del fwmark 0xfb lookup 251 2>/dev/null
+
+# 5. Flush conntrack
+conntrack -F
+
+# LAN clients should now have internet access
+```
+
+**To Restore Xray Later:**
+```bash
+# Restore the nftables file
+mv /usr/share/nftables.d/table-pre/xray_core.nft.disabled /usr/share/nftables.d/table-pre/xray_core.nft
+
+# Enable and start xray (init script recreates ip rules and triggers firewall)
+/etc/init.d/xray_core enable
+/etc/init.d/xray_core start
+```
+
+**Note:** The `curl --interface br-lan` test from the router does NOT accurately simulate LAN client traffic. Always test from an actual LAN device (phone, laptop, etc.) to verify internet connectivity.
+
 ### State File Corruption After Power Loss
 
 **Symptom:** Daemon behaves erratically after router power loss/reboot
@@ -725,6 +787,67 @@ Tested on:
 - OpenWRT 23.05.x / 24.10.x
 - Xray-core 1.8.x
 - luci-app-xray
+
+---
+
+## Technical Notes
+
+### OpenWRT fw4 Auto-Include Mechanism
+
+OpenWRT's fw4 firewall automatically includes all `.nft` files from `/usr/share/nftables.d/table-pre/` on every firewall restart. The xray luci-app creates `xray_core.nft` in this directory, which sets up TProxy rules for transparent proxying.
+
+The problem: Even when xray service is stopped, the firewall restart re-includes this file and creates the TProxy chains. This means:
+
+```
+[LAN Client] → [br-lan] → [nftables marks with 0xfb] → [ip rule routes to table 251]
+            → [TProxy redirects to 127.0.0.1:1082/1084] → [Nothing listening] → BLACKHOLE
+```
+
+The fix disables this file during failover by renaming it to `.disabled`, then restores it when xray is started again.
+
+### Key Files and Their Roles
+
+| File | Purpose |
+|------|---------|
+| `/usr/share/nftables.d/table-pre/xray_core.nft` | Auto-included by fw4; creates TProxy chains |
+| `/etc/init.d/xray_core` | Xray init script; creates ip rules and triggers firewall |
+| `/var/run/xray-health.pid` | Daemon PID file |
+| `/etc/xray-health.state` | Persistent failover state |
+| `/tmp/run/xray-health/xray.status` | Current status for LuCI widget |
+
+### IP Policy Routing for TProxy
+
+Xray TProxy requires ip policy routing rules to redirect marked packets:
+
+```bash
+# Rule created by xray init script
+ip rule add fwmark 0xfb lookup 251
+
+# Table 251 routes everything to loopback for TProxy
+ip route add local default dev lo table 251
+```
+
+During failover, these rules must be removed or marked packets will be blackholed. The xray init script automatically recreates them when started.
+
+### Testing Failover Without Breaking Production
+
+To test failover logic without affecting a running tunnel:
+
+```bash
+# 1. Stop the daemon first
+/etc/init.d/xray-health stop
+
+# 2. Manually trigger failover
+/usr/local/sbin/check-xray.sh failover
+
+# 3. Verify from LAN client (not router) that internet works
+
+# 4. Restore tunnel
+/usr/local/sbin/check-xray.sh restore
+
+# 5. Restart daemon
+/etc/init.d/xray-health start
+```
 
 ---
 

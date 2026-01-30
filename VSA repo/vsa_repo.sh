@@ -933,6 +933,12 @@ setup_lets_encrypt() {
   [[ -n "${REPO_HOSTNAME_FQDN}" ]] || fatal "REPO_HOSTNAME_FQDN is empty while attempting to configure HTTPS."
   [[ "${LE_EMAIL}" != "user@test.email" ]] || fatal "LE_EMAIL is still set to default 'user@test.email'. Please update the CONFIG section with a valid email address for Let's Encrypt certificate expiry notifications."
 
+  # Certbot packages are in EPEL repository - ensure it's available
+  if ! "${DNF_BIN}" repolist enabled | grep -q "^epel"; then
+    log "EPEL repository not enabled, installing epel-release"
+    "${DNF_BIN}" install -y epel-release || fatal "Failed to install epel-release. Certbot requires EPEL repository."
+  fi
+
   log "Installing certbot tools"
   "${DNF_BIN}" install -y certbot python3-certbot-nginx || fatal "Failed to install certbot packages."
 

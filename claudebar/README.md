@@ -18,13 +18,21 @@ The tray icon displays a custom app icon if one exists at `resources/icons/app_i
 
 ## Supported Engines
 
-ClaudeBar currently supports two AI coding assistants:
+ClaudeBar reads OAuth tokens from command-line tools only. Desktop apps and web interfaces use different authentication systems (browser-based cookies) that are not compatible with the usage APIs.
 
-**Claude Code** tracks session and weekly usage limits, token counts per model, and costs calculated from JSONL logs. Requires Claude Code CLI to be installed and authenticated.
+**Supported:**
 
-**OpenAI Codex** tracks session and weekly rate limits, token usage, and estimated costs from local logs. Requires Codex CLI with `codex login` completed.
+**Claude Code CLI** tracks session and weekly usage limits, token counts per model, and costs calculated from JSONL logs. Requires Claude Code CLI to be installed and authenticated.
 
-Note: GitHub Copilot support was investigated but the Copilot API does not provide usage metrics for individual accounts. The metrics API is only available for organization and enterprise accounts. Individual users can view their Copilot usage at github.com/settings/copilot.
+**OpenAI Codex CLI** tracks session and weekly rate limits, token usage, and estimated costs from local logs. Requires Codex CLI with `codex login` completed.
+
+**Not Supported:**
+
+**Claude Desktop App** uses browser-based authentication stored in `%APPDATA%\Claude\` (Chromium profile cookies). This is a completely separate authentication system from the CLI's OAuth tokens, so ClaudeBar cannot read usage data from it.
+
+**ChatGPT web interface** uses browser session cookies with no API access for usage metrics.
+
+**GitHub Copilot** was investigated but the metrics API only provides usage data for organization and enterprise accounts. Individual users can view their Copilot usage at github.com/settings/copilot.
 
 ## Requirements
 
@@ -102,6 +110,8 @@ The refresh_interval controls how often data updates automatically in seconds. W
 Right-clicking the tray icon shows a quick summary of usage for both providers. The Claude section displays today's cost, monthly cost, and token count since these values come from the JSONL logs and API. The OpenAI section shows session and weekly usage percentages along with token counts, as OpenAI's API provides rate limit information but not cost breakdowns.
 
 ## Data Sources
+
+ClaudeBar reads OAuth tokens from CLI credential files only. It does not work with Claude Desktop App or ChatGPT web since these use browser-based authentication which is incompatible with the usage APIs.
 
 Claude usage data comes from three sources. The OAuth API at api.anthropic.com provides session and weekly usage percentages using tokens from the Claude CLI credentials file at `~/.claude/.credentials.json`. JSONL logs in `~/.claude/projects/` provide token counts per model for cost calculation. The daily_stats.json file provides API-reported costs which are more accurate for billing purposes.
 

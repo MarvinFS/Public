@@ -3,10 +3,15 @@
 
 a = Analysis(
     ['src\\main.py'],
-    pathex=[],
+    pathex=['src'],
     binaries=[],
-    datas=[('assets', 'assets')],
-    hiddenimports=[],
+    datas=[('resources', 'resources')],
+    hiddenimports=[
+        'config', 'data_collector', 'tray', 'models', 'oauth_usage',
+        'openai_usage', 'claude_check', 'cli_parser', 'codex_log_parser',
+        'codex_pricing', 'currency', 'icons', 'log_parser', 'pricing',
+        'snapshot_cache', 'stats_parser', 'ui_window',
+    ],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
@@ -35,5 +40,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=['assets\\icon.ico'],
+    icon=['resources\\icons\\app_icon.ico'],
 )

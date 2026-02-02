@@ -59,6 +59,8 @@ class ExtraUsage:
     @property
     def percent(self) -> float:
         """Get utilization as percentage (0-100)."""
+        if self.utilization is None:
+            return 0.0
         return min(100.0, self.utilization)
 
 
@@ -268,15 +270,16 @@ def fetch_oauth_usage(access_token: Optional[str] = None, debug: bool = False) -
 
         # Parse extra usage
         # API returns monthly_limit and used_credits in CENTS, divide by 100
+        # Use `or 0.0` to handle null values from API (dict.get returns None for null)
         extra = None
         if "extra_usage" in data:
             eu = data["extra_usage"]
             extra = ExtraUsage(
-                enabled=eu.get("is_enabled", False),
-                monthly_limit=eu.get("monthly_limit", 0.0) / 100.0,  # cents → currency
-                used_credits=eu.get("used_credits", 0.0) / 100.0,    # cents → currency
-                utilization=eu.get("utilization", 0.0),              # API returns percentage
-                currency=eu.get("currency", "usd"),
+                enabled=eu.get("is_enabled") or False,
+                monthly_limit=(eu.get("monthly_limit") or 0.0) / 100.0,  # cents → currency
+                used_credits=(eu.get("used_credits") or 0.0) / 100.0,    # cents → currency
+                utilization=eu.get("utilization") or 0.0,              # API returns percentage
+                currency=eu.get("currency") or "usd",
             )
 
         # Extract plan type from various possible fields

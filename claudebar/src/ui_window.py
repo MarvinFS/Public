@@ -818,37 +818,55 @@ class ClaudeBarWindow:
         if not self._status_indicator or not self._status_text:
             return
 
-        # Check for OAuth error first (takes priority over cached status)
+        # Check for OAuth error
         oauth_error = None
         with self._lock:
             oauth_error = self._oauth_error
 
-        if self._active_engine == Engine.CLAUDE and oauth_error:
-            # Show OAuth error status
-            self._status_indicator.config(fg="#EF4444")  # Red
-            if "refresh failed" in oauth_error.lower() or "token expired" in oauth_error.lower():
-                self._status_text.config(text="Session expired")
-            elif "not found" in oauth_error.lower() or "no oauth" in oauth_error.lower():
-                self._status_text.config(text="Not logged in")
-            else:
-                self._status_text.config(text="Connection error")
-            return
-
         if self._active_engine == Engine.CLAUDE:
-            # Show Claude connection status
+            # Check if we have valid data in either current or pending snapshot
+            # This fixes timing bug where _pending_snapshot has valid data but
+            # _snapshot hasn't been updated yet
+            has_valid_data = False
+            valid_snapshot = None
+            with self._lock:
+                if self._snapshot and self._snapshot.cli_available:
+                    has_valid_data = True
+                    valid_snapshot = self._snapshot
+                elif self._pending_snapshot and self._pending_snapshot.cli_available:
+                    has_valid_data = True
+                    valid_snapshot = self._pending_snapshot
+
             # If we have valid OAuth data (cli_available=True), we're connected
-            # This takes priority over _claude_status which may be stale
-            if self._snapshot and self._snapshot.cli_available:
+            # This takes priority over any cached error state
+            if has_valid_data and valid_snapshot:
+                # Clear any stale error since we have valid data
+                with self._lock:
+                    self._oauth_error = None
                 self._status_indicator.config(fg="#10B981")
                 text = "Connected"
                 # Get plan from status or infer from extra usage
                 plan = self._claude_status.plan if self._claude_status else None
-                if not plan and self._snapshot.extra_enabled:
+                if not plan and valid_snapshot.extra_enabled:
                     plan = "Max"  # Extra usage is a Max feature
                 if plan:
                     text += f" · {plan}"
                 self._status_text.config(text=text)
-            elif self._claude_status:
+                return
+
+            # Show OAuth error if no valid data
+            if oauth_error:
+                self._status_indicator.config(fg="#EF4444")  # Red
+                if "refresh failed" in oauth_error.lower() or "token expired" in oauth_error.lower():
+                    self._status_text.config(text="Session expired")
+                elif "not found" in oauth_error.lower() or "no oauth" in oauth_error.lower():
+                    self._status_text.config(text="Not logged in")
+                else:
+                    self._status_text.config(text="Connection error")
+                return
+
+            # Fall back to claude_status check
+            if self._claude_status:
                 if self._claude_status.authenticated:
                     self._status_indicator.config(fg="#10B981")
                     text = "Connected"
@@ -1171,6 +1189,10 @@ class ClaudeBarWindow:
             self._pending_snapshot = combined.claude
             self._pending_openai_snapshot = combined.openai
             self._active_engine = combined.active_engine
+            # Clear OAuth error if we received valid Claude data
+            if combined.claude and combined.claude.cli_available:
+                self._oauth_error = None
+                self._status_needs_update = True
 
     def _apply_snapshot_update(self):
         """Apply pending snapshot update (must be called from main thread)."""

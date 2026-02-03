@@ -9,6 +9,11 @@ from collections import defaultdict
 from models import TokenUsage, ModelUsage
 from pricing import calculate_cost
 from config import get_claude_projects_dir
+from validation import safe_get_int
+
+# Parser safety limits
+MAX_JSONL_FILE_SIZE_MB = 100
+MAX_LINES_PER_FILE = 100_000
 
 
 def find_jsonl_files(projects_dir: Optional[Path] = None) -> Iterator[Path]:
@@ -57,10 +62,10 @@ def extract_usage_from_entry(entry: dict) -> Optional[tuple[str, TokenUsage, dat
         timestamp = datetime.now()
 
     tokens = TokenUsage(
-        input_tokens=usage.get("input_tokens", 0),
-        output_tokens=usage.get("output_tokens", 0),
-        cache_read_input_tokens=usage.get("cache_read_input_tokens", 0),
-        cache_creation_input_tokens=usage.get("cache_creation_input_tokens", 0),
+        input_tokens=safe_get_int(usage, "input_tokens"),
+        output_tokens=safe_get_int(usage, "output_tokens"),
+        cache_read_input_tokens=safe_get_int(usage, "cache_read_input_tokens"),
+        cache_creation_input_tokens=safe_get_int(usage, "cache_creation_input_tokens"),
     )
 
     return model, tokens, timestamp
@@ -68,9 +73,22 @@ def extract_usage_from_entry(entry: dict) -> Optional[tuple[str, TokenUsage, dat
 
 def parse_jsonl_file(file_path: Path) -> Iterator[tuple[str, TokenUsage, datetime]]:
     """Parse a single JSONL file and yield usage entries."""
+    # Check file size first
+    try:
+        file_size_mb = file_path.stat().st_size / (1024 * 1024)
+        if file_size_mb > MAX_JSONL_FILE_SIZE_MB:
+            return
+    except OSError:
+        return
+
+    line_count = 0
     try:
         with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
             for line in f:
+                if line_count >= MAX_LINES_PER_FILE:
+                    break
+                line_count += 1
+
                 line = line.strip()
                 if not line:
                     continue

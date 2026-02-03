@@ -8,6 +8,9 @@ from datetime import datetime, timedelta
 from typing import Optional
 from pathlib import Path
 
+from retry import with_retry
+from validation import safe_get_float
+
 
 @dataclass
 class UsageWindow:
@@ -140,6 +143,7 @@ def save_credentials(access_token: str, refresh_token: str, expires_at: datetime
         return False
 
 
+@with_retry(max_attempts=3, base_delay=1.0)
 def refresh_access_token(refresh_token: str) -> Optional[tuple[str, str, datetime]]:
     """Refresh the access token using refresh_token.
 
@@ -218,6 +222,7 @@ def parse_reset_time(resets_at_str: Optional[str]) -> Optional[datetime]:
         return None
 
 
+@with_retry(max_attempts=3, base_delay=1.0)
 def fetch_oauth_usage(access_token: Optional[str] = None, debug: bool = False) -> OAuthUsageData:
     """Fetch usage data from Anthropic OAuth API."""
     if access_token is None:
@@ -270,15 +275,14 @@ def fetch_oauth_usage(access_token: Optional[str] = None, debug: bool = False) -
 
         # Parse extra usage
         # API returns monthly_limit and used_credits in CENTS, divide by 100
-        # Use `or 0.0` to handle null values from API (dict.get returns None for null)
         extra = None
         if "extra_usage" in data:
             eu = data["extra_usage"]
             extra = ExtraUsage(
                 enabled=eu.get("is_enabled") or False,
-                monthly_limit=(eu.get("monthly_limit") or 0.0) / 100.0,  # cents → currency
-                used_credits=(eu.get("used_credits") or 0.0) / 100.0,    # cents → currency
-                utilization=eu.get("utilization") or 0.0,              # API returns percentage
+                monthly_limit=safe_get_float(eu, "monthly_limit") / 100.0,  # cents → currency
+                used_credits=safe_get_float(eu, "used_credits") / 100.0,    # cents → currency
+                utilization=safe_get_float(eu, "utilization"),              # API returns percentage
                 currency=eu.get("currency") or "usd",
             )
 

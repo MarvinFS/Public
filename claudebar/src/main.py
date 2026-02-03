@@ -29,6 +29,7 @@ from config import ensure_config_exists, Config
 from data_collector import DataCollector
 from tray import TrayManager
 from models import Engine
+from logging_config import setup_logging, get_logger
 
 
 class ClaudeBar:
@@ -48,7 +49,7 @@ class ClaudeBar:
             if self.tray:
                 self.tray.update_combined(combined)
         except Exception as e:
-            print(f"Refresh error: {e}", file=sys.stderr)
+            get_logger().error(f"Refresh error: {e}")
 
     def _on_engine_change(self, engine: Engine) -> None:
         """Handle engine change from UI."""
@@ -127,8 +128,22 @@ class ClaudeBar:
 
 def main():
     """Entry point."""
-    app = ClaudeBar()
-    app.run()
+    logger = setup_logging()
+    logger.info("ClaudeBar starting")
+    try:
+        app = ClaudeBar()
+        app.run()
+    except KeyboardInterrupt:
+        pass
+    except Exception as e:
+        import traceback
+        error_msg = f"ClaudeBar crashed: {e}\n{traceback.format_exc()}"
+        print(error_msg, file=sys.stderr)
+        if sys.platform == "win32":
+            try:
+                ctypes.windll.user32.MessageBoxW(0, str(e), "ClaudeBar Error", 0x10)
+            except Exception:
+                pass
 
 
 if __name__ == "__main__":

@@ -8,6 +8,8 @@ from datetime import datetime, timedelta
 from typing import Optional
 from pathlib import Path
 
+from retry import with_retry
+
 
 @dataclass
 class OpenAIUsageWindow:
@@ -158,6 +160,7 @@ def parse_reset_time(reset_info: dict) -> Optional[datetime]:
     return None
 
 
+@with_retry(max_attempts=3, base_delay=1.0)
 def fetch_openai_usage(access_token: Optional[str] = None) -> OpenAIUsageData:
     """Fetch usage data from ChatGPT/Codex API.
 

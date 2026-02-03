@@ -15,7 +15,7 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    excludes=['numpy', 'numpy.core', 'numpy.random', 'numpy.f2py', 'pytest', 'pytest_cov', '_pytest'],
     noarchive=False,
     optimize=0,
 )

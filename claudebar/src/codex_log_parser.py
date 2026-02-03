@@ -8,6 +8,11 @@ from pathlib import Path
 from typing import Optional, Dict
 
 from codex_pricing import calculate_cost
+from validation import safe_get_int
+
+# Parser safety limits
+MAX_JSONL_FILE_SIZE_MB = 100
+MAX_LINES_PER_FILE = 100_000
 
 
 @dataclass
@@ -61,12 +66,24 @@ def parse_session_file(file_path: Path) -> CodexTokenUsage:
 
     Returns the final token count from the session (cumulative) with cost calculation.
     """
+    # Check file size first
+    try:
+        file_size_mb = file_path.stat().st_size / (1024 * 1024)
+        if file_size_mb > MAX_JSONL_FILE_SIZE_MB:
+            return CodexTokenUsage()
+    except OSError:
+        return CodexTokenUsage()
+
     usage = CodexTokenUsage()
     model = "gpt-4o"  # Default model if not found
+    line_count = 0
 
     try:
         with open(file_path, "r", encoding="utf-8") as f:
             for line in f:
+                if line_count >= MAX_LINES_PER_FILE:
+                    break
+                line_count += 1
                 line = line.strip()
                 if not line:
                     continue
@@ -94,10 +111,10 @@ def parse_session_file(file_path: Path) -> CodexTokenUsage:
 
                     total_usage = info.get("total_token_usage", {})
                     if total_usage:
-                        input_tokens = total_usage.get("input_tokens", 0)
-                        cached_tokens = total_usage.get("cached_input_tokens", 0)
-                        output_tokens = total_usage.get("output_tokens", 0)
-                        reasoning_tokens = total_usage.get("reasoning_output_tokens", 0)
+                        input_tokens = safe_get_int(total_usage, "input_tokens")
+                        cached_tokens = safe_get_int(total_usage, "cached_input_tokens")
+                        output_tokens = safe_get_int(total_usage, "output_tokens")
+                        reasoning_tokens = safe_get_int(total_usage, "reasoning_output_tokens")
 
                         # Calculate cost for this session
                         cost = calculate_cost(

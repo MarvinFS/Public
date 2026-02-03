@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from config import get_config_dir
+from retry import with_retry
 
 
 # Supported currencies
@@ -83,6 +84,7 @@ def save_rates_cache(rates: ExchangeRates) -> None:
         pass
 
 
+@with_retry(max_attempts=3, base_delay=1.0)
 def fetch_exchange_rates() -> Optional[ExchangeRates]:
     """Fetch current exchange rates from a free API."""
     try:

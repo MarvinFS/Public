@@ -17,6 +17,7 @@ class UsageWindow:
     """Usage window with utilization and reset time."""
     utilization: float  # API returns percentage directly (0-100)
     resets_at: Optional[datetime] = None
+    raw_reset_text: Optional[str] = None  # Direct text from CLI PTY parsing
 
     @property
     def percent(self) -> float:
@@ -28,6 +29,8 @@ class UsageWindow:
     @property
     def reset_str(self) -> Optional[str]:
         """Get human-readable reset time."""
+        if self.raw_reset_text:
+            return self.raw_reset_text
         if not self.resets_at:
             return None
 
@@ -43,11 +46,11 @@ class UsageWindow:
         if hours >= 24:
             days = hours // 24
             hours = hours % 24
-            return f"{days}d {hours}h"
+            return f"in {days}d {hours}h"
         elif hours > 0:
-            return f"{hours}h {minutes}m"
+            return f"in {hours}h {minutes}m"
         else:
-            return f"{minutes}m"
+            return f"in {minutes}m"
 
 
 @dataclass
@@ -62,8 +65,6 @@ class ExtraUsage:
     @property
     def percent(self) -> float:
         """Get utilization as percentage (0-100)."""
-        if self.utilization is None:
-            return 0.0
         return min(100.0, self.utilization)
 
 
@@ -117,7 +118,11 @@ def load_credentials() -> tuple[Optional[str], Optional[str], Optional[datetime]
 
 
 def save_credentials(access_token: str, refresh_token: str, expires_at: datetime) -> bool:
-    """Save updated OAuth credentials to file."""
+    """Save updated OAuth credentials to file.
+
+    Merges into existing claudeAiOauth dict to preserve fields like
+    scopes, subscriptionType, rateLimitTier added by recent CLI versions.
+    """
     creds_path = get_credentials_path()
 
     try:
@@ -127,12 +132,12 @@ def save_credentials(access_token: str, refresh_token: str, expires_at: datetime
             with open(creds_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
 
-        # Update OAuth data
-        data["claudeAiOauth"] = {
-            "accessToken": access_token,
-            "refreshToken": refresh_token,
-            "expiresAt": int(expires_at.timestamp() * 1000),  # Convert to milliseconds
-        }
+        # Merge into existing OAuth dict instead of replacing
+        oauth = data.get("claudeAiOauth", {})
+        oauth["accessToken"] = access_token
+        oauth["refreshToken"] = refresh_token
+        oauth["expiresAt"] = int(expires_at.timestamp() * 1000)
+        data["claudeAiOauth"] = oauth
 
         # Write back
         with open(creds_path, "w", encoding="utf-8") as f:
@@ -304,6 +309,13 @@ def fetch_oauth_usage(access_token: Optional[str] = None, debug: bool = False) -
     except urllib.error.HTTPError as e:
         if e.code == 401:
             return OAuthUsageData(error="OAuth token expired or invalid")
+        if e.code == 429:
+            # Check Retry-After header: 0 means permanent block (fingerprinting),
+            # non-zero means transient rate limit
+            retry_after = e.headers.get("Retry-After", "") if e.headers else ""
+            if retry_after == "0":
+                return OAuthUsageData(error="API access restricted (429)")
+            return OAuthUsageData(error=f"Rate limited (retry after {retry_after}s)")
         return OAuthUsageData(error=f"HTTP {e.code}: {e.reason}")
     except urllib.error.URLError as e:
         return OAuthUsageData(error=f"Network error: {e.reason}")

@@ -35,11 +35,11 @@ class OpenAIUsageWindow:
         if hours >= 24:
             days = hours // 24
             hours = hours % 24
-            return f"{days}d {hours}h"
+            return f"in {days}d {hours}h"
         elif hours > 0:
-            return f"{hours}h {minutes}m"
+            return f"in {hours}h {minutes}m"
         else:
-            return f"{minutes}m"
+            return f"in {minutes}m"
 
 
 @dataclass

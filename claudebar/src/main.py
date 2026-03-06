@@ -3,6 +3,7 @@
 import sys
 import threading
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -41,6 +42,25 @@ class ClaudeBar:
         self.tray: Optional[TrayManager] = None
         self._running = False
         self._refresh_thread: Optional[threading.Thread] = None
+
+    def _load_cached_initial(self) -> None:
+        """Load cached data for immediate display on startup."""
+        try:
+            from snapshot_cache import load_cache
+            from models import CombinedSnapshot, OpenAISnapshot, UsageSnapshot
+            cached_claude, cached_openai, cached_at = load_cache()
+            if cached_claude or cached_openai:
+                combined = CombinedSnapshot(
+                    claude=cached_claude or UsageSnapshot(timestamp=datetime.now()),
+                    openai=cached_openai or OpenAISnapshot(timestamp=datetime.now()),
+                    active_engine=self.collector.active_engine,
+                    timestamp=datetime.now(),
+                )
+                if self.tray:
+                    self.tray.update_combined(combined)
+                get_logger().info("Loaded cached data for initial display")
+        except Exception as e:
+            get_logger().debug("No cached data available: %s", e)
 
     def _refresh(self) -> None:
         """Refresh usage data and update tray."""
@@ -93,10 +113,10 @@ class ClaudeBar:
             on_success=self.tray.on_oauth_success,
         )
 
-        # Initial data collection
-        self._refresh()
+        # Load cached data immediately so UI shows something right away
+        self._load_cached_initial()
 
-        # Start background refresh thread
+        # Start background refresh thread (includes immediate first refresh)
         self._refresh_thread = threading.Thread(target=self._refresh_loop, daemon=True)
         self._refresh_thread.start()
 

@@ -13,6 +13,11 @@ RETRYABLE_EXCEPTIONS = (
     TimeoutError,
 )
 
+# Exceptions that should never be retried (permanent failures)
+NON_RETRYABLE_EXCEPTIONS = (
+    urllib.error.HTTPError,
+)
+
 
 def with_retry(
     max_attempts: int = 3,
@@ -28,8 +33,9 @@ def with_retry(
         max_delay: Maximum delay between retries in seconds.
         exceptions: Tuple of exception types to catch and retry.
 
-    Returns:
-        Decorated function that will retry on specified exceptions.
+    Note: HTTPError is excluded from retries since the decorated functions
+    handle HTTP errors internally and retrying permanent errors (429 with
+    Retry-After: 0, 401, etc.) wastes time.
     """
     def decorator(func: Callable[..., T]) -> Callable[..., T]:
         @wraps(func)
@@ -38,6 +44,9 @@ def with_retry(
             for attempt in range(max_attempts):
                 try:
                     return func(*args, **kwargs)
+                except NON_RETRYABLE_EXCEPTIONS:
+                    # HTTPError and other permanent failures - don't retry
+                    raise
                 except exceptions as e:
                     last_exception = e
                     if attempt < max_attempts - 1:

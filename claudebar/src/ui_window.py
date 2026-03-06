@@ -358,6 +358,7 @@ class ClaudeBarWindow:
         self._claude_status: Optional[ClaudeStatus] = None
         self._status_needs_update = False
         self._oauth_error: Optional[str] = None  # Track OAuth errors for status display
+        self._is_collecting: bool = True  # Start as collecting until first data arrives
 
         # Engine state
         self._active_engine: Engine = Engine.CLAUDE
@@ -818,64 +819,61 @@ class ClaudeBarWindow:
         if not self._status_indicator or not self._status_text:
             return
 
-        # Check for OAuth error
-        oauth_error = None
+        # Read shared state under a single lock acquisition
         with self._lock:
             oauth_error = self._oauth_error
+            valid_snapshot = None
+            if self._snapshot and self._snapshot.cli_available:
+                valid_snapshot = self._snapshot
+            elif self._pending_snapshot and self._pending_snapshot.cli_available:
+                valid_snapshot = self._pending_snapshot
 
         if self._active_engine == Engine.CLAUDE:
-            # Check if we have valid data in either current or pending snapshot
-            # This fixes timing bug where _pending_snapshot has valid data but
-            # _snapshot hasn't been updated yet
-            has_valid_data = False
-            valid_snapshot = None
-            with self._lock:
-                if self._snapshot and self._snapshot.cli_available:
-                    has_valid_data = True
-                    valid_snapshot = self._snapshot
-                elif self._pending_snapshot and self._pending_snapshot.cli_available:
-                    has_valid_data = True
-                    valid_snapshot = self._pending_snapshot
+            # Connection status is driven by claude auth status (CLI subprocess),
+            # independent of whether the OAuth usage API returns data.
 
-            # If we have valid OAuth data (cli_available=True), we're connected
-            # This takes priority over any cached error state
-            if has_valid_data and valid_snapshot:
-                # Clear any stale error since we have valid data
+            # If we have valid usage data, we're definitely connected
+            if valid_snapshot:
                 with self._lock:
                     self._oauth_error = None
                 self._status_indicator.config(fg="#10B981")
                 text = "Connected"
-                # Get plan from status or infer from extra usage
                 plan = self._claude_status.plan if self._claude_status else None
                 if not plan and valid_snapshot.extra_enabled:
-                    plan = "Max"  # Extra usage is a Max feature
+                    plan = "Max"
                 if plan:
                     text += f" · {plan}"
                 self._status_text.config(text=text)
                 return
 
-            # Show OAuth error if no valid data
+            # No usage data - check CLI auth status (primary status source)
+            if self._claude_status and self._claude_status.authenticated:
+                # CLI says we're logged in, even though usage API may be blocked
+                self._status_indicator.config(fg="#10B981")
+                text = "Connected"
+                plan = self._claude_status.plan
+                if plan:
+                    text += f" · {plan}"
+                self._status_text.config(text=text)
+                return
+
+            # Not authenticated via CLI - show specific error
             if oauth_error:
-                self._status_indicator.config(fg="#EF4444")  # Red
+                self._status_indicator.config(fg="#EF4444")
                 if "refresh failed" in oauth_error.lower() or "token expired" in oauth_error.lower():
                     self._status_text.config(text="Session expired")
                 elif "not found" in oauth_error.lower() or "no oauth" in oauth_error.lower():
                     self._status_text.config(text="Not logged in")
+                elif "429" in oauth_error or "restricted" in oauth_error.lower() or "rate limit" in oauth_error.lower():
+                    self._status_indicator.config(fg="#F59E0B")
+                    self._status_text.config(text="API restricted")
                 else:
                     self._status_text.config(text="Connection error")
                 return
 
-            # Fall back to claude_status check
+            # Fall back to claude_status check for non-authenticated states
             if self._claude_status:
-                if self._claude_status.authenticated:
-                    self._status_indicator.config(fg="#10B981")
-                    text = "Connected"
-                    plan = self._claude_status.plan
-                    if not plan and self._snapshot and self._snapshot.extra_enabled:
-                        plan = "Max"
-                    if plan:
-                        text += f" · {plan}"
-                elif self._claude_status.installed:
+                if self._claude_status.installed:
                     self._status_indicator.config(fg="#F59E0B")
                     text = "Not logged in"
                 else:
@@ -1118,6 +1116,10 @@ class ClaudeBarWindow:
         widget.bind("<Enter>", lambda e: widget.config(bg=hover))
         widget.bind("<Leave>", lambda e: widget.config(bg=normal))
 
+    def set_collecting(self, collecting: bool) -> None:
+        """Set collecting state for UI indicator."""
+        self._is_collecting = collecting
+
     def _on_refresh_click(self):
         """Handle refresh button."""
         self.on_refresh()
@@ -1286,26 +1288,27 @@ class ClaudeBarWindow:
         currency = self.config.currency
 
         # Update progress bars (animate=False to ensure immediate rendering)
+        collecting_text = "Collecting..." if (session_pct == 0 and weekly_pct == 0 and self._is_collecting and not is_stale) else None
         if self._session_bar and self._session_label:
             self._session_bar.set_value(session_pct, animate=False)
             self._session_label.config(
-                text=f"5-Hour · {session_pct:.0f}% used"
+                text=collecting_text or f"5-Hour · {session_pct:.0f}% used"
             )
         if self._session_reset:
             if session_reset:
-                self._session_reset.config(text=f"Resets in {session_reset}")
-            else:
+                self._session_reset.config(text=f"Resets {session_reset}")
+            elif not collecting_text:
                 self._session_reset.config(text="")
 
         if self._weekly_bar and self._weekly_label:
             self._weekly_bar.set_value(weekly_pct, animate=False)
             self._weekly_label.config(
-                text=f"Weekly · {weekly_pct:.0f}% used"
+                text=collecting_text or f"Weekly · {weekly_pct:.0f}% used"
             )
         if self._weekly_reset:
             if weekly_reset:
-                self._weekly_reset.config(text=f"Resets in {weekly_reset}")
-            else:
+                self._weekly_reset.config(text=f"Resets {weekly_reset}")
+            elif not collecting_text:
                 self._weekly_reset.config(text="")
 
         # Update extra usage section (Claude only)
@@ -1359,7 +1362,13 @@ class ClaudeBarWindow:
             time_str = timestamp.strftime("%H:%M")
             engine_names = {Engine.CLAUDE: "Claude", Engine.CODEX: "Codex"}
             engine_name = engine_names.get(self._active_engine, "Unknown")
-            self._updated_label.config(text=f"{engine_name} · Updated at {time_str}")
+            if self._is_collecting and is_stale:
+                self._updated_label.config(text=f"{engine_name} · Collecting fresh data...")
+            else:
+                self._updated_label.config(text=f"{engine_name} · Updated at {time_str}")
+            # Only clear collecting flag when we have fresh (non-stale) data
+            if not is_stale:
+                self._is_collecting = False
 
         # Update stale indicator
         if self._stale_label:

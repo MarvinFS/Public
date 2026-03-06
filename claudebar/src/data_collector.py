@@ -4,14 +4,19 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+import logging
+
 from models import UsageSnapshot, TokenUsage, OpenAISnapshot, CombinedSnapshot, Engine
 from log_parser import get_today_usage, get_month_usage
 from stats_parser import get_local_stats, get_today_api_cost
-from oauth_usage import fetch_oauth_usage
+from oauth_usage import fetch_oauth_usage, OAuthUsageData
+from cli_usage import fetch_cli_usage
 from openai_usage import fetch_openai_usage, is_codex_configured
 from codex_log_parser import get_today_codex_usage, get_month_codex_usage
 from config import get_claude_projects_dir
 from snapshot_cache import save_cache, load_cache
+
+logger = logging.getLogger("claudebar")
 
 
 class DataCollector:
@@ -40,33 +45,26 @@ class DataCollector:
         errors = []
         oauth_failed = False
 
-        # Fetch OAuth usage data (session/weekly limits and extra usage)
-        try:
-            oauth_data = fetch_oauth_usage()
-            if oauth_data.is_valid:
-                if oauth_data.session:
-                    snapshot.session_percent = oauth_data.session.percent
-                    snapshot.session_reset = oauth_data.session.reset_str
-                if oauth_data.weekly:
-                    snapshot.weekly_percent = oauth_data.weekly.percent
-                    snapshot.weekly_reset = oauth_data.weekly.reset_str
-                # Pass extra usage data to snapshot
-                if oauth_data.extra:
-                    snapshot.extra_enabled = oauth_data.extra.enabled
-                    snapshot.extra_percent = oauth_data.extra.percent
-                    snapshot.extra_used = oauth_data.extra.used_credits
-                    snapshot.extra_limit = oauth_data.extra.monthly_limit
-                    snapshot.extra_currency = oauth_data.extra.currency
-                snapshot.cli_available = True
-            else:
-                snapshot.cli_available = False
-                oauth_failed = True
-                if oauth_data.error:
-                    errors.append(f"OAuth: {oauth_data.error}")
-        except Exception as e:
+        # Fetch usage limits via multi-source fallback chain:
+        # 1. OAuth API (fastest), 2. Web API (browser cookies), 3. CLI PTY
+        oauth_data = self._fetch_usage_limits(errors)
+        if oauth_data.is_valid:
+            if oauth_data.session:
+                snapshot.session_percent = oauth_data.session.percent
+                snapshot.session_reset = oauth_data.session.reset_str
+            if oauth_data.weekly:
+                snapshot.weekly_percent = oauth_data.weekly.percent
+                snapshot.weekly_reset = oauth_data.weekly.reset_str
+            if oauth_data.extra:
+                snapshot.extra_enabled = oauth_data.extra.enabled
+                snapshot.extra_percent = oauth_data.extra.percent
+                snapshot.extra_used = oauth_data.extra.used_credits
+                snapshot.extra_limit = oauth_data.extra.monthly_limit
+                snapshot.extra_currency = oauth_data.extra.currency
+            snapshot.cli_available = True
+        else:
             snapshot.cli_available = False
             oauth_failed = True
-            errors.append(f"OAuth: {str(e)}")
 
         # If OAuth failed, try to load cached OAuth data and notify callback
         if oauth_failed:
@@ -130,6 +128,33 @@ class DataCollector:
             save_cache(claude=snapshot)
 
         return snapshot
+
+    def _fetch_usage_limits(self, errors: list) -> OAuthUsageData:
+        """Try multiple sources for usage limits with fallback chain."""
+        # 1. OAuth API (fastest when working)
+        try:
+            data = fetch_oauth_usage()
+            if data.is_valid:
+                logger.info("Usage from OAuth API")
+                return data
+            logger.info("OAuth API failed: %s", data.error)
+            errors.append(f"OAuth: {data.error}")
+        except Exception as e:
+            logger.info("OAuth API exception: %s", e)
+            errors.append(f"OAuth: {e}")
+
+        # 2. CLI PTY fallback
+        try:
+            data = fetch_cli_usage()
+            if data.is_valid:
+                logger.info("Usage from CLI fallback")
+                return data
+            logger.debug("CLI fallback failed: %s", data.error)
+        except Exception as e:
+            logger.debug("CLI fallback exception: %s", e)
+
+        # All failed - return the last error for display
+        return OAuthUsageData(error=errors[-1] if errors else "All usage sources failed")
 
     @property
     def last_snapshot(self) -> Optional[UsageSnapshot]:

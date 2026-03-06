@@ -167,13 +167,22 @@ def _dict_to_openai_snapshot(data: dict, is_stale: bool = False, stale_since: Op
 
 
 def save_cache(claude: Optional[UsageSnapshot] = None, openai: Optional[OpenAISnapshot] = None) -> None:
-    """Save snapshots to cache file."""
+    """Save snapshots to cache file, merging with existing data."""
     cache_path = get_cache_path()
     cache_path.parent.mkdir(parents=True, exist_ok=True)
 
+    # Read existing cache to avoid overwriting the other engine's data
+    existing = {}
+    try:
+        if cache_path.exists():
+            with open(cache_path, "r", encoding="utf-8") as f:
+                existing = json.load(f)
+    except (json.JSONDecodeError, OSError):
+        pass
+
     cached = CachedSnapshot(
-        claude=_usage_snapshot_to_dict(claude) if claude else None,
-        openai=_openai_snapshot_to_dict(openai) if openai else None,
+        claude=_usage_snapshot_to_dict(claude) if claude else existing.get("claude"),
+        openai=_openai_snapshot_to_dict(openai) if openai else existing.get("openai"),
         cached_at=datetime.now().isoformat(),
     )
 

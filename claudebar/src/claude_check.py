@@ -1,13 +1,16 @@
 """Check Claude Code installation and authentication status."""
 
 import json
-import shutil
-from pathlib import Path
+import logging
+import os
+import subprocess
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Optional
 
-from config import get_claude_dir
+from config import find_claude_cli, get_claude_dir
+
+logger = logging.getLogger("claudebar")
 
 
 @dataclass
@@ -23,26 +26,48 @@ class ClaudeStatus:
     error: Optional[str] = None
 
 
-def find_claude_cli() -> Optional[str]:
-    """Find the Claude CLI executable."""
-    # Check if in PATH
-    cli = shutil.which("claude") or shutil.which("claude.exe")
-    if cli:
-        return cli
+def check_claude_status_via_cli(cli_path: Optional[str] = None) -> Optional[ClaudeStatus]:
+    """Check status by running 'claude auth status' subprocess.
 
-    # Check common npm locations on Windows
-    import os
-    locations = [
-        Path(os.environ.get("APPDATA", "")) / "npm" / "claude.cmd",
-        Path(os.environ.get("LOCALAPPDATA", "")) / "npm" / "claude.cmd",
-        Path.home() / "AppData" / "Roaming" / "npm" / "claude.cmd",
-    ]
+    Returns ClaudeStatus on success, None if CLI unavailable or fails.
+    """
+    if cli_path is None:
+        cli_path = find_claude_cli()
+    if not cli_path:
+        return None
 
-    for loc in locations:
-        if loc.exists():
-            return str(loc)
+    try:
+        env = os.environ.copy()
+        env.pop("CLAUDECODE", None)
+        result = subprocess.run(
+            [cli_path, "auth", "status"],
+            capture_output=True, text=True, timeout=10,
+            env=env,
+            creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0,
+        )
 
-    return None
+        if result.returncode != 0:
+            logger.debug("claude auth status returned %d: %s", result.returncode, result.stderr.strip())
+            return None
+
+        data = json.loads(result.stdout)
+        status = ClaudeStatus(
+            installed=True,
+            cli_path=cli_path,
+            authenticated=data.get("loggedIn", False),
+            email=data.get("email"),
+            organization=data.get("orgName"),
+            plan=data.get("subscriptionType"),
+        )
+        logger.info("CLI auth status: authenticated=%s, plan=%s", status.authenticated, status.plan)
+        return status
+
+    except subprocess.TimeoutExpired:
+        logger.warning("claude auth status timed out")
+        return None
+    except (json.JSONDecodeError, OSError) as e:
+        logger.warning("claude auth status failed: %s", e)
+        return None
 
 
 def check_credentials() -> tuple[bool, Optional[dict], Optional[str]]:
@@ -61,40 +86,33 @@ def check_credentials() -> tuple[bool, Optional[dict], Optional[str]]:
         with open(creds_path, "r", encoding="utf-8") as f:
             creds = json.load(f)
 
-        # Check for API key (always valid if present)
         if creds.get("apiKey"):
             return True, creds, None
 
-        # Check for OAuth credentials
         oauth_data = creds.get("claudeAiOauth")
         if not oauth_data:
             return False, creds, "No OAuth credentials found"
 
-        # Check if access token exists
         access_token = oauth_data.get("accessToken")
         if not access_token:
             return False, creds, "No access token"
 
-        # Check if token is expired
         expires_at = oauth_data.get("expiresAt", 0)
         if expires_at > 0:
             expires_dt = datetime.fromtimestamp(expires_at / 1000)
             buffer_time = timedelta(minutes=5)
 
             if datetime.now() > (expires_dt - buffer_time):
-                # Token expired, try to refresh
                 refresh_token = oauth_data.get("refreshToken")
                 if not refresh_token:
                     return False, creds, "Token expired, no refresh token"
 
-                # Try to refresh using oauth_usage module
                 try:
                     from oauth_usage import refresh_access_token, save_credentials
                     result = refresh_access_token(refresh_token)
                     if result:
                         new_access, new_refresh, new_expires = result
                         save_credentials(new_access, new_refresh, new_expires)
-                        # Reload credentials after refresh
                         with open(creds_path, "r", encoding="utf-8") as f:
                             creds = json.load(f)
                         return True, creds, None
@@ -123,21 +141,27 @@ def get_settings_info() -> dict:
 
 
 def check_claude_status() -> ClaudeStatus:
-    """Perform a comprehensive check of Claude Code status."""
-    status = ClaudeStatus()
+    """Perform a comprehensive check of Claude Code status.
 
-    # Check CLI installation (optional - OAuth works without CLI in PATH)
+    Prefers CLI subprocess (claude auth status) for reliable status,
+    falls back to credentials file check.
+    """
     cli_path = find_claude_cli()
+    if cli_path:
+        cli_status = check_claude_status_via_cli(cli_path)
+        if cli_status:
+            return cli_status
+
+    # Fallback: check credentials file directly
+    status = ClaudeStatus()
     status.cli_path = cli_path
     status.installed = cli_path is not None
 
-    # Check Claude directory exists
     claude_dir = get_claude_dir()
     if not claude_dir.exists():
         status.error = "Claude data directory not found (~/.claude)"
         return status
 
-    # Check authentication - this is what really matters for OAuth API
     auth_ok, creds, _error = check_credentials()
     status.authenticated = auth_ok
 
@@ -145,18 +169,14 @@ def check_claude_status() -> ClaudeStatus:
         status.error = "Not logged in to Claude Code"
         return status
 
-    # If authenticated via OAuth, mark as installed even if CLI not in PATH
-    # The OAuth API works without the CLI executable
     if auth_ok and creds and creds.get("claudeAiOauth"):
         status.installed = True
 
-    # Get additional info from credentials
     if creds:
         oauth = creds.get("claudeAiOauth", {})
         if isinstance(oauth, dict):
             status.organization = oauth.get("organizationName") or oauth.get("organization_name")
             status.email = oauth.get("email")
-            # Try various field names for plan
             status.plan = (
                 oauth.get("plan") or
                 oauth.get("planType") or
@@ -168,24 +188,18 @@ def check_claude_status() -> ClaudeStatus:
                 oauth.get("account_type")
             )
 
-    # Get settings info
-    settings = get_settings_info()
-    if settings:
-        # Could extract more info from settings
-        pass
-
     return status
 
 
 def get_status_message(status: ClaudeStatus) -> str:
     """Get a human-readable status message."""
     if not status.installed:
-        return "❌ Claude CLI not installed"
+        return "Claude CLI not installed"
 
     if not status.authenticated:
-        return "⚠️ Not logged in"
+        return "Not logged in"
 
-    parts = ["✓ Connected"]
+    parts = ["Connected"]
     if status.plan:
         parts.append(f"({status.plan})")
     if status.organization:

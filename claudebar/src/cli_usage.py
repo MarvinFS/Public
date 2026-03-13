@@ -5,9 +5,12 @@ Spawns Claude CLI in a Windows pseudo-terminal, sends /usage command,
 parses the rendered TUI output for usage percentages.
 """
 
+import gc
 import logging
 import os
 import re
+import signal
+import subprocess
 import time
 from typing import Optional
 
@@ -126,6 +129,54 @@ def _parse_usage_output(output: str) -> OAuthUsageData:
     return OAuthUsageData(session=session, weekly=weekly)
 
 
+def _get_conhost_pids() -> set:
+    """Get current set of conhost.exe PIDs."""
+    try:
+        result = subprocess.run(
+            ['tasklist', '/FI', 'IMAGENAME eq conhost.exe', '/FO', 'CSV', '/NH'],
+            capture_output=True, text=True, timeout=5,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+        pids = set()
+        for line in result.stdout.strip().split('\n'):
+            parts = line.strip().split(',')
+            if len(parts) >= 2:
+                try:
+                    pids.add(int(parts[1].strip('"')))
+                except ValueError:
+                    pass
+        return pids
+    except Exception:
+        return set()
+
+
+def _cleanup_pty(pty, conhost_before: set) -> None:
+    """Kill the spawned process, its conhost, and release the PTY."""
+    # Kill the child process (claude.exe)
+    try:
+        os.kill(pty.pid, signal.SIGTERM)
+    except (OSError, ProcessLookupError):
+        pass
+
+    # Find and kill the conhost.exe that was created by this PTY session
+    time.sleep(0.2)
+    conhost_after = _get_conhost_pids()
+    new_conhosts = conhost_after - conhost_before
+    for pid in new_conhosts:
+        try:
+            os.kill(pid, signal.SIGTERM)
+            logger.debug("Killed orphaned conhost PID=%d", pid)
+        except (OSError, ProcessLookupError):
+            pass
+
+    # Force PTY cleanup to release pseudo-console handle
+    try:
+        del pty
+        gc.collect()
+    except Exception:
+        pass
+
+
 def _read_available(pty) -> str:
     """Read whatever is currently available from PTY (non-blocking)."""
     buf = ""
@@ -223,6 +274,10 @@ def fetch_cli_usage(cli_path: Optional[str] = None) -> OAuthUsageData:
     if not cli_path:
         return OAuthUsageData(error="Claude CLI not found")
 
+    conhost_before = _get_conhost_pids()
+    pty = None
+    output = ""
+
     try:
         pty = winpty.PTY(160, 50)
 
@@ -259,37 +314,35 @@ def fetch_cli_usage(cli_path: Optional[str] = None) -> OAuthUsageData:
 
         logger.info("CLI PTY: /usage output (%d chars)", len(output))
 
-        try:
-            import signal
-            os.kill(pty.pid, signal.SIGTERM)
-        except (OSError, ProcessLookupError):
-            pass
-
-        # Debug: dump raw CLI output for diagnosis
-        try:
-            import tempfile
-            debug_dir = os.path.join(os.environ.get("LOCALAPPDATA", tempfile.gettempdir()), "ClaudeBar")
-            with open(os.path.join(debug_dir, "cli_raw.txt"), "w", encoding="utf-8") as dbg:
-                dbg.write(output)
-            with open(os.path.join(debug_dir, "cli_clean.txt"), "w", encoding="utf-8") as dbg:
-                dbg.write(_strip_ansi(output))
-        except Exception:
-            pass
-
-        if not output:
-            return OAuthUsageData(error="Empty CLI /usage output")
-
-        result = _parse_usage_output(output)
-        if result.is_valid:
-            logger.info(
-                "CLI PTY: session=%.1f%%, weekly=%.1f%%, session_reset=%s, weekly_reset=%s",
-                result.session.utilization if result.session else 0,
-                result.weekly.utilization if result.weekly else 0,
-                result.session.raw_reset_text if result.session else None,
-                result.weekly.raw_reset_text if result.weekly else None,
-            )
-        return result
-
     except Exception as e:
         logger.warning("CLI PTY failed: %s", e)
         return OAuthUsageData(error=f"CLI PTY error: {e}")
+
+    finally:
+        if pty is not None:
+            _cleanup_pty(pty, conhost_before)
+
+    # Debug: dump raw CLI output for diagnosis
+    try:
+        import tempfile
+        debug_dir = os.path.join(os.environ.get("LOCALAPPDATA", tempfile.gettempdir()), "ClaudeBar")
+        with open(os.path.join(debug_dir, "cli_raw.txt"), "w", encoding="utf-8") as dbg:
+            dbg.write(output)
+        with open(os.path.join(debug_dir, "cli_clean.txt"), "w", encoding="utf-8") as dbg:
+            dbg.write(_strip_ansi(output))
+    except Exception:
+        pass
+
+    if not output:
+        return OAuthUsageData(error="Empty CLI /usage output")
+
+    result = _parse_usage_output(output)
+    if result.is_valid:
+        logger.info(
+            "CLI PTY: session=%.1f%%, weekly=%.1f%%, session_reset=%s, weekly_reset=%s",
+            result.session.utilization if result.session else 0,
+            result.weekly.utilization if result.weekly else 0,
+            result.session.raw_reset_text if result.session else None,
+            result.weekly.raw_reset_text if result.weekly else None,
+        )
+    return result

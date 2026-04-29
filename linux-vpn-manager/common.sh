@@ -251,6 +251,8 @@ detect_installed() {
     OPENVPN_INSTALLED=false
     SHADOWSOCKS_INSTALLED=false
     XRAY_INSTALLED=false
+    XHTTP_INSTALLED=false
+    XHTTP_NGINX_INSTALLED=false
 
     if [[ -f /etc/wireguard/params ]] || service_is_active wg-quick@wg0; then
         WIREGUARD_INSTALLED=true
@@ -264,8 +266,14 @@ detect_installed() {
     if [[ -f /usr/local/etc/xray/params ]] || service_is_active xray; then
         XRAY_INSTALLED=true
     fi
+    if [[ -f /usr/local/etc/xray-xhttp/params ]] || service_is_active xray-xhttp; then
+        XHTTP_INSTALLED=true
+    fi
+    if [[ -f /usr/local/etc/xray-xhttp-nginx/params ]] || service_is_active xray-xhttp-nginx; then
+        XHTTP_NGINX_INSTALLED=true
+    fi
 
-    export WIREGUARD_INSTALLED OPENVPN_INSTALLED SHADOWSOCKS_INSTALLED XRAY_INSTALLED
+    export WIREGUARD_INSTALLED OPENVPN_INSTALLED SHADOWSOCKS_INSTALLED XRAY_INSTALLED XHTTP_INSTALLED XHTTP_NGINX_INSTALLED
 }
 
 # ============================================================================

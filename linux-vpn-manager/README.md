@@ -4,8 +4,10 @@
 
 ## What It Does
 
-- **Installs & configures 4 VPN protocols**:
-  - XRay VLESS+REALITY – Best-in-class obfuscation (no domain needed, mimics real TLS)
+- **Installs & configures 6 VPN protocols**:
+  - XRay XHTTP+Nginx – Decoy website with hidden VPN tunnel, strongest anti-censorship (requires domain)
+  - XRay CDN Tunnel – Traffic routed through Cloudflare CDN (requires domain + CF account)
+  - XRay VLESS+REALITY – Direct obfuscation, mimics real TLS (no domain needed)
   - WireGuard – Fast modern VPN (supports AmneziaWG 1.5 client config export)
   - OpenVPN – Classic SSL VPN
   - Shadowsocks – Encrypted proxy - pretty much outdated already
@@ -48,7 +50,7 @@ This downloads all scripts to `/opt/vpn-manager/` and creates the `vpn-manager` 
 ```bash
 # Download all scripts at once
 mkdir -p /opt/vpn-manager && cd /opt/vpn-manager
-curl -fsSL https://raw.githubusercontent.com/MarvinFS/Public/main/linux-vpn-manager/{vpn-manager,common,wireguard,openvpn,shadowsocks,xray}.sh -O
+curl -fsSL https://raw.githubusercontent.com/MarvinFS/Public/main/linux-vpn-manager/{vpn-manager,common,wireguard,openvpn,shadowsocks,xray,xhttp,xhttp-nginx}.sh -O
 chmod +x *.sh
 
 # Run the manager
@@ -58,7 +60,7 @@ sudo ./vpn-manager.sh
 **Using wget** (if curl not available):
 ```bash
 mkdir -p /opt/vpn-manager && cd /opt/vpn-manager
-for f in vpn-manager common wireguard openvpn shadowsocks xray; do
+for f in vpn-manager common wireguard openvpn shadowsocks xray xhttp xhttp-nginx; do
   wget -q "https://raw.githubusercontent.com/MarvinFS/Public/main/linux-vpn-manager/${f}.sh"
 done
 chmod +x *.sh
@@ -76,13 +78,22 @@ sudo ./vpn-manager.sh
 | `shadowsocks.sh` | Shadowsocks-rust install + management
 | `openvpn.sh`     | OpenVPN install + client management
 | `xray.sh`        | XRay VLESS+REALITY install + multi-user management
+| `xhttp.sh`       | XRay CDN Tunnel (gRPC via Cloudflare) install + multi-user management
+| `xhttp-nginx.sh` | XRay XHTTP+Nginx (decoy website) install + multi-user management
 | `install.sh`        | Used only when installing with one-liner
 
 ## Features
 
 ### Traffic Obfuscation
 
-- **XRay VLESS+REALITY** - Best-in-class obfuscation (end of 2025)
+- **XRay XHTTP+Nginx** - Strongest anti-censorship (2026)
+  - Nginx reverse proxy with real Let's Encrypt certificate
+  - Decoy website (game server log aggregation) served to casual visitors and DPI probes
+  - VPN traffic hidden on a specific path via XHTTP stream-up transport
+  - Nginx `grpc_pass` forwards to xray on a Unix socket
+  - Compatible with v2rayNG, v2rayN, NekoBox, Hiddify
+
+- **XRay VLESS+REALITY** - Best-in-class direct obfuscation
   - No domain or TLS certificate required
   - Traffic mimics legitimate TLS to real websites (default: `browser.yandex.com`)
   - Multi-user support with unique shortIds per client (for tracking/revocation)
@@ -203,31 +214,13 @@ See [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) for common issues:
 - Permission errors
 - Service startup issues
 
-### FYI considerations - Why we use direct REALITY (and Not XHTTP)
+### When to use which protocol
 
-| Feature | Direct REALITY ✅ | CDN Fronting (XHTTP) |
-|---------|------------------|----------------------|
-| Latency | Server RTT only (~20-50ms) | +40-100ms overhead |
-| Download | Full line speed | ~50-70% of direct |
-| Upload | Full line speed | **~10-50 Mbps max** |
-| Setup | Single server, no domain | Requires domain + CDN config |
-| Idle timeout | None | CF kills after 100 sec |
-| Protocol | `xtls-rprx-vision` (optimized) | HTTP wrapping overhead |
+Direct VLESS+REALITY (xray.sh) is faster and simpler - no domain needed, no CDN config, full line speed. Use it when it works.
 
-**We use direct VLESS+REALITY because:**
+CDN Tunnel (xhttp.sh) routes through Cloudflare so censors only see a connection to Cloudflare's IP. Requires a domain on Cloudflare. Adds 30-80ms latency from CDN routing. Use it when REALITY gets blocked (e.g. Russia's TSPU fingerprinting REALITY handshakes in 2026).
 
-- **Performance** - Direct connection = fastest speed, lowest latency
-- **Simplicity** - No domain, no CDN account, no extra configuration  
-- **Reliability** - No middleman timeouts or rate limits
-- **Already obfuscated** - Traffic looks like legitimate TLS to `browser.yandex.com`
-
-**CDN fronting (XHTTP) is only useful when:**
-
-- Your server IP is actively blocked
-- You're behind strict corporate/national firewalls
-- Direct connections fail completely
-
-> **Rule of thumb:** Direct REALITY = highway (fast). CDN fronting = detour (slow, last resort).
+Both can run simultaneously on the same server - different services, different ports, different clients.
 
 ## License
 

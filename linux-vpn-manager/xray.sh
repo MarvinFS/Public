@@ -338,8 +338,13 @@ EOF
 
 show_client_config() {
     local name="$1"
-    [[ -z "$name" ]] && { read -rp "Client name: " name; }
-    
+    if [[ -z "$name" ]]; then
+        if ! select_client "Show config for client"; then
+            return
+        fi
+        name="${SELECTED_CLIENT_NAME}"
+    fi
+
     local client_file="${CLIENT_DIR}/${name}.conf"
     [[ ! -f "${client_file}" ]] && { log_error "Client '${name}' not found"; return 1; }
     
@@ -432,43 +437,66 @@ list_clients() {
         return
     fi
 
-    printf "  %-20s %-10s %-12s\n" "NAME" "SHORT_ID" "CREATED"
-    printf "  %-20s %-10s %-12s\n" "--------------------" "----------" "------------"
+    printf "  %-4s %-20s %-10s %-12s\n" "#" "NAME" "SHORT_ID" "CREATED"
+    printf "  %-4s %-20s %-10s %-12s\n" "----" "--------------------" "----------" "------------"
 
-    local client_name client_short_id created_date
+    local i=1 client_name client_short_id created_date
     for client_file in ${CLIENT_DIR}/*.conf; do
-        # Extract values without sourcing to avoid scope pollution
         client_name=$(grep "^CLIENT_NAME=" "$client_file" | cut -d= -f2 | tr -d '"')
         client_short_id=$(grep "^CLIENT_SHORT_ID=" "$client_file" | cut -d= -f2 | tr -d '"')
         created_date=$(grep "^CREATED_DATE=" "$client_file" | cut -d= -f2 | tr -d '"')
-        printf "  %-20s %-10s %-12s\n" "${client_name}" "${client_short_id}" "${created_date}"
+        printf "  %-4s %-20s %-10s %-12s\n" "${i})" "${client_name}" "${client_short_id}" "${created_date}"
+        i=$((i + 1))
     done
     echo ""
 }
 
-revoke_client() {
+select_client() {
+    local prompt="${1:-Select client}"
     load_params
-    
+
+    if [[ ! -d ${CLIENT_DIR} ]] || ! ls ${CLIENT_DIR}/*.conf &>/dev/null 2>&1; then
+        echo -e "  ${YELLOW}No clients configured${NC}"
+        return 1
+    fi
+
     list_clients
-    
-    read -rp "Client name to revoke: " input_name
-    [[ -z "${input_name}" ]] && return
-    
-    # Use unique variable names to avoid being overwritten by source commands
-    local revoke_name="${input_name}"
+
+    local clients=()
+    for client_file in ${CLIENT_DIR}/*.conf; do
+        clients+=("$(grep "^CLIENT_NAME=" "$client_file" | cut -d= -f2 | tr -d '"')")
+    done
+
+    local selection
+    read -rp "${prompt} [1-${#clients[@]}]: " selection
+    [[ -z "${selection}" ]] && return 1
+
+    if ! [[ "${selection}" =~ ^[0-9]+$ ]] || (( selection < 1 || selection > ${#clients[@]} )); then
+        log_error "Invalid selection"
+        return 1
+    fi
+
+    SELECTED_CLIENT_NAME="${clients[$((selection - 1))]}"
+    return 0
+}
+
+revoke_client() {
+    if ! select_client "Client to revoke"; then
+        return
+    fi
+
+    local revoke_name="${SELECTED_CLIENT_NAME}"
     local revoke_file="${CLIENT_DIR}/${revoke_name}.conf"
-    [[ ! -f "${revoke_file}" ]] && { log_error "Client '${revoke_name}' not found"; return 1; }
-    
+
     confirm_action "Revoke client '${revoke_name}'?" || return
-    
+
     rm -f "${revoke_file}"
     rm -f "${CLIENT_DIR}/${revoke_name}-vless.txt"
     rm -f "${CLIENT_DIR}/${revoke_name}-config.json"
-    
-    # Rebuild server config
+
     create_xray_config
     systemctl restart xray
-    
+
     log_success "Client '${revoke_name}' revoked"
 }
 

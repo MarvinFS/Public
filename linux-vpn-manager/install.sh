@@ -27,6 +27,8 @@ SCRIPTS=(
     "openvpn.sh"
     "shadowsocks.sh"
     "xray.sh"
+    "xhttp.sh"
+    "xhttp-nginx.sh"
 )
 
 echo ""

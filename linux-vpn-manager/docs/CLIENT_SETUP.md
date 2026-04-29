@@ -16,8 +16,11 @@ linux-vpn-manager/
 ├── shadowsocks.sh          # Shadowsocks install + management
 ├── openvpn.sh              # OpenVPN install + management
 ├── xray.sh                 # XRay VLESS+REALITY install + management
+├── xhttp.sh                # XRay XHTTP (CDN) install + management
+├── xhttp-nginx.sh          # XRay XHTTP+Nginx (decoy website) install + management
 └── docs/
     ├── CLIENT_SETUP.md     # This file
+    ├── XHTTP_SETUP.md      # XHTTP deployment guide
     └── TROUBLESHOOTING.md
 ```
 
@@ -153,6 +156,148 @@ Other clients that support VLESS+REALITY:
 | macOS | [V2rayU](https://github.com/yanue/V2rayU/releases) |
 | Android | [v2rayNG](https://github.com/2dust/v2rayNG/releases) |
 | iOS | Shadowrocket (paid), Streisand |
+
+---
+
+## XRay CDN Tunnel Setup (For Heavily Censored Networks)
+
+### Why CDN Tunnel?
+
+When direct VLESS+REALITY gets blocked (e.g. Russia's TSPU fingerprinting REALITY handshakes), CDN tunneling routes traffic through Cloudflare. The censor sees a normal HTTPS connection to Cloudflare - indistinguishable from browsing any website.
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  CLIENT                                                                      │
+│  ┌─────────────────┐                                                        │
+│  │   v2rayNG /     │   HTTPS to Cloudflare (normal website traffic)        │
+│  │   NekoBox       │──────────────────────────────────────────────────────▶│
+│  │ VLESS+gRPC      │   Russia sees: connection to Cloudflare CDN IP       │
+│  └─────────────────┘                                                        │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                          │
+                                          ▼ Cloudflare CDN (encrypted tunnel)
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  SERVER                                                                      │
+│  ┌─────────────────┐   ┌─────────────────┐                                │
+│  │   cloudflared   │──▶│   XRay gRPC     │───▶ Internet                  │
+│  │   (CF tunnel)   │   │   port 10443    │                                │
+│  └─────────────────┘   └─────────────────┘                                │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Server-Side: Create User
+
+```bash
+# Using main menu
+sudo ./vpn-manager.sh
+# Select: 5) XRay CDN Tunnel → 1) Add client
+
+# Or directly
+sudo ./xhttp.sh
+# Select: 1) Add client
+```
+
+After creating a user, you'll see:
+- VLESS URL (for copy/paste) - **Use this to connect**
+- QR Code (for mobile scanning)
+- Configs saved to `/etc/vpn/xhttp/clients/`
+
+### Client Apps
+
+> **AmneziaVPN does NOT work** with the CDN Tunnel (gRPC) setup as of March 2026. It parses the VLESS URL but fails to route traffic. Use one of the clients below instead. AmneziaVPN works fine with the direct VLESS+REALITY setup (section above).
+
+| Platform | Client | Notes |
+|----------|--------|-------|
+| Android | [v2rayNG](https://github.com/2dust/v2rayNG/releases) | Best gRPC support, recommended |
+| Android | [NekoBox](https://github.com/MatsuriDayo/NekoBoxForAndroid/releases) | Alternative, sing-box based |
+| Multi-platform | [Hiddify](https://github.com/hiddify/hiddify-app/releases) | Windows/Android/iOS |
+| Windows | [v2rayN](https://github.com/2dust/v2rayN/releases) | Desktop client |
+
+> **Note on AmneziaWG 1.5:** v2rayNG and NekoBox do NOT support AmneziaWG 1.5 obfuscated WireGuard. If you need both CDN Tunnel and AmneziaWG 1.5, you'll need two apps: v2rayNG/NekoBox for CDN Tunnel connections, and AmneziaVPN for AmneziaWG 1.5 connections. AmneziaVPN remains the only client supporting AmneziaWG 1.5.
+
+### Connecting
+
+1. Copy the VLESS URL from server output:
+   ```
+   vless://uuid@logs.example.com:443?encryption=none&security=tls&sni=logs.example.com&type=grpc&serviceName=xh&mode=multi&fp=chrome#logs.example.com-username
+   ```
+2. Open v2rayNG (or other client)
+3. Tap "+" > "Import config from clipboard"
+4. Connect
+
+### Full Deployment Guide
+
+See [XHTTP_SETUP.md](XHTTP_SETUP.md) for complete server deployment including Cloudflare setup.
+
+---
+
+## XRay XHTTP+Nginx Setup (Strongest Anti-Censorship)
+
+### Why XHTTP+Nginx?
+
+When both VLESS+REALITY and CDN tunneling fail (e.g. Russia's TSPU blocking Cloudflare tunnel traffic), the XHTTP+Nginx approach provides the strongest camouflage. Nginx serves a real website (with a valid Let's Encrypt certificate) to anyone who visits the domain, while VPN traffic is hidden on a specific path using XHTTP stream-up transport. DPI probes see a legitimate HTTPS website with real content.
+
+```
+CLIENT                                     SERVER (port 443)
+  v2rayNG          HTTPS to domain    ┌───────────────────────┐
+  VLESS+XHTTP  ─────────────────────▶│  Nginx (TLS)          │
+  stream-up        DPI sees: normal   │    /  → decoy website │
+                   website traffic    │    /path/ → xray      │
+                                      │  ┌─────────────────┐  │
+                                      │  │ XRay XHTTP      │  │
+                                      │  │ (Unix socket)   │──▶ Internet
+                                      │  └─────────────────┘  │
+                                      └───────────────────────┘
+```
+
+### Server-Side: Create User
+
+```bash
+# Using main menu
+sudo ./vpn-manager.sh
+# Select: 6) XRay XHTTP+Nginx → 1) Add client
+
+# Or directly
+sudo ./xhttp-nginx.sh
+# Select: 1) Add client
+```
+
+After creating a user, you'll see:
+- VLESS URL (for copy/paste)
+- QR Code (for mobile scanning)
+- Configs saved to `/etc/vpn/xhttp-nginx/clients/`
+
+### Client Apps
+
+Same clients as the CDN Tunnel setup. AmneziaVPN compatibility is TBD.
+
+| Platform | Client | Notes |
+|----------|--------|-------|
+| Android | [v2rayNG](https://github.com/2dust/v2rayNG/releases) | Best XHTTP support, recommended |
+| Android | [NekoBox](https://github.com/MatsuriDayo/NekoBoxForAndroid/releases) | Alternative, sing-box based |
+| Multi-platform | [Hiddify](https://github.com/hiddify/hiddify-app/releases) | Windows/Android/iOS |
+| Windows | [v2rayN](https://github.com/2dust/v2rayN/releases) | Desktop client |
+
+### Connecting
+
+1. Copy the VLESS URL from server output:
+   ```
+   vless://uuid@logs.example.com:443?encryption=mlkem768x25519plus.native.0rtt.KEY&security=tls&sni=logs.example.com&type=xhttp&path=/ingest/v2/&mode=stream-up&fp=chrome&flow=xtls-rprx-vision#logs.example.com-username
+   ```
+2. Open v2rayNG (or other client)
+3. Tap "+" > "Import config from clipboard"
+4. Connect
+
+Note: The encryption parameter contains the VLESS Encryption (vlessenc) key, and flow enables XTLS Vision optimization. Both are generated automatically during server setup. Client apps must support vlessenc (v2rayNG 1.9+, Hiddify, v2rayN with xray-core 26.3+).
+
+### Key Differences from CDN Tunnel
+
+- Traffic goes directly to your server (no Cloudflare middleman)
+- Real Let's Encrypt certificate (not self-signed behind CF)
+- Decoy website responds to casual visitors and DPI probes
+- Uses XHTTP transport (not gRPC) - the modern replacement
+- VLESS Encryption provides protocol-level encryption with post-quantum key exchange
+- Requires a domain with DNS pointing to your server (A record, not proxied)
 
 ---
 

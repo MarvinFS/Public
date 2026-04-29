@@ -120,6 +120,29 @@ start_all() {
 }
 
 # ============================================================================
+# SELF-UPDATE
+# ============================================================================
+
+self_update() {
+    local install_url="https://raw.githubusercontent.com/MarvinFS/Public/main/linux-vpn-manager/install.sh"
+
+    echo ""
+    log_info "This will refresh /opt/vpn-manager/*.sh from GitHub."
+    log_info "Existing service configs (xray, wireguard, etc.) and client files are NOT touched."
+    confirm_action "Pull latest scripts from ${install_url}?" || return
+
+    # Process substitution feeds the script via FD so we can keep stdin on /dev/null
+    # (so install.sh's trailing "Launch now?" read returns immediately on EOF).
+    # sed neutralizes the bootstrap's exec call so we don't replace the running shell.
+    if ! bash <(curl -fsSL "${install_url}" | sed 's|exec "${INSTALL_DIR}/vpn-manager.sh"|true|') </dev/null; then
+        log_error "Self-update failed. Check network and GitHub availability."
+        return 1
+    fi
+
+    log_success "Scripts refreshed. Re-launch vpn-manager to pick up changes."
+}
+
+# ============================================================================
 # MAIN MENU
 # ============================================================================
 
@@ -154,6 +177,7 @@ main_menu() {
         echo ""
         echo "  10) Apply optimizations (BBR, buffers)"
         echo "  11) View logs"
+        echo "  12) Update VPN Manager scripts (pull latest from GitHub)"
         echo ""
         echo "  0) Exit"
         echo ""
@@ -185,6 +209,7 @@ main_menu() {
                     8) journalctl -u nginx --no-pager -n 50 ;;
                 esac
                 ;;
+            12) self_update ;;
             0) exit 0 ;;
         esac
         

@@ -234,6 +234,37 @@ validate_port() {
 
 service_is_active() { systemctl is-active --quiet "$1" 2>/dev/null; }
 
+# Returns 0 if port is free, 1 otherwise. On conflict, logs the owning process.
+check_port_free() {
+    local port="$1" proto="${2:-tcp}"
+    local owner
+    owner=$(ss -H -ltnp 2>/dev/null | awk -v p=":${port}\$" '$4 ~ p {print $NF; exit}')
+    if [[ -n "${owner}" ]]; then
+        log_error "Port ${port}/${proto} is already in use by: ${owner}"
+        log_error "Stop the conflicting service or uninstall the previous protocol first:"
+        log_error "  vpn-manager  ->  Manage installed  ->  Uninstall <protocol>"
+        return 1
+    fi
+    return 0
+}
+
+# Polls listening sockets after an uninstall and warns when matching processes
+# are still bound. Used to surface "address in use" failures on reinstall.
+#   $1: extended-regex of process names to match (passed to grep -E)
+#   $2: recovery command to suggest if sockets are still bound
+#   $3: optional extra note shown before the recovery hint
+warn_if_stuck_sockets() {
+    local pattern="$1" recovery="$2" extra_note="${3:-}"
+    sleep 1
+    local stuck
+    stuck=$(ss -H -ltnp 2>/dev/null | grep -E "${pattern}" || true)
+    [[ -z "${stuck}" ]] && return 0
+    log_warning "These sockets are still bound after uninstall:"
+    echo "${stuck}" >&2
+    [[ -n "${extra_note}" ]] && log_warning "${extra_note}"
+    log_warning "If reinstall fails with 'address in use', run: ${recovery}"
+}
+
 press_enter() { echo ""; read -rp "Press Enter to continue..."; }
 
 confirm_action() {

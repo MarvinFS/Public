@@ -724,6 +724,16 @@ start_xhttp_nginx() {
 run_install() {
     check_root
     check_os
+
+    # Pre-flight: ports 80 and 443 must be free for nginx + Let's Encrypt (both hardcoded).
+    # If REALITY is on 443, this fires with "in use by xray" - that's the actionable error.
+    # REALITY on a non-443 port (e.g. our default 48721) coexists fine.
+    if ! check_port_free 80 tcp || ! check_port_free 443 tcp; then
+        log_error "Aborting install. Free ports 80 and 443 (needed for Nginx + Let's Encrypt) and re-run."
+        log_error "If REALITY owns 443, move it to a high port: vpn-manager -> VLESS+REALITY -> Change port."
+        exit 1
+    fi
+
     install_essentials
     install_xray_binary
     install_nginx
@@ -1091,6 +1101,12 @@ uninstall_xhttp_nginx() {
     rm -rf "${XHTTP_NGINX_DIR}" /etc/vpn/xhttp-nginx "${WEBSITE_DIR}"
 
     systemctl daemon-reload
+
+    # Verify the ports were actually freed - common cause of "address in use" on reinstall.
+    warn_if_stuck_sockets '"(xray|nginx)"' \
+        "systemctl stop nginx xray-xhttp-nginx" \
+        "Nginx is intentionally left running (other sites may use it)."
+
     log_success "XHTTP+Nginx uninstalled (XRay binary and TLS certificate preserved)"
 }
 

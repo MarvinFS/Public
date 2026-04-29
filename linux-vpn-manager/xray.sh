@@ -113,17 +113,27 @@ EOF
 
 generate_keys() {
     log_info "Generating x25519 keypair for REALITY..."
-    
+
     local keypair
-    keypair=$(xray x25519) || { log_error "Failed to generate keys"; exit 1; }
-    
-    # Output format: "PrivateKey: xxx\nPassword: yyy\nHash32: zzz"
-    # Password is the public key in XRay terminology
-    PRIVATE_KEY=$(echo "$keypair" | grep "PrivateKey:" | awk '{print $2}')
-    PUBLIC_KEY=$(echo "$keypair" | grep "Password:" | awk '{print $2}')
-    
-    [[ -z "${PRIVATE_KEY}" || -z "${PUBLIC_KEY}" ]] && { log_error "Key extraction failed"; exit 1; }
-    
+    keypair=$(xray x25519) || { log_error "Failed to run 'xray x25519'"; exit 1; }
+
+    # Xray label formats vary across versions:
+    #   v26.x+:    "PrivateKey: xxx" / "Password (PublicKey): yyy" / "Hash32: zzz"
+    #   v1.8.4-v25: "PrivateKey: xxx" / "Password: yyy" / "Hash32: zzz"
+    #   older:     "Private key: xxx" / "Public key: yyy"
+    # Match by label keyword (case-insensitive, optional space), then strip "<label>: " prefix.
+    PRIVATE_KEY=$(echo "$keypair" | grep -iE '^Private ?key'           | sed -E 's/^[^:]+:[[:space:]]*//')
+    PUBLIC_KEY=$(echo "$keypair"  | grep -iE '^(Password|Public ?key)' | sed -E 's/^[^:]+:[[:space:]]*//')
+
+    if [[ -z "${PRIVATE_KEY}" || -z "${PUBLIC_KEY}" ]]; then
+        log_error "Key extraction failed - 'xray x25519' produced unexpected format:"
+        echo "----- xray x25519 output -----" >&2
+        echo "$keypair" >&2
+        echo "------------------------------" >&2
+        log_error "Update xray.sh: re-run the install bootstrap to pull the latest version."
+        exit 1
+    fi
+
     log_success "Keys generated"
 }
 
@@ -138,8 +148,11 @@ configure_server() {
     chmod 700 ${XRAY_DIR}
     chmod 700 ${CLIENT_DIR}
     
-    read -rp "Port [443]: " XRAY_PORT
-    XRAY_PORT=${XRAY_PORT:-443}
+    # Default 48721 (high port) bypasses ~80% of TSPU deep inspection that hits :443,
+    # and avoids colliding with XHTTP+Nginx (which hardcodes 443 for Let's Encrypt).
+    # Pick 443 only if you need to mimic vanilla HTTPS and aren't running xhttp-nginx.
+    read -rp "Port [48721]: " XRAY_PORT
+    XRAY_PORT=${XRAY_PORT:-48721}
     
     echo ""
     echo -e "${CYAN}Server address for client connections:${NC}"
@@ -260,10 +273,11 @@ run_install() {
     check_root
     check_os
     get_public_ip
+
     install_essentials
     install_xray
     configure_server
-    
+
     # Reload params to ensure variables are set
     if [[ -f "${XRAY_PARAMS}" ]]; then
         source "${XRAY_PARAMS}"
@@ -271,7 +285,13 @@ run_install() {
         log_error "Params file not found: ${XRAY_PARAMS}"
         exit 1
     fi
-    
+
+    # Pre-flight: chosen port must be free before we attempt to start xray.
+    if ! check_port_free "${XRAY_PORT}" tcp; then
+        log_error "Aborting install. Free port ${XRAY_PORT} or pick a different one and re-run."
+        exit 1
+    fi
+
     firewall_open_port "${XRAY_PORT}" tcp || true
     start_xray
     
@@ -611,6 +631,10 @@ uninstall_xray() {
     fi
 
     systemctl daemon-reload
+
+    # Verify the port was actually freed - common cause of "address in use" on reinstall.
+    warn_if_stuck_sockets '"(xray|nginx)"' "systemctl stop xray nginx; pkill -9 xray"
+
     log_success "XRay uninstalled"
 }
 

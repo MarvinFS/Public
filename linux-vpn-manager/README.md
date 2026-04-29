@@ -162,7 +162,17 @@ Install / Manage:
   2) OpenVPN        - Battle-tested VPN
   3) Shadowsocks    - Lightweight proxy
   4) XRay           - VLESS+REALITY (best obfuscation)
+  5) XRay CDN Tunnel - gRPC via Cloudflare
+  6) XRay XHTTP+Nginx - Decoy website (strongest anti-censorship)
+
+  ...
+
+  10) Apply optimizations (BBR, buffers)
+  11) View logs
+  12) Update VPN Manager scripts (pull latest from GitHub)
 ```
+
+Option 12 re-runs `install.sh` from the public GitHub mirror to refresh `/opt/vpn-manager/*.sh` without touching service configs or client files - use it when a new xray release breaks something or you want a recent fix.
 
 ### XRay VLESS+REALITY
 
@@ -190,12 +200,16 @@ Each VPN module auto-detects whether the VPN is installed:
 
 ## Default Ports
 
-| Service | Port | Protocol |
-|---------|------|----------|
-| WireGuard | 51820 | UDP |
-| OpenVPN | 1194 | UDP |
-| Shadowsocks | 8388 | TCP+UDP |
-| XRay | 443 | TCP |
+| Service | Port | Protocol | Notes |
+|---------|------|----------|-------|
+| WireGuard | 51820 | UDP | |
+| OpenVPN | 1194 | UDP | |
+| Shadowsocks | 8388 | TCP+UDP | |
+| XRay VLESS+REALITY | 48721 | TCP | Russian TSPU blocks `:443`; high port bypasses ~80% of DPI. Override at install prompt if needed. |
+| XRay XHTTP+Nginx | 80, 443 | TCP | Hardcoded - Let's Encrypt requires :80 for ACME and :443 for the decoy site. |
+| XRay CDN Tunnel | 10443 (local) | TCP | Local listen port behind cloudflared; the public side is :443 on Cloudflare. |
+
+REALITY and XHTTP+Nginx are designed to coexist on the same host — REALITY on 48721, XHTTP+Nginx on 443. If you reconfigure REALITY to 443, XHTTP+Nginx install will block on the port-conflict pre-flight; move REALITY to a high port first via menu option `Change port`.
 
 ## Client Setup
 

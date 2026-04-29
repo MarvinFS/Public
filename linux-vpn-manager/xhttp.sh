@@ -673,6 +673,10 @@ uninstall_xhttp() {
     rm -rf "${XHTTP_DIR}" /etc/vpn/xhttp
 
     systemctl daemon-reload
+
+    # Verify the local listen port was actually freed.
+    warn_if_stuck_sockets '"(xray|cloudflared)"' "systemctl stop xray-xhttp cloudflared"
+
     log_success "CDN Tunnel uninstalled (XRay binary preserved)"
 }
 

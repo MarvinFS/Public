@@ -1,6 +1,6 @@
 # Troubleshooting Guide
 
-Last updated: 2026-01
+Last updated: 2026-04-29
 
 > **Part of Linux VPN Manager** - See [README.md](../README.md) for full documentation.
 
@@ -56,14 +56,18 @@ systemctl status xray
 
 ```bash
 # All VPN ports
-ss -tulnp | grep -E '443|1194|8388|51820'
+ss -tulnp | grep -E '48721|443|80|1194|8388|51820'
 
-Here the example only you need to specify real used ports
-# Expected (default ports):
-# 443   - XRay VLESS+REALITY
+# Expected (default ports as of 2026-04):
+# 48721 - XRay VLESS+REALITY (high port, anti-TSPU default)
+# 80    - XRay XHTTP+Nginx (Let's Encrypt ACME)
+# 443   - XRay XHTTP+Nginx (decoy site + grpc_pass to xray socket)
 # 1194  - OpenVPN
 # 8388  - Shadowsocks
 # 51820 - WireGuard (UDP)
+
+# REALITY and XHTTP+Nginx are designed to coexist on the same host:
+# REALITY:48721 + Nginx:443 with xray-xhttp-nginx behind a Unix socket.
 ```
 
 ### View Logs
@@ -139,12 +143,15 @@ netfilter-persistent save
 
 | Problem | Cause | Solution |
 |---------|-------|----------|
-| Connection timeout | Port 443 blocked | Check firewall and cloud provider rules |
+| Connection timeout | Port blocked | Check firewall and cloud provider rules |
 | VLESS URL not working | Incorrect format | Regenerate client config, ensure no URL encoding issues |
 | QR code won't scan | Terminal encoding | Try copy/paste VLESS URL instead |
 | Client connects but no traffic | Wrong shortId | Verify shortId matches between client and server |
 | Reality handshake failed | SNI blocked | Try different SNI target site |
 | UUID rejected | Client revoked | Check if client exists in server config |
+| Install aborts with "Key extraction failed" | xray binary newer than your scripts (label format change) | Run vpn-manager → option 12 "Update VPN Manager scripts" to refresh from GitHub. Pre-26.x clients still work because the on-disk keys are unchanged. |
+| Install aborts with "Port N is already in use by xray/nginx" | Another protocol owns the chosen port | If REALITY default 48721 conflicts, pick a different port. If you want REALITY on 443 but XHTTP+Nginx is there, move REALITY to 48721 (vpn-manager → VLESS+REALITY → Change port) or uninstall XHTTP+Nginx first. |
+| TSPU drops handshakes from Russia despite working setup | DPI fingerprinting REALITY on common ports | Confirm port is high (48721 by default) and SNI is unblocked; if still failing, switch to XHTTP+Nginx with a real domain - decoy website fronting is currently the strongest layer. |
 
 ### Verify XRay Configuration
 
@@ -238,7 +245,11 @@ ufw allow 1194/udp
 # Shadowsocks
 ufw allow 8388/tcp
 
-# XRay
+# XRay VLESS+REALITY (default 48721)
+ufw allow 48721/tcp
+
+# XRay XHTTP+Nginx (Let's Encrypt + decoy site)
+ufw allow 80/tcp
 ufw allow 443/tcp
 
 # Verify
@@ -257,7 +268,11 @@ firewall-cmd --permanent --add-port=1194/udp
 # Shadowsocks
 firewall-cmd --permanent --add-port=8388/tcp
 
-# XRay
+# XRay VLESS+REALITY (default 48721)
+firewall-cmd --permanent --add-port=48721/tcp
+
+# XRay XHTTP+Nginx
+firewall-cmd --permanent --add-port=80/tcp
 firewall-cmd --permanent --add-port=443/tcp
 
 # Apply
@@ -276,7 +291,11 @@ iptables -A INPUT -p udp --dport 1194 -j ACCEPT
 # Shadowsocks
 iptables -A INPUT -p tcp --dport 8388 -j ACCEPT
 
-# XRay
+# XRay VLESS+REALITY (default 48721)
+iptables -A INPUT -p tcp --dport 48721 -j ACCEPT
+
+# XRay XHTTP+Nginx
+iptables -A INPUT -p tcp --dport 80 -j ACCEPT
 iptables -A INPUT -p tcp --dport 443 -j ACCEPT
 
 # Save

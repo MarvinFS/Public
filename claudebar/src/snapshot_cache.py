@@ -21,10 +21,17 @@ def get_cache_path() -> Path:
 
 @dataclass
 class CachedSnapshot:
-    """Container for cached snapshots with timestamp."""
+    """Container for cached snapshots with per-engine timestamps.
+
+    `cached_at` is kept for backward-compat reads only; per-engine
+    `claude_cached_at` / `openai_cached_at` are authoritative so that
+    refreshing one engine does not falsify the staleness of the other.
+    """
     claude: Optional[dict] = None
     openai: Optional[dict] = None
-    cached_at: str = ""  # ISO format timestamp
+    cached_at: str = ""  # ISO timestamp - legacy, fallback for old caches
+    claude_cached_at: str = ""
+    openai_cached_at: str = ""
 
 
 def _usage_snapshot_to_dict(snapshot: UsageSnapshot) -> dict:
@@ -167,7 +174,12 @@ def _dict_to_openai_snapshot(data: dict, is_stale: bool = False, stale_since: Op
 
 
 def save_cache(claude: Optional[UsageSnapshot] = None, openai: Optional[OpenAISnapshot] = None) -> None:
-    """Save snapshots to cache file, merging with existing data."""
+    """Save snapshots to cache file, merging with existing data.
+
+    Only the engine being saved gets its `*_cached_at` bumped — the other
+    engine's freshness is preserved so a Claude refresh does not make
+    stale Codex data look fresh (and vice versa).
+    """
     cache_path = get_cache_path()
     cache_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -180,10 +192,15 @@ def save_cache(claude: Optional[UsageSnapshot] = None, openai: Optional[OpenAISn
     except (json.JSONDecodeError, OSError):
         pass
 
+    now_iso = datetime.now().isoformat()
+    legacy = existing.get("cached_at", "")
+
     cached = CachedSnapshot(
         claude=_usage_snapshot_to_dict(claude) if claude else existing.get("claude"),
         openai=_openai_snapshot_to_dict(openai) if openai else existing.get("openai"),
-        cached_at=datetime.now().isoformat(),
+        cached_at=now_iso,
+        claude_cached_at=now_iso if claude else (existing.get("claude_cached_at") or legacy),
+        openai_cached_at=now_iso if openai else (existing.get("openai_cached_at") or legacy),
     )
 
     try:
@@ -193,13 +210,24 @@ def save_cache(claude: Optional[UsageSnapshot] = None, openai: Optional[OpenAISn
         pass  # Silently fail on cache write errors
 
 
+def _parse_iso(s: str) -> Optional[datetime]:
+    try:
+        return datetime.fromisoformat(s) if s else None
+    except (ValueError, TypeError):
+        return None
+
+
 def load_cache() -> tuple[Optional[UsageSnapshot], Optional[OpenAISnapshot], Optional[datetime]]:
     """Load cached snapshots from file.
 
+    Each snapshot's `stale_since` reflects when THAT engine was last
+    successfully fetched (via per-engine timestamps), so refreshing one
+    engine does not falsely advertise the other as fresh.
+
     Returns:
         Tuple of (claude_snapshot, openai_snapshot, cached_at).
-        All values may be None if no cache exists.
-        Snapshots will have is_stale=True and stale_since set.
+        `cached_at` is the most recent of the two per-engine timestamps,
+        kept for callers that want a single "anything updated" marker.
     """
     cache_path = get_cache_path()
 
@@ -210,15 +238,21 @@ def load_cache() -> tuple[Optional[UsageSnapshot], Optional[OpenAISnapshot], Opt
         with open(cache_path, "r", encoding="utf-8") as f:
             data = json.load(f)
 
-        cached_at = datetime.fromisoformat(data.get("cached_at", ""))
+        legacy_at = _parse_iso(data.get("cached_at", ""))
+        claude_at = _parse_iso(data.get("claude_cached_at", "")) or legacy_at
+        openai_at = _parse_iso(data.get("openai_cached_at", "")) or legacy_at
 
         claude = None
         if data.get("claude"):
-            claude = _dict_to_usage_snapshot(data["claude"], is_stale=True, stale_since=cached_at)
+            claude = _dict_to_usage_snapshot(data["claude"], is_stale=True, stale_since=claude_at)
 
         openai = None
         if data.get("openai"):
-            openai = _dict_to_openai_snapshot(data["openai"], is_stale=True, stale_since=cached_at)
+            openai = _dict_to_openai_snapshot(data["openai"], is_stale=True, stale_since=openai_at)
+
+        # Most recent of the two for the legacy single-marker return slot
+        candidates = [t for t in (claude_at, openai_at) if t is not None]
+        cached_at = max(candidates) if candidates else legacy_at
 
         return claude, openai, cached_at
 

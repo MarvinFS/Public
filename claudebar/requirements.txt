@@ -3,4 +3,3 @@ Pillow>=10.0.0
 pyinstaller>=6.0.0
 pytest>=8.0.0
 pytest-cov>=4.1.0
-pywinpty>=2.0.0

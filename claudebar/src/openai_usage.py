@@ -1,14 +1,29 @@
 """Fetch OpenAI/Codex usage data via OAuth API."""
 
+import base64
 import json
 import os
 import urllib.request
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 from pathlib import Path
 
 from retry import with_retry
+
+
+def _jwt_exp(token: str) -> Optional[datetime]:
+    """Decode a JWT and return its `exp` claim as a tz-aware UTC datetime."""
+    try:
+        payload = token.split(".")[1]
+        payload += "=" * (-len(payload) % 4)
+        claims = json.loads(base64.urlsafe_b64decode(payload))
+        exp = claims.get("exp")
+        if isinstance(exp, (int, float)):
+            return datetime.fromtimestamp(exp, timezone.utc)
+    except (ValueError, IndexError, json.JSONDecodeError, TypeError, UnicodeDecodeError):
+        pass
+    return None
 
 
 @dataclass
@@ -118,18 +133,14 @@ def load_codex_token() -> Optional[str]:
         if not access_token:
             return None
 
-        # Check if refresh is too old (8 days = token likely expired)
-        last_refresh = data.get("last_refresh")
-        if last_refresh:
-            try:
-                if last_refresh.endswith("Z"):
-                    last_refresh = last_refresh[:-1] + "+00:00"
-                refresh_dt = datetime.fromisoformat(last_refresh)
-                now = datetime.now(refresh_dt.tzinfo) if refresh_dt.tzinfo else datetime.now()
-                if (now - refresh_dt) > timedelta(days=8):
-                    return None  # Token likely expired
-            except (ValueError, TypeError):
-                pass
+        # Check the JWT's actual `exp` claim. Codex CLI refreshes lazily, so
+        # `last_refresh` age is NOT a reliable proxy for token validity — the
+        # token can be days-old in last_refresh but still valid for hours.
+        exp = _jwt_exp(access_token)
+        if exp is not None:
+            now = datetime.now(timezone.utc)
+            if now >= exp - timedelta(seconds=60):
+                return None  # Actually expired (or expiring within 60s)
 
         return access_token
     except (json.JSONDecodeError, KeyError, TypeError):

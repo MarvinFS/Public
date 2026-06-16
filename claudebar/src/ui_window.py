@@ -1287,8 +1287,17 @@ class ClaudeBarWindow:
 
         currency = self.config.currency
 
-        # Update progress bars (animate=False to ensure immediate rendering)
-        collecting_text = "Collecting..." if (session_pct == 0 and weekly_pct == 0 and self._is_collecting and not is_stale) else None
+        # Update progress bars (animate=False to ensure immediate rendering).
+        # When there's no usable data, show a placeholder instead of a misleading
+        # "0% used": "Collecting..." on the first cycle, "Unavailable" once OAuth
+        # is confirmed down with no cache (Claude snapshot present but cli_available False).
+        collecting_text = None
+        if session_pct == 0 and weekly_pct == 0 and not is_stale:
+            if self._is_collecting:
+                collecting_text = "Collecting..."
+            elif (self._active_engine == Engine.CLAUDE and snapshot
+                    and not snapshot.cli_available):
+                collecting_text = "Unavailable"
         if self._session_bar and self._session_label:
             self._session_bar.set_value(session_pct, animate=False)
             self._session_label.config(
@@ -1366,9 +1375,10 @@ class ClaudeBarWindow:
                 self._updated_label.config(text=f"{engine_name} · Collecting fresh data...")
             else:
                 self._updated_label.config(text=f"{engine_name} · Updated at {time_str}")
-            # Only clear collecting flag when we have fresh (non-stale) data
-            if not is_stale:
-                self._is_collecting = False
+            # Clear once any snapshot has been applied (stale or fresh); token gaps
+            # are now common, so don't pin "Collecting..." forever - the separate
+            # stale label keeps communicating staleness.
+            self._is_collecting = False
 
         # Update stale indicator
         if self._stale_label:

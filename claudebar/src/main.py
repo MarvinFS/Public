@@ -21,6 +21,18 @@ if sys.platform == "win32":
         except Exception:
             pass
 
+    # Suppress Windows hard-error dialogs (e.g. a child's DLL-init 0xc0000142) so a
+    # failed 'claude auth status' spawn can't pop a modal box. Own try (not chained
+    # after SetProcessDpiAwareness, which can throw); OR into the current mode to keep
+    # existing flags. Children inherit this (subprocess doesn't set CREATE_DEFAULT_ERROR_MODE).
+    try:
+        import ctypes
+        k = ctypes.windll.kernel32
+        # SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX
+        k.SetErrorMode(k.GetErrorMode() | 0x0001 | 0x0002 | 0x8000)
+    except Exception:
+        pass
+
 # Add src directory to path for imports
 src_dir = Path(__file__).parent
 if str(src_dir) not in sys.path:
@@ -42,6 +54,7 @@ class ClaudeBar:
         self.tray: Optional[TrayManager] = None
         self._running = False
         self._refresh_thread: Optional[threading.Thread] = None
+        self._refresh_lock = threading.Lock()
 
     def _load_cached_initial(self) -> None:
         """Load cached data for immediate display on startup."""
@@ -64,12 +77,18 @@ class ClaudeBar:
 
     def _refresh(self) -> None:
         """Refresh usage data and update tray."""
+        # Single-flight: refresh loop, manual button and engine-change all call this
+        # on separate threads; skip overlapping calls instead of stacking collects.
+        if not self._refresh_lock.acquire(blocking=False):
+            return
         try:
             combined = self.collector.collect_combined()
             if self.tray:
                 self.tray.update_combined(combined)
         except Exception as e:
             get_logger().error(f"Refresh error: {e}")
+        finally:
+            self._refresh_lock.release()
 
     def _on_engine_change(self, engine: Engine) -> None:
         """Handle engine change from UI."""

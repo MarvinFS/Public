@@ -1,10 +1,10 @@
 """Fetch Claude usage data via OAuth API."""
 
 import json
+import time
 import urllib.request
-import urllib.parse
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Optional
 from pathlib import Path
 
@@ -88,127 +88,57 @@ def get_credentials_path() -> Path:
     return Path.home() / ".claude" / ".credentials.json"
 
 
-def load_credentials() -> tuple[Optional[str], Optional[str], Optional[datetime]]:
+def load_credentials() -> tuple[Optional[str], Optional[float]]:
     """Load OAuth credentials from file.
 
     Returns:
-        Tuple of (access_token, refresh_token, expires_at).
+        Tuple of (access_token, expires_at_ms). expires_at_ms is epoch
+        milliseconds when present and numeric, else None.
     """
     creds_path = get_credentials_path()
 
     if not creds_path.exists():
-        return None, None, None
+        return None, None
 
     try:
         with open(creds_path, "r", encoding="utf-8") as f:
             data = json.load(f)
 
-        oauth_data = data.get("claudeAiOauth", {})
-        access_token = oauth_data.get("accessToken")
-        refresh_token = oauth_data.get("refreshToken")
+        oauth = data.get("claudeAiOauth")
+        if not isinstance(oauth, dict):
+            oauth = {}
 
-        expires_dt = None
-        expires_at = oauth_data.get("expiresAt", 0)
-        if expires_at > 0:
-            expires_dt = datetime.fromtimestamp(expires_at / 1000)
+        access_token = oauth.get("accessToken")
 
-        return access_token, refresh_token, expires_dt
-    except (json.JSONDecodeError, KeyError, TypeError):
-        return None, None, None
+        # Only treat expiresAt as expiry when it is a real number (a JSON bool is
+        # an int subclass in Python, so exclude it); tolerate None/string/missing.
+        expires_at = oauth.get("expiresAt")
+        if isinstance(expires_at, bool) or not isinstance(expires_at, (int, float)):
+            expires_at = None
 
-
-def save_credentials(access_token: str, refresh_token: str, expires_at: datetime) -> bool:
-    """Save updated OAuth credentials to file.
-
-    Merges into existing claudeAiOauth dict to preserve fields like
-    scopes, subscriptionType, rateLimitTier added by recent CLI versions.
-    """
-    creds_path = get_credentials_path()
-
-    try:
-        # Read existing data
-        data = {}
-        if creds_path.exists():
-            with open(creds_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-
-        # Merge into existing OAuth dict instead of replacing
-        oauth = data.get("claudeAiOauth", {})
-        oauth["accessToken"] = access_token
-        oauth["refreshToken"] = refresh_token
-        oauth["expiresAt"] = int(expires_at.timestamp() * 1000)
-        data["claudeAiOauth"] = oauth
-
-        # Write back
-        with open(creds_path, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2)
-
-        return True
-    except (OSError, IOError, json.JSONDecodeError):
-        return False
+        return access_token, expires_at
+    except (json.JSONDecodeError, OSError, TypeError):
+        return None, None
 
 
-@with_retry(max_attempts=3, base_delay=1.0)
-def refresh_access_token(refresh_token: str) -> Optional[tuple[str, str, datetime]]:
-    """Refresh the access token using refresh_token.
-
-    Returns:
-        Tuple of (new_access_token, new_refresh_token, new_expires_at) or None on failure.
-    """
-    url = "https://api.anthropic.com/api/oauth/token"
-
-    headers = {
-        "Content-Type": "application/x-www-form-urlencoded",
-        "User-Agent": "ClaudeBar/1.0",
-    }
-
-    # OAuth refresh token request body
-    body = urllib.parse.urlencode({
-        "grant_type": "refresh_token",
-        "refresh_token": refresh_token,
-    }).encode("utf-8")
-
-    try:
-        req = urllib.request.Request(url, data=body, headers=headers, method="POST")
-
-        with urllib.request.urlopen(req, timeout=10) as response:
-            data = json.loads(response.read().decode("utf-8"))
-
-        new_access_token = data.get("access_token")
-        new_refresh_token = data.get("refresh_token", refresh_token)  # May not be returned
-        expires_in = data.get("expires_in", 28800)  # Default 8 hours
-
-        if not new_access_token:
-            return None
-
-        expires_at = datetime.now() + timedelta(seconds=expires_in)
-        return new_access_token, new_refresh_token, expires_at
-
-    except (urllib.error.HTTPError, urllib.error.URLError, json.JSONDecodeError):
-        return None
+# Skew before expiry: don't hand out a token that could die mid-request.
+SKEW_MS = 30_000
 
 
 def load_access_token() -> Optional[str]:
-    """Load OAuth access token from credentials file, refreshing if expired."""
-    access_token, refresh_token, expires_dt = load_credentials()
+    """Return the current OAuth access token, or None if absent/expired.
+
+    ClaudeBar is a passive reader - Claude Code owns token refresh on the shared
+    credentials file. We re-read fresh each call and skip a token within SKEW_MS
+    of expiry; on a token gap the caller falls back to cached usage data.
+    """
+    access_token, expires_at_ms = load_credentials()
 
     if not access_token:
         return None
 
-    # Check if token is expired or about to expire (within 5 minutes)
-    if expires_dt:
-        buffer_time = timedelta(minutes=5)
-        if datetime.now() > (expires_dt - buffer_time):
-            # Token expired or about to expire, try to refresh
-            if refresh_token:
-                result = refresh_access_token(refresh_token)
-                if result:
-                    new_access_token, new_refresh_token, new_expires_at = result
-                    # Save updated credentials
-                    if save_credentials(new_access_token, new_refresh_token, new_expires_at):
-                        return new_access_token
-            # Refresh failed or no refresh token
-            return None
+    if expires_at_ms is not None and time.time() * 1000 >= (expires_at_ms - SKEW_MS):
+        return None
 
     return access_token
 

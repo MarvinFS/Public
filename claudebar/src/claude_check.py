@@ -4,8 +4,8 @@ import json
 import logging
 import os
 import subprocess
+import time
 from dataclasses import dataclass
-from datetime import datetime, timedelta
 from typing import Optional
 
 from config import find_claude_cli, get_claude_dir
@@ -75,7 +75,8 @@ def check_credentials() -> tuple[bool, Optional[dict], Optional[str]]:
 
     Returns:
         Tuple of (is_valid, credentials_dict, error_message).
-        is_valid is True only if we can obtain a working access token.
+        is_valid is True only if a usable (apiKey or unexpired OAuth) token exists.
+        Claude Code owns token refresh; an expired OAuth token reports "Token expired".
     """
     creds_path = get_claude_dir() / ".credentials.json"
 
@@ -90,36 +91,19 @@ def check_credentials() -> tuple[bool, Optional[dict], Optional[str]]:
             return True, creds, None
 
         oauth_data = creds.get("claudeAiOauth")
-        if not oauth_data:
+        if not isinstance(oauth_data, dict):
             return False, creds, "No OAuth credentials found"
 
         access_token = oauth_data.get("accessToken")
         if not access_token:
             return False, creds, "No access token"
 
-        expires_at = oauth_data.get("expiresAt", 0)
-        if expires_at > 0:
-            expires_dt = datetime.fromtimestamp(expires_at / 1000)
-            buffer_time = timedelta(minutes=5)
-
-            if datetime.now() > (expires_dt - buffer_time):
-                refresh_token = oauth_data.get("refreshToken")
-                if not refresh_token:
-                    return False, creds, "Token expired, no refresh token"
-
-                try:
-                    from oauth_usage import refresh_access_token, save_credentials
-                    result = refresh_access_token(refresh_token)
-                    if result:
-                        new_access, new_refresh, new_expires = result
-                        save_credentials(new_access, new_refresh, new_expires)
-                        with open(creds_path, "r", encoding="utf-8") as f:
-                            creds = json.load(f)
-                        return True, creds, None
-                    else:
-                        return False, creds, "Token refresh failed"
-                except Exception as e:
-                    return False, creds, f"Token refresh error: {str(e)}"
+        # Only treat expiresAt as expiry when it is a real number (a JSON bool is
+        # an int subclass, so exclude it). 5-minute skew matches the OAuth reader.
+        expires_at = oauth_data.get("expiresAt")
+        if not isinstance(expires_at, bool) and isinstance(expires_at, (int, float)):
+            if time.time() * 1000 >= (expires_at - 300_000):
+                return False, creds, "Token expired"
 
         return True, creds, None
     except (json.JSONDecodeError, IOError) as e:

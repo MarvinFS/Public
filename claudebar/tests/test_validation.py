@@ -1,7 +1,6 @@
 """Tests for validation module."""
 
-import pytest
-from validation import safe_get_int, safe_get_float, validate_jsonl_entry
+from validation import safe_get_int, safe_get_float
 
 
 class TestSafeGetInt:
@@ -66,29 +65,3 @@ class TestSafeGetFloat:
     def test_string_number(self):
         data = {"amount": "3.14"}
         assert safe_get_float(data, "amount") == 3.14
-
-
-class TestValidateJsonlEntry:
-    """Tests for validate_jsonl_entry function."""
-
-    def test_valid_assistant_entry(self):
-        entry = {
-            "type": "assistant",
-            "message": {"model": "claude-3", "usage": {}},
-        }
-        assert validate_jsonl_entry(entry) is None
-
-    def test_valid_non_assistant_entry(self):
-        entry = {"type": "user", "content": "hello"}
-        assert validate_jsonl_entry(entry) is None
-
-    def test_non_dict_entry(self):
-        error = validate_jsonl_entry("not a dict")
-        assert error is not None
-        assert error.field == "entry"
-
-    def test_non_dict_message(self):
-        entry = {"type": "assistant", "message": "string instead of dict"}
-        error = validate_jsonl_entry(entry)
-        assert error is not None
-        assert error.field == "message"

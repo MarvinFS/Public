@@ -140,7 +140,7 @@ class ClaudeBar:
         self._refresh_thread.start()
 
         # Run tray in background thread (so tkinter can use main thread)
-        tray_thread = self.tray.start_detached()
+        self.tray.start_detached()
 
         # Run tkinter mainloop in main thread (required for Windows)
         try:

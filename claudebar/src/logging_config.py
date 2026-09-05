@@ -3,7 +3,6 @@
 import logging
 import sys
 import re
-from pathlib import Path
 from logging.handlers import RotatingFileHandler
 from config import get_config_dir
 

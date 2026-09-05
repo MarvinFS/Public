@@ -110,20 +110,6 @@ def check_credentials() -> tuple[bool, Optional[dict], Optional[str]]:
         return False, None, f"Error reading credentials: {str(e)}"
 
 
-def get_settings_info() -> dict:
-    """Get info from Claude settings."""
-    settings_path = get_claude_dir() / "settings.json"
-
-    if not settings_path.exists():
-        return {}
-
-    try:
-        with open(settings_path, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except (json.JSONDecodeError, IOError):
-        return {}
-
-
 def check_claude_status() -> ClaudeStatus:
     """Perform a comprehensive check of Claude Code status.
 
@@ -173,20 +159,3 @@ def check_claude_status() -> ClaudeStatus:
             )
 
     return status
-
-
-def get_status_message(status: ClaudeStatus) -> str:
-    """Get a human-readable status message."""
-    if not status.installed:
-        return "Claude CLI not installed"
-
-    if not status.authenticated:
-        return "Not logged in"
-
-    parts = ["Connected"]
-    if status.plan:
-        parts.append(f"({status.plan})")
-    if status.organization:
-        parts.append(f"- {status.organization}")
-
-    return " ".join(parts)

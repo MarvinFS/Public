@@ -1,16 +1,15 @@
 """System tray icon and menu management."""
 
-import sys
 import threading
-from pathlib import Path
 from typing import Callable, Optional
 
 from PIL import Image
 import pystray
 
 from models import UsageSnapshot, CombinedSnapshot, Engine
-from config import Config
+from config import Config, get_resources_path
 from icons import create_premium_icon
+from pricing import format_tokens
 
 try:
     from ui_window import ClaudeBarWindow
@@ -23,18 +22,8 @@ except ImportError:
 _tray_lock = threading.Lock()
 
 
-def _get_resources_path() -> Path:
-    """Get the resources path, works both in dev and bundled exe."""
-    if getattr(sys, 'frozen', False):
-        # Running as bundled exe
-        return Path(sys._MEIPASS) / "resources"
-    else:
-        # Running in development
-        return Path(__file__).parent.parent / "resources"
-
-
 # Custom app icon path
-_CUSTOM_ICON_PATH = _get_resources_path() / "icons" / "app_icon.png"
+_CUSTOM_ICON_PATH = get_resources_path() / "icons" / "app_icon.png"
 
 
 def create_icon(status: str = "normal", percent: Optional[float] = None) -> Image.Image:
@@ -85,15 +74,6 @@ class TrayManager:
                 config=self._config,
             )
 
-    def _format_tokens(self, total_tokens: int) -> str:
-        """Format token count with appropriate suffix."""
-        if total_tokens >= 1_000_000:
-            return f"{total_tokens / 1_000_000:.1f}M tokens"
-        elif total_tokens >= 1_000:
-            return f"{total_tokens / 1_000:.1f}K tokens"
-        else:
-            return f"{total_tokens} tokens"
-
     def _create_menu(self) -> pystray.Menu:
         """Create the context menu."""
         items = []
@@ -123,19 +103,19 @@ class TrayManager:
             # Show today's tokens
             total_tokens = self._snapshot.today_tokens.total_tokens
             if total_tokens > 0:
-                token_str = self._format_tokens(total_tokens)
-                items.append(pystray.MenuItem(f"  {token_str}", None, enabled=False))
+                items.append(pystray.MenuItem(f"  {format_tokens(total_tokens)} tokens", None, enabled=False))
 
         # OpenAI usage summary
         if self._combined and self._combined.openai and self._combined.openai.available:
             items.append(pystray.Menu.SEPARATOR)
             items.append(pystray.MenuItem("OpenAI", None, enabled=False))
             openai = self._combined.openai
-            items.append(pystray.MenuItem(
-                f"  Session: {openai.session_percent:.0f}% used",
-                None,
-                enabled=False,
-            ))
+            if openai.session_available:
+                items.append(pystray.MenuItem(
+                    f"  Session: {openai.session_percent:.0f}% used",
+                    None,
+                    enabled=False,
+                ))
             items.append(pystray.MenuItem(
                 f"  Weekly: {openai.weekly_percent:.0f}% used",
                 None,
@@ -143,8 +123,7 @@ class TrayManager:
             ))
             # Show today's tokens
             if openai.today_total_tokens > 0:
-                token_str = self._format_tokens(openai.today_total_tokens)
-                items.append(pystray.MenuItem(f"  {token_str}", None, enabled=False))
+                items.append(pystray.MenuItem(f"  {format_tokens(openai.today_total_tokens)} tokens", None, enabled=False))
 
         has_claude_stats = self._snapshot and self._snapshot.logs_available
         has_openai_stats = self._combined and self._combined.openai and self._combined.openai.available
@@ -235,7 +214,10 @@ class TrayManager:
         # OpenAI stats
         if self._combined and self._combined.openai and self._combined.openai.available:
             openai = self._combined.openai
-            lines.append(f"OpenAI: {openai.session_percent:.0f}%/{openai.weekly_percent:.0f}%")
+            if openai.session_available:
+                lines.append(f"OpenAI: {openai.session_percent:.0f}%/{openai.weekly_percent:.0f}%")
+            else:
+                lines.append(f"OpenAI: {openai.weekly_percent:.0f}% weekly")
 
         lines.append(f"Updated: {self._snapshot.timestamp.strftime('%H:%M')}")
 

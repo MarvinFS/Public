@@ -48,24 +48,28 @@ class ModelUsage:
     message_count: int = 0
 
 
-@dataclass
-class CLIUsageData:
-    """Data parsed from claude /usage command."""
-    session_percent: float = 0.0
-    session_reset: Optional[str] = None
-    weekly_percent: float = 0.0
-    weekly_reset: Optional[str] = None
-    raw_output: str = ""
-    parse_error: Optional[str] = None
+class _UsageStatus:
+    """Shared session/weekly status-level helpers for usage snapshots."""
 
     @property
-    def is_valid(self) -> bool:
-        """Check if CLI data was successfully parsed."""
-        return self.parse_error is None
+    def max_percent(self) -> float:
+        """Return the higher of session or weekly percentage."""
+        return max(self.session_percent, self.weekly_percent)
+
+    def get_status_level(self, warning_threshold: int = 80, critical_threshold: int = 95) -> str:
+        """Return status level: normal, warning, critical, or error."""
+        if self.error_message:
+            return "error"
+        pct = self.max_percent
+        if pct >= critical_threshold:
+            return "critical"
+        if pct >= warning_threshold:
+            return "warning"
+        return "normal"
 
 
 @dataclass
-class UsageSnapshot:
+class UsageSnapshot(_UsageStatus):
     """Complete usage snapshot combining all data sources."""
     timestamp: datetime = field(default_factory=datetime.now)
 
@@ -99,35 +103,20 @@ class UsageSnapshot:
     stale_since: Optional[datetime] = None
 
     @property
-    def max_percent(self) -> float:
-        """Return the higher of session or weekly percentage."""
-        return max(self.session_percent, self.weekly_percent)
-
-    def get_status_level(self, warning_threshold: int = 80, critical_threshold: int = 95) -> str:
-        """Return status level: normal, warning, critical, or error."""
-        if self.error_message:
-            return "error"
-        pct = self.max_percent
-        if pct >= critical_threshold:
-            return "critical"
-        if pct >= warning_threshold:
-            return "warning"
-        return "normal"
-
-    @property
     def status_level(self) -> str:
         """Return status level using default thresholds."""
         return self.get_status_level()
 
 
 @dataclass
-class OpenAISnapshot:
+class OpenAISnapshot(_UsageStatus):
     """OpenAI/Codex usage snapshot."""
     timestamp: datetime = field(default_factory=datetime.now)
 
     # Usage limits
     session_percent: float = 0.0
     session_reset: Optional[str] = None
+    session_available: bool = True  # False when the plan has no 5-hour window
     weekly_percent: float = 0.0
     weekly_reset: Optional[str] = None
 
@@ -163,22 +152,6 @@ class OpenAISnapshot:
     def month_total_tokens(self) -> int:
         return self.month_input_tokens + self.month_output_tokens
 
-    @property
-    def max_percent(self) -> float:
-        """Return the higher of session or weekly percentage."""
-        return max(self.session_percent, self.weekly_percent)
-
-    def get_status_level(self, warning_threshold: int = 80, critical_threshold: int = 95) -> str:
-        """Return status level: normal, warning, critical, or error."""
-        if self.error_message:
-            return "error"
-        pct = self.max_percent
-        if pct >= critical_threshold:
-            return "critical"
-        if pct >= warning_threshold:
-            return "warning"
-        return "normal"
-
 
 @dataclass
 class CombinedSnapshot:
@@ -187,14 +160,6 @@ class CombinedSnapshot:
     openai: Optional[OpenAISnapshot] = None
     active_engine: Engine = Engine.CLAUDE
     timestamp: datetime = field(default_factory=datetime.now)
-
-    @property
-    def active_snapshot(self) -> Optional[UsageSnapshot]:
-        """Get the currently active engine's snapshot as UsageSnapshot."""
-        if self.active_engine == Engine.CLAUDE:
-            return self.claude
-        # Convert OpenAI to UsageSnapshot-like interface for UI compatibility
-        return self.claude  # Fallback for now
 
     def get_session_percent(self) -> float:
         """Get session percent for active engine."""

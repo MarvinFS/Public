@@ -1,7 +1,7 @@
 """Parse Claude Code JSONL logs for token usage."""
 
 import json
-from datetime import datetime, date
+from datetime import datetime, date, timezone
 from pathlib import Path
 from typing import Iterator, Optional
 from collections import defaultdict
@@ -34,10 +34,15 @@ def parse_timestamp(ts_str: str) -> Optional[datetime]:
         return None
 
     try:
-        # Remove trailing Z and parse ISO format
-        return datetime.fromisoformat(ts_str.rstrip("Z"))
+        # Claude writes UTC timestamps (Z-suffixed). Parse as aware UTC and
+        # convert to local time so .date() buckets match date.today() and the
+        # local-date cost tracker; naive .date() mis-buckets near local midnight.
+        dt = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
     except (ValueError, TypeError):
         return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone()
 
 
 def extract_usage_from_entry(entry: dict) -> Optional[tuple[str, TokenUsage, datetime]]:

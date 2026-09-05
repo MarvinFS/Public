@@ -163,8 +163,6 @@ def format_currency(amount_usd: float, currency: str, rates: Optional[ExchangeRa
         return f"{symbol}{converted:.4f}"
     elif converted < 100:
         return f"{symbol}{converted:.2f}"
-    elif converted < 10000:
-        return f"{symbol}{converted:,.0f}"
     else:
         return f"{symbol}{converted:,.0f}"
 

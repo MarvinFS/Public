@@ -6,9 +6,9 @@ from typing import Optional
 
 import logging
 
-from models import UsageSnapshot, TokenUsage, OpenAISnapshot, CombinedSnapshot, Engine
+from models import UsageSnapshot, OpenAISnapshot, CombinedSnapshot, Engine
 from log_parser import get_today_usage, get_month_usage
-from stats_parser import get_local_stats, get_today_api_cost
+from stats_parser import get_today_api_cost
 from oauth_usage import fetch_oauth_usage, OAuthUsageData
 from openai_usage import fetch_openai_usage, is_codex_configured
 from codex_log_parser import get_today_codex_usage, get_month_codex_usage
@@ -162,6 +162,7 @@ class DataCollector:
             if openai_data.is_valid:
                 snapshot.session_percent = openai_data.session_percent
                 snapshot.session_reset = openai_data.session_reset
+                snapshot.session_available = openai_data.has_session_window
                 snapshot.weekly_percent = openai_data.weekly_percent
                 snapshot.weekly_reset = openai_data.weekly_reset
                 snapshot.credits_remaining = openai_data.credits_remaining
@@ -183,6 +184,7 @@ class DataCollector:
             if cached_openai:
                 snapshot.session_percent = cached_openai.session_percent
                 snapshot.session_reset = cached_openai.session_reset
+                snapshot.session_available = cached_openai.session_available
                 snapshot.weekly_percent = cached_openai.weekly_percent
                 snapshot.weekly_reset = cached_openai.weekly_reset
                 snapshot.credits_remaining = cached_openai.credits_remaining
@@ -253,57 +255,3 @@ class DataCollector:
     def is_openai_available() -> bool:
         """Check if OpenAI/Codex is configured."""
         return is_codex_configured()
-
-
-def format_snapshot_tooltip(snapshot: UsageSnapshot) -> str:
-    """Format a snapshot for display in system tray tooltip."""
-    lines = ["ClaudeBar"]
-
-    if snapshot.logs_available:
-        lines.append(f"Today: ${snapshot.today_cost_usd:.2f}")
-        lines.append(f"Month: ${snapshot.month_cost_usd:.2f}")
-        total_tokens = snapshot.today_tokens.total_tokens
-        if total_tokens > 0:
-            if total_tokens >= 1_000_000:
-                lines.append(f"Tokens: {total_tokens / 1_000_000:.1f}M")
-            elif total_tokens >= 1_000:
-                lines.append(f"Tokens: {total_tokens / 1_000:.1f}K")
-    else:
-        lines.append("No data available")
-
-    lines.append(f"Updated: {snapshot.timestamp.strftime('%H:%M')}")
-
-    return "\n".join(lines)
-
-
-def format_snapshot_detail(snapshot: UsageSnapshot) -> str:
-    """Format a snapshot for detailed menu display."""
-    lines = [f"Last updated: {snapshot.timestamp.strftime('%Y-%m-%d %H:%M:%S')}"]
-    lines.append("")
-
-    if snapshot.logs_available:
-        lines.append("=== Costs ===")
-        lines.append(f"Today: ${snapshot.today_cost_usd:.2f}")
-        lines.append(f"This month: ${snapshot.month_cost_usd:.2f}")
-        lines.append("")
-
-        lines.append("=== Today's Tokens ===")
-        lines.append(f"Input: {snapshot.today_tokens.input_tokens:,}")
-        lines.append(f"Output: {snapshot.today_tokens.output_tokens:,}")
-        lines.append(f"Cache read: {snapshot.today_tokens.cache_read_input_tokens:,}")
-        lines.append(f"Cache create: {snapshot.today_tokens.cache_creation_input_tokens:,}")
-
-        if snapshot.models_used:
-            lines.append("")
-            lines.append("=== Models Used ===")
-            for model in sorted(snapshot.models_used, key=lambda m: m.cost_usd, reverse=True):
-                short_name = model.model.split("-")[1] if "-" in model.model else model.model
-                lines.append(f"{short_name}: ${model.cost_usd:.2f} ({model.message_count} msgs)")
-    else:
-        lines.append("No usage data available")
-
-    if snapshot.error_message:
-        lines.append("")
-        lines.append(f"Errors: {snapshot.error_message}")
-
-    return "\n".join(lines)

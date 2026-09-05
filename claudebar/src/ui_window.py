@@ -4,58 +4,53 @@ import tkinter as tk
 from tkinter import ttk
 from typing import Optional, Callable
 import threading
-import webbrowser
 import io
 import urllib.request
-import sys
 from datetime import datetime
 from pathlib import Path
 
 from PIL import Image, ImageTk
 
 from models import UsageSnapshot, OpenAISnapshot, CombinedSnapshot, Engine
-from config import Config, save_config
+from config import Config, save_config, get_resources_path
 from currency import (
     format_currency, get_exchange_rates, get_supported_currencies,
-    get_currency_symbol, CURRENCIES, ExchangeRates
+    get_currency_symbol, ExchangeRates
 )
-from claude_check import check_claude_status, get_status_message, ClaudeStatus
+from claude_check import check_claude_status, ClaudeStatus
 from snapshot_cache import get_staleness_text
+from pricing import format_tokens
 
 # GitHub repository URL
 GITHUB_URL = "https://github.com/MarvinFS/Public/tree/main/claudebar"
 
 
-def _get_dpi_scale() -> float:
-    """Get the Windows DPI scale factor (1.0 = 100%, 1.5 = 150%, etc.)."""
-    if sys.platform != "win32":
-        return 1.0
-    try:
-        import ctypes
-        # Get DPI from the default monitor
-        hdc = ctypes.windll.user32.GetDC(0)
-        dpi = ctypes.windll.gdi32.GetDeviceCaps(hdc, 88)  # LOGPIXELSX
-        ctypes.windll.user32.ReleaseDC(0, hdc)
-        return dpi / 96.0  # 96 DPI = 100%
-    except Exception:
-        return 1.0
+# OpenAI /usage plan_type enum -> friendly label. Without a map, a raw or new
+# enum (e.g. "prolite", OpenAI's Pro Lite tier) leaks straight through .title().
+_PLAN_LABELS = {
+    "free": "Free",
+    "go": "Go",
+    "plus": "Plus",
+    "pro": "Pro",
+    "prolite": "Pro Lite",
+    "team": "Team",
+    "business": "Business",
+    "enterprise": "Enterprise",
+    "education": "Edu",
+}
 
 
-def _get_resources_path() -> Path:
-    """Get the resources path, works both in dev and bundled exe."""
-    if getattr(sys, 'frozen', False):
-        # Running as bundled exe
-        return Path(sys._MEIPASS) / "resources"
-    else:
-        # Running in development
-        return Path(__file__).parent.parent / "resources"
+def _plan_label(plan_type: str) -> str:
+    """Friendly display label for an OpenAI plan_type, with a graceful fallback
+    for enums we don't know yet (underscores -> spaces, title-cased)."""
+    return _PLAN_LABELS.get(plan_type.lower(), plan_type.replace("_", " ").title())
 
 
 # Custom app icon path
-_CUSTOM_ICON_PATH = _get_resources_path() / "icons" / "app_icon.png"
+_CUSTOM_ICON_PATH = get_resources_path() / "icons" / "app_icon.png"
 
 # Engine icon paths (local cache)
-_ICONS_DIR = _get_resources_path() / "icons"
+_ICONS_DIR = get_resources_path() / "icons"
 _CLAUDE_ICON_PATH = _ICONS_DIR / "claude_icon.png"
 _OPENAI_ICON_PATH = _ICONS_DIR / "openai_icon.png"
 
@@ -73,8 +68,6 @@ class ModernProgressBar(tk.Canvas):
         self.width = width
         self.height = height
         self._value = 0.0
-        self._target_value = 0.0
-        self._animation_id = None
 
         # Colors
         self.bg_color = "#252525"
@@ -117,17 +110,6 @@ class ModernProgressBar(tk.Canvas):
             b = int(60 + (68 - 60) * ((percent - 80) / 20))
         return f"#{r:02x}{g:02x}{b:02x}"
 
-    def _animate_step(self):
-        """Single animation step."""
-        diff = self._target_value - self._value
-        if abs(diff) < 0.5:
-            self._value = self._target_value
-            self._animation_id = None
-        else:
-            self._value += diff * 0.2
-            self._animation_id = self.after(16, self._animate_step)
-        self._redraw()
-
     def _redraw(self):
         """Redraw the progress bar."""
         self.delete("progress")
@@ -140,15 +122,10 @@ class ModernProgressBar(tk.Canvas):
                                        radius, fill=color, outline="",
                                        tags="progress")
 
-    def set_value(self, percent, animate=True):
+    def set_value(self, percent):
         """Set the progress bar value (0-100)."""
-        self._target_value = max(0, min(100, percent))
-        if animate:
-            if self._animation_id is None:
-                self._animate_step()
-        else:
-            self._value = self._target_value
-            self._redraw()
+        self._value = max(0, min(100, percent))
+        self._redraw()
 
 
 class SettingsDialog:
@@ -367,6 +344,8 @@ class ClaudeBarWindow:
         # UI elements
         self._status_indicator: Optional[tk.Label] = None
         self._status_text: Optional[tk.Label] = None
+        self._session_frame: Optional[tk.Frame] = None
+        self._weekly_frame: Optional[tk.Frame] = None
         self._session_bar: Optional[ModernProgressBar] = None
         self._weekly_bar: Optional[ModernProgressBar] = None
         self._session_label: Optional[tk.Label] = None
@@ -394,13 +373,12 @@ class ClaudeBarWindow:
         self._engine_label: Optional[tk.Label] = None
         self._engine_frame: Optional[tk.Frame] = None
 
-        # Transition overlay state (black overlay instead of alpha transparency)
-        self._transition_overlay: Optional[tk.Frame] = None
-        self._transition_id: Optional[str] = None
-        self._transition_direction: str = "out"  # "in" = showing overlay, "out" = hiding overlay
-        self._transition_progress: int = 0
-        self._pending_update_callback: Optional[Callable] = None
         self._last_extra_visible: Optional[bool] = None  # Track extra usage visibility
+        self._last_session_visible: Optional[bool] = None  # Track 5-hour row visibility
+
+        # Drag-to-move state (the window is borderless, so there is no title bar)
+        self._drag_origin: Optional[tuple] = None
+        self._user_position: Optional[tuple] = None  # Set once the user drags
 
         # Colors
         self.bg_color = "#0f0f0f"
@@ -470,20 +448,32 @@ class ClaudeBarWindow:
         self._create_cost_section(content)
         self._create_footer(content)
 
-        # Create black overlay for transitions (covers content during engine switch)
-        # Use place() to position absolutely covering entire window
-        self._transition_overlay = tk.Frame(self._window, bg="#000000")
-        self._transition_overlay.place(relx=0, rely=0, relwidth=1, relheight=1)
-        # Lower it below all content initially (hidden)
-        self._transition_overlay.lower()
-
-        # Bindings - FocusOut disabled as it interferes with button clicks
-        # self._window.bind('<FocusOut>', self._on_focus_out)
         self._window.bind('<Escape>', lambda e: self.hide())
+        # Bound on the toplevel, which sits in every child widget's bindtags, so
+        # the whole popup is a drag handle - it has no title bar to grab.
+        self._window.bind('<Button-1>', self._on_drag_start, add='+')
+        self._window.bind('<B1-Motion>', self._on_drag_move, add='+')
         self._window.withdraw()
 
         # Load initial data
         self._load_initial_data()
+
+    def _on_drag_start(self, event):
+        """Remember where the pointer grabbed the window."""
+        self._drag_origin = None
+        if self._window and self._window.winfo_exists():
+            self._drag_origin = (event.x_root, event.y_root,
+                                 self._window.winfo_x(), self._window.winfo_y())
+
+    def _on_drag_move(self, event):
+        """Move the window with the pointer and pin it there for later shows."""
+        if not self._drag_origin or not self._window.winfo_exists():
+            return
+        grab_x, grab_y, win_x, win_y = self._drag_origin
+        x = win_x + event.x_root - grab_x
+        y = win_y + event.y_root - grab_y
+        self._user_position = (x, y)
+        self._window.geometry(f"+{x}+{y}")
 
     def _update_window_size(self):
         """Update window size based on content and position near system tray."""
@@ -499,74 +489,16 @@ class ClaudeBarWindow:
         # Add some padding and ensure minimum height
         window_height = max(500, required_height + 4)  # +4 for border
 
-        # Position near system tray (bottom-right)
-        screen_width = self._window.winfo_screenwidth()
-        screen_height = self._window.winfo_screenheight()
-        x = screen_width - self._window_width - 20
-        y = screen_height - window_height - 60
+        # Keep wherever the user dragged it to; otherwise sit near the tray.
+        if self._user_position:
+            x, y = self._user_position
+        else:
+            screen_width = self._window.winfo_screenwidth()
+            screen_height = self._window.winfo_screenheight()
+            x = screen_width - self._window_width - 20
+            y = screen_height - window_height - 60
 
         self._window.geometry(f"{self._window_width}x{window_height}+{x}+{y}")
-
-    def _transition_step(self):
-        """Single step of overlay transition animation."""
-        if not self._window or not self._window.winfo_exists():
-            self._transition_id = None
-            self._pending_update_callback = None
-            return
-
-        # Move to next step
-        self._transition_progress += 1
-
-        if self._transition_direction == "in":
-            # Fading to black (showing overlay)
-            if self._transition_progress >= 6:  # ~100ms per phase
-                # Overlay fully visible, execute callback
-                self._transition_id = None
-                if self._pending_update_callback:
-                    callback = self._pending_update_callback
-                    self._pending_update_callback = None
-                    try:
-                        callback()
-                    except Exception as e:
-                        print(f"Transition callback error: {e}")
-                    # Start fade from black
-                    self._start_transition("out")
-            else:
-                self._transition_id = self._window.after(16, self._transition_step)
-        else:
-            # Fading from black (hiding overlay)
-            if self._transition_progress >= 6:  # ~100ms per phase
-                # Lower overlay back below content
-                if self._transition_overlay:
-                    self._transition_overlay.lower()
-                self._transition_id = None
-            else:
-                self._transition_id = self._window.after(16, self._transition_step)
-
-    def _start_transition(self, direction: str, callback: Optional[Callable] = None):
-        """Start overlay transition."""
-        self._transition_direction = direction
-        self._transition_progress = 0
-
-        if callback:
-            self._pending_update_callback = callback
-
-        if direction == "in" and self._transition_overlay:
-            # Lift overlay above content to cover it
-            self._transition_overlay.lift()
-
-        if self._transition_id is None:
-            self._transition_step()
-
-    def _fade_update(self, update_func: Callable):
-        """Cover content with black overlay, apply update, uncover."""
-        if not self._window or not self._window.winfo_viewable():
-            # Window not visible, just apply update directly
-            update_func()
-            return
-
-        # Start transition to black, with callback to apply changes
-        self._start_transition("in", update_func)
 
     def _load_initial_data(self):
         """Load exchange rates and Claude status."""
@@ -590,33 +522,6 @@ class ClaudeBarWindow:
         with self._lock:
             self._oauth_error = None
             self._status_needs_update = True
-
-    def _on_focus_out(self, event):
-        """Handle focus out event."""
-        # Don't hide if we're opening a link
-        if self._opening_link:
-            return
-        # Don't hide if focus went to a child widget (like a button)
-        if event.widget == self._window:
-            try:
-                focus_widget = self._window.focus_get()
-                if focus_widget is not None:
-                    return
-            except Exception:
-                pass
-            self._window.after(100, self._delayed_hide)
-
-    def _delayed_hide(self):
-        """Hide window after a small delay (allows button clicks to process)."""
-        if self._opening_link:
-            return
-        # Only hide if focus is truly outside the window
-        try:
-            focus = self._window.focus_get()
-            if focus is None:
-                self.hide()
-        except Exception:
-            self.hide()
 
     def _on_github_click(self, event):
         """Handle GitHub button click."""
@@ -779,21 +684,17 @@ class ClaudeBarWindow:
             bg = self.active_engine_bg if engine == Engine.CODEX else self.inactive_engine_bg
             self._openai_btn.config(bg=bg)
 
-        def apply_engine_change():
-            self._active_engine = engine
+        self._active_engine = engine
 
-            # Notify callback
-            if self.on_engine_change:
-                self.on_engine_change(engine)
+        # Notify callback
+        if self.on_engine_change:
+            self.on_engine_change(engine)
 
-            # Update status display for new engine
-            self._update_status_display()
+        # Update status display for new engine
+        self._update_status_display()
 
-            # Update display with current data (this will also resize)
-            self._refresh_display_immediate()
-
-        # Use fade transition for smooth content change
-        self._fade_update(apply_engine_change)
+        # Update display with current data (this will also resize)
+        self._refresh_display_immediate()
 
     def _create_status_section(self, parent):
         """Create Claude connection status section."""
@@ -891,7 +792,7 @@ class ClaudeBarWindow:
                     text = "Connected"
                     # Show plan type if available
                     if self._openai_snapshot.plan_type:
-                        text += f" · {self._openai_snapshot.plan_type.title()}"
+                        text += f" · {_plan_label(self._openai_snapshot.plan_type)}"
                     elif self._openai_snapshot.credits_remaining is not None:
                         text += f" · ${self._openai_snapshot.credits_remaining:.2f} credits"
                     self._status_text.config(text=text)
@@ -932,6 +833,7 @@ class ClaudeBarWindow:
         # Session usage
         session_frame = tk.Frame(parent, bg=self.bg_color)
         session_frame.pack(fill=tk.X, pady=(0, 14))
+        self._session_frame = session_frame
 
         session_header = tk.Frame(session_frame, bg=self.bg_color)
         session_header.pack(fill=tk.X, pady=(0, 6))
@@ -953,6 +855,7 @@ class ClaudeBarWindow:
         # Weekly usage
         weekly_frame = tk.Frame(parent, bg=self.bg_color)
         weekly_frame.pack(fill=tk.X)
+        self._weekly_frame = weekly_frame
 
         weekly_header = tk.Frame(weekly_frame, bg=self.bg_color)
         weekly_header.pack(fill=tk.X, pady=(0, 6))
@@ -1028,11 +931,11 @@ class ClaudeBarWindow:
                                      fg=self.text_tertiary, bg=self.bg_color)
         self._today_tokens.pack(side=tk.LEFT)
 
-        # Last 30 days
+        # Current calendar month
         month_row = tk.Frame(cost_frame, bg=self.bg_color)
         month_row.pack(fill=tk.X)
 
-        month_label = tk.Label(month_row, text="Last 30 days",
+        month_label = tk.Label(month_row, text="This month",
                               font=("Segoe UI", 10),
                               fg=self.text_muted, bg=self.bg_color)
         month_label.pack(side=tk.LEFT)
@@ -1116,10 +1019,6 @@ class ClaudeBarWindow:
         widget.bind("<Enter>", lambda e: widget.config(bg=hover))
         widget.bind("<Leave>", lambda e: widget.config(bg=normal))
 
-    def set_collecting(self, collecting: bool) -> None:
-        """Set collecting state for UI indicator."""
-        self._is_collecting = collecting
-
     def _on_refresh_click(self):
         """Handle refresh button."""
         self.on_refresh()
@@ -1167,14 +1066,6 @@ class ClaudeBarWindow:
         self.hide()
         self.on_exit()
 
-    def _format_tokens(self, tokens: int) -> str:
-        """Format token count."""
-        if tokens >= 1_000_000:
-            return f"{tokens / 1_000_000:.1f}M"
-        elif tokens >= 1_000:
-            return f"{tokens / 1_000:.0f}K"
-        return str(tokens)
-
     def update(self, snapshot: UsageSnapshot):
         """Queue snapshot update (thread-safe, can be called from any thread)."""
         with self._lock:
@@ -1215,24 +1106,10 @@ class ClaudeBarWindow:
         self._refresh_display()
 
     def _refresh_display(self):
-        """Refresh display, using fade if layout structure changes."""
+        """Refresh display (extra-usage visibility may change the layout/size)."""
         if not self._window or not self._window.winfo_exists():
             return
-
-        # Check if extra usage visibility will change (layout change)
-        new_extra_visible = False
-        if self._active_engine == Engine.CLAUDE and self._snapshot:
-            new_extra_visible = self._snapshot.extra_enabled
-
-        layout_changed = (self._last_extra_visible is not None and
-                         self._last_extra_visible != new_extra_visible)
-
-        if layout_changed and self._window.winfo_viewable():
-            # Use fade for layout changes
-            self._fade_update(self._refresh_display_immediate)
-        else:
-            # Direct update for data-only changes
-            self._refresh_display_immediate()
+        self._refresh_display_immediate()
 
     def _refresh_display_immediate(self):
         """Refresh the display immediately (no fade)."""
@@ -1243,6 +1120,7 @@ class ClaudeBarWindow:
         snapshot = None  # Track for extra usage visibility check
         is_stale = False
         stale_since = None
+        session_available = True  # Claude always reports a 5-hour window
         if self._active_engine == Engine.CLAUDE:
             snapshot = self._snapshot
             if not snapshot:
@@ -1275,6 +1153,7 @@ class ClaudeBarWindow:
             else:
                 session_pct = openai.session_percent
                 session_reset = openai.session_reset
+                session_available = openai.session_available
                 weekly_pct = openai.weekly_percent
                 weekly_reset = openai.weekly_reset
                 today_cost = openai.today_cost_usd  # From log parsing
@@ -1298,8 +1177,15 @@ class ClaudeBarWindow:
             elif (self._active_engine == Engine.CLAUDE and snapshot
                     and not snapshot.cli_available):
                 collecting_text = "Unavailable"
+
+        if self._session_frame and self._weekly_frame:
+            if session_available and not self._session_frame.winfo_manager():
+                self._session_frame.pack(fill=tk.X, pady=(0, 14), before=self._weekly_frame)
+            elif not session_available:
+                self._session_frame.pack_forget()
+
         if self._session_bar and self._session_label:
-            self._session_bar.set_value(session_pct, animate=False)
+            self._session_bar.set_value(session_pct)
             self._session_label.config(
                 text=collecting_text or f"5-Hour · {session_pct:.0f}% used"
             )
@@ -1310,7 +1196,7 @@ class ClaudeBarWindow:
                 self._session_reset.config(text="")
 
         if self._weekly_bar and self._weekly_label:
-            self._weekly_bar.set_value(weekly_pct, animate=False)
+            self._weekly_bar.set_value(weekly_pct)
             self._weekly_label.config(
                 text=collecting_text or f"Weekly · {weekly_pct:.0f}% used"
             )
@@ -1327,7 +1213,7 @@ class ClaudeBarWindow:
             if self._active_engine == Engine.CLAUDE and snapshot and snapshot.extra_enabled:
                 extra_visible = True
                 # Show extra usage frame
-                if not self._extra_frame.winfo_ismapped():
+                if not self._extra_frame.winfo_manager():
                     self._extra_frame.pack(fill=tk.X, after=self._weekly_bar.master)
 
                 # Update extra usage values
@@ -1336,7 +1222,7 @@ class ClaudeBarWindow:
                 extra_limit = snapshot.extra_limit
                 extra_currency = snapshot.extra_currency.upper()
 
-                self._extra_bar.set_value(extra_pct, animate=False)
+                self._extra_bar.set_value(extra_pct)
                 self._extra_label.config(text=f"Extra · {extra_pct:.0f}% used")
 
                 # Format amount with proper currency symbol
@@ -1344,27 +1230,27 @@ class ClaudeBarWindow:
                 self._extra_amount.config(text=f"{symbol}{extra_used:.2f} / {symbol}{extra_limit:.2f}")
             else:
                 # Hide extra usage frame
-                if self._extra_frame.winfo_ismapped():
+                if self._extra_frame.winfo_manager():
                     self._extra_frame.pack_forget()
 
         # Track if layout changed
-        layout_changed = self._last_extra_visible != extra_visible
+        layout_changed = (self._last_extra_visible != extra_visible
+                          or self._last_session_visible != session_available)
         self._last_extra_visible = extra_visible
+        self._last_session_visible = session_available
 
         # Update costs with currency conversion
         if self._today_cost:
             cost_str = format_currency(today_cost, currency, self._exchange_rates)
             self._today_cost.config(text=cost_str)
         if self._today_tokens:
-            tokens = self._format_tokens(today_tokens)
-            self._today_tokens.config(text=f"{tokens} tokens")
+            self._today_tokens.config(text=f"{format_tokens(today_tokens)} tokens")
 
         if self._month_cost:
             cost_str = format_currency(month_cost, currency, self._exchange_rates)
             self._month_cost.config(text=cost_str)
         if self._month_tokens:
-            tokens = self._format_tokens(month_tokens)
-            self._month_tokens.config(text=f"{tokens} tokens")
+            self._month_tokens.config(text=f"{format_tokens(month_tokens)} tokens")
 
         # Update timestamp and stale indicator
         if self._updated_label:

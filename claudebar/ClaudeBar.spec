@@ -8,7 +8,7 @@ a = Analysis(
     datas=[('resources', 'resources')],
     hiddenimports=[
         'config', 'data_collector', 'tray', 'models', 'oauth_usage',
-        'openai_usage', 'claude_check', 'cli_parser', 'codex_log_parser',
+        'openai_usage', 'claude_check', 'codex_log_parser',
         'codex_pricing', 'currency', 'icons', 'log_parser', 'pricing',
         'snapshot_cache', 'stats_parser', 'ui_window',
     ],

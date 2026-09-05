@@ -2,10 +2,10 @@
 
 import json
 import os
-from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
-from typing import Optional, Dict
+from typing import Optional
 
 from codex_pricing import calculate_cost
 from validation import safe_get_int
@@ -23,33 +23,18 @@ class CodexTokenUsage:
     output_tokens: int = 0
     reasoning_tokens: int = 0
     cost_usd: float = 0.0
-    model_usage: Dict[str, dict] = field(default_factory=dict)  # model -> {input, output, cached, reasoning}
 
     @property
     def total_tokens(self) -> int:
         return self.input_tokens + self.output_tokens
 
     def __add__(self, other: "CodexTokenUsage") -> "CodexTokenUsage":
-        # Merge model_usage dicts
-        merged_models = dict(self.model_usage)
-        for model, usage in other.model_usage.items():
-            if model in merged_models:
-                merged_models[model] = {
-                    "input": merged_models[model].get("input", 0) + usage.get("input", 0),
-                    "output": merged_models[model].get("output", 0) + usage.get("output", 0),
-                    "cached": merged_models[model].get("cached", 0) + usage.get("cached", 0),
-                    "reasoning": merged_models[model].get("reasoning", 0) + usage.get("reasoning", 0),
-                }
-            else:
-                merged_models[model] = dict(usage)
-
         return CodexTokenUsage(
             input_tokens=self.input_tokens + other.input_tokens,
             cached_input_tokens=self.cached_input_tokens + other.cached_input_tokens,
             output_tokens=self.output_tokens + other.output_tokens,
             reasoning_tokens=self.reasoning_tokens + other.reasoning_tokens,
             cost_usd=self.cost_usd + other.cost_usd,
-            model_usage=merged_models,
         )
 
 
@@ -132,12 +117,6 @@ def parse_session_file(file_path: Path) -> CodexTokenUsage:
                             output_tokens=output_tokens,
                             reasoning_tokens=reasoning_tokens,
                             cost_usd=cost,
-                            model_usage={model: {
-                                "input": input_tokens,
-                                "output": output_tokens,
-                                "cached": cached_tokens,
-                                "reasoning": reasoning_tokens,
-                            }},
                         )
                 except json.JSONDecodeError:
                     continue
@@ -173,16 +152,17 @@ def get_today_codex_usage(sessions_dir: Optional[Path] = None) -> CodexTokenUsag
     return total
 
 
-def get_month_codex_usage(sessions_dir: Optional[Path] = None, days: int = 30) -> CodexTokenUsage:
-    """Get token usage from the last N days of Codex sessions."""
+def get_month_codex_usage(sessions_dir: Optional[Path] = None) -> CodexTokenUsage:
+    """Get token usage for the current calendar month, so the figure resets on
+    the 1st - matching `log_parser.get_month_usage` on the Claude side."""
     if sessions_dir is None:
         sessions_dir = get_codex_sessions_dir()
 
     total = CodexTokenUsage()
     today = datetime.now()
 
-    for i in range(days):
-        date = today - timedelta(days=i)
+    for day in range(1, today.day + 1):
+        date = today.replace(day=day)
         session_files = get_sessions_for_date(sessions_dir, date)
 
         for file_path in session_files:

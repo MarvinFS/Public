@@ -26,11 +26,16 @@ def _jwt_exp(token: str) -> Optional[datetime]:
     return None
 
 
+# Anything longer than this is a weekly-style window, not a session one.
+_SESSION_WINDOW_MAX_SECONDS = 6 * 3600
+
+
 @dataclass
 class OpenAIUsageWindow:
     """Usage window with utilization and reset time."""
     percent: float = 0.0  # 0-100
     resets_at: Optional[datetime] = None
+    window_seconds: int = 0  # limit_window_seconds as reported by the API
 
     @property
     def reset_str(self) -> Optional[str]:
@@ -70,6 +75,11 @@ class OpenAIUsageData:
     def is_valid(self) -> bool:
         """Check if we have valid usage data."""
         return self.error is None and (self.five_hour is not None or self.weekly is not None)
+
+    @property
+    def has_session_window(self) -> bool:
+        """Whether the plan reports a 5-hour window at all (prolite does not)."""
+        return self.five_hour is not None
 
     @property
     def session_percent(self) -> float:
@@ -147,28 +157,16 @@ def load_codex_token() -> Optional[str]:
         return None
 
 
-def parse_reset_time(reset_info: dict) -> Optional[datetime]:
-    """Parse reset time from API response."""
-    if not reset_info:
+def _parse_window(raw: Optional[dict]) -> Optional[OpenAIUsageWindow]:
+    """Build a usage window from one `rate_limit.*_window` object."""
+    if not raw:
         return None
-
-    # Try parsing ISO timestamp
-    timestamp = reset_info.get("timestamp") or reset_info.get("resets_at")
-    if timestamp:
-        try:
-            if isinstance(timestamp, str):
-                if timestamp.endswith("Z"):
-                    timestamp = timestamp[:-1] + "+00:00"
-                return datetime.fromisoformat(timestamp)
-        except (ValueError, TypeError):
-            pass
-
-    # Try parsing seconds until reset
-    seconds = reset_info.get("seconds") or reset_info.get("seconds_until_reset")
-    if seconds and isinstance(seconds, (int, float)):
-        return datetime.now() + timedelta(seconds=seconds)
-
-    return None
+    reset_timestamp = raw.get("reset_at")
+    return OpenAIUsageWindow(
+        percent=float(raw.get("used_percent", 0)),
+        resets_at=datetime.fromtimestamp(reset_timestamp) if reset_timestamp else None,
+        window_seconds=int(raw.get("limit_window_seconds") or 0),
+    )
 
 
 @with_retry(max_attempts=3, base_delay=1.0)
@@ -193,7 +191,7 @@ def fetch_openai_usage(access_token: Optional[str] = None) -> OpenAIUsageData:
                 "limit_window_seconds": 604800,
                 "reset_after_seconds": 604579,
                 "reset_at": 1769204165
-            }
+            }  // may be null - see _parse_window
         }
     }
     """
@@ -224,31 +222,15 @@ def fetch_openai_usage(access_token: Optional[str] = None) -> OpenAIUsageData:
         # Parse rate_limit structure
         rate_limit = data.get("rate_limit", {})
 
-        # Parse primary window (5-hour / session limit)
-        five_hour = None
-        primary = rate_limit.get("primary_window")
-        if primary:
-            reset_at = None
-            reset_timestamp = primary.get("reset_at")
-            if reset_timestamp:
-                reset_at = datetime.fromtimestamp(reset_timestamp)
-            five_hour = OpenAIUsageWindow(
-                percent=float(primary.get("used_percent", 0)),
-                resets_at=reset_at,
-            )
-
-        # Parse secondary window (weekly limit)
-        weekly = None
-        secondary = rate_limit.get("secondary_window")
-        if secondary:
-            reset_at = None
-            reset_timestamp = secondary.get("reset_at")
-            if reset_timestamp:
-                reset_at = datetime.fromtimestamp(reset_timestamp)
-            weekly = OpenAIUsageWindow(
-                percent=float(secondary.get("used_percent", 0)),
-                resets_at=reset_at,
-            )
+        # `primary_window` used to always be the 5-hour window and
+        # `secondary_window` the weekly one. Since 2026 OpenAI returns the
+        # weekly window as `primary` with `secondary` null on some plans
+        # (e.g. prolite), so trust `limit_window_seconds` over the position
+        # and only fall back to the position when the length is missing.
+        five_hour = _parse_window(rate_limit.get("primary_window"))
+        weekly = _parse_window(rate_limit.get("secondary_window"))
+        if five_hour and five_hour.window_seconds > _SESSION_WINDOW_MAX_SECONDS:
+            five_hour, weekly = weekly, five_hour
 
         # Parse credits
         credits_data = data.get("credits", {})

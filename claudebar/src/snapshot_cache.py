@@ -5,7 +5,7 @@ OAuth tokens expire. Shows cached data with staleness indicators.
 """
 
 import json
-from dataclasses import dataclass, asdict, field
+from dataclasses import dataclass, asdict
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -34,45 +34,23 @@ class CachedSnapshot:
     openai_cached_at: str = ""
 
 
-def _usage_snapshot_to_dict(snapshot: UsageSnapshot) -> dict:
-    """Convert UsageSnapshot to JSON-serializable dict."""
-    data = {
-        "timestamp": snapshot.timestamp.isoformat(),
-        "session_percent": snapshot.session_percent,
-        "session_reset": snapshot.session_reset,
-        "weekly_percent": snapshot.weekly_percent,
-        "weekly_reset": snapshot.weekly_reset,
-        "extra_enabled": snapshot.extra_enabled,
-        "extra_percent": snapshot.extra_percent,
-        "extra_used": snapshot.extra_used,
-        "extra_limit": snapshot.extra_limit,
-        "extra_currency": snapshot.extra_currency,
-        "today_cost_usd": snapshot.today_cost_usd,
-        "month_cost_usd": snapshot.month_cost_usd,
-        "today_tokens": {
-            "input_tokens": snapshot.today_tokens.input_tokens,
-            "output_tokens": snapshot.today_tokens.output_tokens,
-            "cache_read_input_tokens": snapshot.today_tokens.cache_read_input_tokens,
-            "cache_creation_input_tokens": snapshot.today_tokens.cache_creation_input_tokens,
-        },
-        "month_tokens": {
-            "input_tokens": snapshot.month_tokens.input_tokens,
-            "output_tokens": snapshot.month_tokens.output_tokens,
-            "cache_read_input_tokens": snapshot.month_tokens.cache_read_input_tokens,
-            "cache_creation_input_tokens": snapshot.month_tokens.cache_creation_input_tokens,
-        },
-        "models_used": [
-            {
-                "model": m.model,
-                "cost_usd": m.cost_usd,
-                "message_count": m.message_count,
-            }
-            for m in snapshot.models_used
-        ],
-        "cli_available": snapshot.cli_available,
-        "logs_available": snapshot.logs_available,
-        "error_message": snapshot.error_message,
-    }
+def _json_default(o):
+    """JSON encoder hook for datetime fields produced by asdict()."""
+    if isinstance(o, datetime):
+        return o.isoformat()
+    raise TypeError(f"Not JSON serializable: {type(o)}")
+
+
+def _to_dict(snapshot) -> dict:
+    """Serialize a snapshot dataclass, dropping the volatile staleness fields.
+
+    The loader recomputes is_stale/stale_since from the cache timestamps, so
+    they are never persisted. Datetimes are handled by _json_default at dump
+    time; the loaders read every other field defensively with .get().
+    """
+    data = asdict(snapshot)
+    data.pop("is_stale", None)
+    data.pop("stale_since", None)
     return data
 
 
@@ -124,35 +102,13 @@ def _dict_to_usage_snapshot(data: dict, is_stale: bool = False, stale_since: Opt
     return snapshot
 
 
-def _openai_snapshot_to_dict(snapshot: OpenAISnapshot) -> dict:
-    """Convert OpenAISnapshot to JSON-serializable dict."""
-    return {
-        "timestamp": snapshot.timestamp.isoformat(),
-        "session_percent": snapshot.session_percent,
-        "session_reset": snapshot.session_reset,
-        "weekly_percent": snapshot.weekly_percent,
-        "weekly_reset": snapshot.weekly_reset,
-        "today_input_tokens": snapshot.today_input_tokens,
-        "today_output_tokens": snapshot.today_output_tokens,
-        "today_cached_tokens": snapshot.today_cached_tokens,
-        "today_reasoning_tokens": snapshot.today_reasoning_tokens,
-        "month_input_tokens": snapshot.month_input_tokens,
-        "month_output_tokens": snapshot.month_output_tokens,
-        "today_cost_usd": snapshot.today_cost_usd,
-        "month_cost_usd": snapshot.month_cost_usd,
-        "plan_type": snapshot.plan_type,
-        "credits_remaining": snapshot.credits_remaining,
-        "available": snapshot.available,
-        "error_message": snapshot.error_message,
-    }
-
-
 def _dict_to_openai_snapshot(data: dict, is_stale: bool = False, stale_since: Optional[datetime] = None) -> OpenAISnapshot:
     """Convert dict back to OpenAISnapshot."""
     snapshot = OpenAISnapshot(
         timestamp=datetime.fromisoformat(data.get("timestamp", datetime.now().isoformat())),
         session_percent=data.get("session_percent", 0.0),
         session_reset=data.get("session_reset"),
+        session_available=data.get("session_available", True),
         weekly_percent=data.get("weekly_percent", 0.0),
         weekly_reset=data.get("weekly_reset"),
         today_input_tokens=data.get("today_input_tokens", 0),
@@ -196,8 +152,8 @@ def save_cache(claude: Optional[UsageSnapshot] = None, openai: Optional[OpenAISn
     legacy = existing.get("cached_at", "")
 
     cached = CachedSnapshot(
-        claude=_usage_snapshot_to_dict(claude) if claude else existing.get("claude"),
-        openai=_openai_snapshot_to_dict(openai) if openai else existing.get("openai"),
+        claude=_to_dict(claude) if claude else existing.get("claude"),
+        openai=_to_dict(openai) if openai else existing.get("openai"),
         cached_at=now_iso,
         claude_cached_at=now_iso if claude else (existing.get("claude_cached_at") or legacy),
         openai_cached_at=now_iso if openai else (existing.get("openai_cached_at") or legacy),
@@ -205,7 +161,7 @@ def save_cache(claude: Optional[UsageSnapshot] = None, openai: Optional[OpenAISn
 
     try:
         with open(cache_path, "w", encoding="utf-8") as f:
-            json.dump(asdict(cached), f, indent=2)
+            json.dump(asdict(cached), f, indent=2, default=_json_default)
     except (OSError, IOError):
         pass  # Silently fail on cache write errors
 

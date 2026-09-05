@@ -2,6 +2,7 @@
 
 import json
 import os
+import sys
 from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Optional
@@ -20,6 +21,13 @@ class Config:
     # Engine toggles
     claude_enabled: bool = True
     codex_enabled: bool = True
+
+
+def get_resources_path() -> Path:
+    """Get the resources path, works both in dev and the bundled exe."""
+    if getattr(sys, "frozen", False):
+        return Path(sys._MEIPASS) / "resources"
+    return Path(__file__).parent.parent / "resources"
 
 
 def get_config_dir() -> Path:

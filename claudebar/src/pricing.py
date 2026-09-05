@@ -92,13 +92,6 @@ def calculate_cost(model: str, tokens: TokenUsage) -> float:
     return input_cost + output_cost + cache_read_cost + cache_creation_cost
 
 
-def format_cost(cost_usd: float) -> str:
-    """Format cost for display."""
-    if cost_usd < 0.01:
-        return f"${cost_usd:.4f}"
-    return f"${cost_usd:.2f}"
-
-
 def format_tokens(count: int) -> str:
     """Format token count for display (e.g., 1.2M, 500K)."""
     if count >= 1_000_000:

@@ -10,10 +10,6 @@ from typing import Optional
 from codex_pricing import calculate_cost
 from validation import safe_get_int
 
-# Parser safety limits
-MAX_JSONL_FILE_SIZE_MB = 100
-MAX_LINES_PER_FILE = 100_000
-
 
 @dataclass
 class CodexTokenUsage:
@@ -51,78 +47,60 @@ def parse_session_file(file_path: Path) -> CodexTokenUsage:
 
     Returns the final token count from the session (cumulative) with cost calculation.
     """
-    # Check file size first
-    try:
-        file_size_mb = file_path.stat().st_size / (1024 * 1024)
-        if file_size_mb > MAX_JSONL_FILE_SIZE_MB:
-            return CodexTokenUsage()
-    except OSError:
-        return CodexTokenUsage()
-
     usage = CodexTokenUsage()
-    model = "gpt-4o"  # Default model if not found
-    line_count = 0
+    # ponytail: last model wins; a session that switches models mid-way prices
+    # its whole total at the final one. Attribute per turn_id if that matters.
+    model = "default"
 
     try:
         with open(file_path, "r", encoding="utf-8") as f:
             for line in f:
-                if line_count >= MAX_LINES_PER_FILE:
-                    break
-                line_count += 1
-                line = line.strip()
-                if not line:
+                # Session files reach hundreds of MB on base64 payloads; only
+                # parse the two line kinds we need.
+                if '"turn_context"' not in line and '"token_count"' not in line:
                     continue
                 try:
                     entry = json.loads(line)
-
-                    # Extract model from conversation_item entries
-                    if entry.get("type") == "conversation_item":
-                        payload = entry.get("payload", {})
-                        if payload.get("model"):
-                            model = payload["model"]
-
-                    # Look for event_msg with token_count type
-                    if entry.get("type") != "event_msg":
-                        continue
-
-                    payload = entry.get("payload", {})
-                    if payload.get("type") != "token_count":
-                        continue
-
-                    # Get total_token_usage (cumulative for the session)
-                    info = payload.get("info")
-                    if not info:
-                        continue
-
-                    total_usage = info.get("total_token_usage", {})
-                    if total_usage:
-                        input_tokens = safe_get_int(total_usage, "input_tokens")
-                        cached_tokens = safe_get_int(total_usage, "cached_input_tokens")
-                        output_tokens = safe_get_int(total_usage, "output_tokens")
-                        reasoning_tokens = safe_get_int(total_usage, "reasoning_output_tokens")
-
-                        # Calculate cost for this session
-                        cost = calculate_cost(
-                            model=model,
-                            input_tokens=input_tokens,
-                            output_tokens=output_tokens,
-                            cached_input_tokens=cached_tokens,
-                            reasoning_tokens=reasoning_tokens,
-                        )
-
-                        # Update with latest cumulative values
-                        usage = CodexTokenUsage(
-                            input_tokens=input_tokens,
-                            cached_input_tokens=cached_tokens,
-                            output_tokens=output_tokens,
-                            reasoning_tokens=reasoning_tokens,
-                            cost_usd=cost,
-                        )
                 except json.JSONDecodeError:
                     continue
-    except (IOError, OSError):
-        pass
 
+                payload = entry.get("payload")
+                if not isinstance(payload, dict):
+                    continue
+
+                # The model in force for the turn.
+                if entry.get("type") == "turn_context":
+                    if payload.get("model"):
+                        model = payload["model"]
+                    continue
+
+                if entry.get("type") != "event_msg" or payload.get("type") != "token_count":
+                    continue
+
+                info = payload.get("info")
+                if not info:
+                    continue
+
+                total_usage = info.get("total_token_usage", {})
+                if not total_usage:
+                    continue
+
+                # Cumulative for the session - keep the latest, never sum.
+                usage = CodexTokenUsage(
+                    input_tokens=safe_get_int(total_usage, "input_tokens"),
+                    cached_input_tokens=safe_get_int(total_usage, "cached_input_tokens"),
+                    output_tokens=safe_get_int(total_usage, "output_tokens"),
+                    reasoning_tokens=safe_get_int(total_usage, "reasoning_output_tokens"),
+                )
+    except (IOError, OSError):
+        return CodexTokenUsage()
+
+    usage.cost_usd = calculate_cost(
+        model=model,
+        input_tokens=usage.input_tokens,
+        output_tokens=usage.output_tokens,
+        cached_input_tokens=usage.cached_input_tokens,
+    )
     return usage
 
 

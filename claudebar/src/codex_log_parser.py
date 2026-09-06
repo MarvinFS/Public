@@ -45,9 +45,14 @@ def get_codex_sessions_dir() -> Path:
 def parse_session_file(file_path: Path) -> CodexTokenUsage:
     """Parse a single Codex session JSONL file for token usage.
 
-    Returns the final token count from the session (cumulative) with cost calculation.
+    Returns the whole file's token usage, summed across resume epochs, with
+    cost calculation.
     """
-    usage = CodexTokenUsage()
+    # `codex resume` appends to the same file and restarts total_token_usage at
+    # zero, so a rollout holds one cumulative counter per run. Bank the epoch
+    # whenever the counter goes backwards and carry the sum.
+    banked = CodexTokenUsage()
+    epoch = CodexTokenUsage()
     # ponytail: last model wins; a session that switches models mid-way prices
     # its whole total at the final one. Attribute per turn_id if that matters.
     model = "default"
@@ -78,23 +83,38 @@ def parse_session_file(file_path: Path) -> CodexTokenUsage:
                     continue
 
                 info = payload.get("info")
-                if not info:
+                if not isinstance(info, dict):
                     continue
 
-                total_usage = info.get("total_token_usage", {})
-                if not total_usage:
+                total_usage = info.get("total_token_usage")
+                if not isinstance(total_usage, dict):
                     continue
 
-                # Cumulative for the session - keep the latest, never sum.
-                usage = CodexTokenUsage(
+                # Cumulative within the run - keep the latest, never sum.
+                latest = CodexTokenUsage(
                     input_tokens=safe_get_int(total_usage, "input_tokens"),
                     cached_input_tokens=safe_get_int(total_usage, "cached_input_tokens"),
                     output_tokens=safe_get_int(total_usage, "output_tokens"),
                     reasoning_tokens=safe_get_int(total_usage, "reasoning_output_tokens"),
                 )
+                # A restart's first record has spent nothing but the turn it
+                # just logged, so total <= last. A cumulative counter that dips
+                # while a run continues (seen once, a 1% correction after a
+                # resume re-derived its total) fails that and must not bank.
+                last_usage = info.get("last_token_usage")
+                fresh_run = True
+                if isinstance(last_usage, dict):
+                    fresh_run = latest.total_tokens <= (
+                        safe_get_int(last_usage, "input_tokens")
+                        + safe_get_int(last_usage, "output_tokens")
+                    )
+                if latest.total_tokens < epoch.total_tokens and fresh_run:
+                    banked = banked + epoch
+                epoch = latest
     except (IOError, OSError):
         return CodexTokenUsage()
 
+    usage = banked + epoch
     usage.cost_usd = calculate_cost(
         model=model,
         input_tokens=usage.input_tokens,

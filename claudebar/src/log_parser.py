@@ -11,10 +11,6 @@ from pricing import calculate_cost
 from config import get_claude_projects_dir
 from validation import safe_get_int
 
-# Parser safety limits
-MAX_JSONL_FILE_SIZE_MB = 100
-MAX_LINES_PER_FILE = 100_000
-
 
 def find_jsonl_files(projects_dir: Optional[Path] = None) -> Iterator[Path]:
     """Find all JSONL log files in the Claude projects directory."""
@@ -46,11 +42,16 @@ def parse_timestamp(ts_str: str) -> Optional[datetime]:
 
 
 def _usage_tokens(usage: dict) -> TokenUsage:
+    # cache_creation splits the write total by TTL; absent = all 5-minute.
+    cache_creation = usage.get("cache_creation")
+    if not isinstance(cache_creation, dict):
+        cache_creation = {}
     return TokenUsage(
         input_tokens=safe_get_int(usage, "input_tokens"),
         output_tokens=safe_get_int(usage, "output_tokens"),
         cache_read_input_tokens=safe_get_int(usage, "cache_read_input_tokens"),
         cache_creation_input_tokens=safe_get_int(usage, "cache_creation_input_tokens"),
+        cache_creation_1h_input_tokens=safe_get_int(cache_creation, "ephemeral_1h_input_tokens"),
     )
 
 
@@ -98,25 +99,16 @@ def extract_usage_from_entry(entry: dict) -> Optional[tuple[list, datetime, tupl
 
 
 def parse_jsonl_file(file_path: Path) -> Iterator[tuple[list, datetime, tuple]]:
-    """Parse a single JSONL file and yield usage entries."""
-    # Check file size first
-    try:
-        file_size_mb = file_path.stat().st_size / (1024 * 1024)
-        if file_size_mb > MAX_JSONL_FILE_SIZE_MB:
-            return
-    except OSError:
-        return
+    """Parse a single JSONL file and yield usage entries.
 
-    line_count = 0
+    No size or line caps: a transcript bloated by pasted images is still real
+    spend, and a cap silently drops it from the totals.
+    """
     try:
         with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
             for line in f:
-                if line_count >= MAX_LINES_PER_FILE:
-                    break
-                line_count += 1
-
-                line = line.strip()
-                if not line:
+                # Only assistant lines carry usage; skip the rest unparsed.
+                if '"assistant"' not in line:
                     continue
 
                 try:

@@ -8,11 +8,11 @@ import logging
 
 from models import UsageSnapshot, OpenAISnapshot, CombinedSnapshot, Engine
 from log_parser import get_today_usage, get_month_usage
-from stats_parser import get_today_api_cost
 from oauth_usage import fetch_oauth_usage, OAuthUsageData
 from openai_usage import fetch_openai_usage, is_codex_configured
 from codex_log_parser import get_today_codex_usage, get_month_codex_usage
 from config import get_claude_projects_dir
+import model_catalog
 from snapshot_cache import save_cache, load_cache
 
 logger = logging.getLogger("claudebar")
@@ -31,6 +31,7 @@ class DataCollector:
         self._active_engine: Engine = Engine.CLAUDE
         self._on_oauth_failure = on_oauth_failure
         self._on_oauth_success = on_oauth_success
+        self._pricing_source = "bundled"
 
     def set_oauth_callbacks(self, on_failure: Optional[callable] = None,
                             on_success: Optional[callable] = None) -> None:
@@ -104,21 +105,12 @@ class DataCollector:
             snapshot.month_tokens = month_tokens
             snapshot.month_cost_usd = month_cost
             snapshot.models_used = month_models
-            snapshot.logs_available = True
-
-            # Use JSONL-calculated cost as fallback
             snapshot.today_cost_usd = today_cost
+            snapshot.pricing_source = self._pricing_source
+            snapshot.logs_available = True
         except Exception as e:
             snapshot.logs_available = False
             errors.append(f"Logs: {str(e)}")
-
-        # Get API cost from daily_stats.json (preferred, more accurate for billing)
-        try:
-            api_cost = get_today_api_cost()
-            if api_cost > 0:
-                snapshot.today_cost_usd = api_cost
-        except Exception as e:
-            errors.append(f"Stats: {str(e)}")
 
         if errors and not snapshot.cli_available and not snapshot.logs_available:
             snapshot.error_message = "; ".join(errors)
@@ -205,6 +197,7 @@ class DataCollector:
             snapshot.month_input_tokens = month_usage.input_tokens
             snapshot.month_output_tokens = month_usage.output_tokens
             snapshot.month_cost_usd = month_usage.cost_usd
+            snapshot.pricing_source = self._pricing_source
         except Exception:
             pass  # Token counts are optional, don't fail if logs unavailable
 
@@ -223,6 +216,8 @@ class DataCollector:
 
     def collect_combined(self) -> CombinedSnapshot:
         """Collect data from Claude and OpenAI/Codex."""
+        # Refresh price tables first so both parsers below use the same rates.
+        self._pricing_source = "models.dev" if model_catalog.apply() else "bundled"
         claude_snapshot = self.collect()
         openai_snapshot = self.collect_openai()
 

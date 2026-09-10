@@ -899,7 +899,7 @@ class ClaudeBarWindow:
 
     def _create_cost_section(self, parent):
         """Create the cost information section."""
-        self._create_section_title(parent, "Costs")
+        self._create_section_title(parent, "API-equivalent cost")
 
         cost_frame = tk.Frame(parent, bg=self.bg_color)
         cost_frame.pack(fill=tk.X)
@@ -1134,6 +1134,7 @@ class ClaudeBarWindow:
             today_tokens = snapshot.today_tokens.total_tokens
             month_cost = snapshot.month_cost_usd
             month_tokens = snapshot.month_tokens.total_tokens
+            pricing_source = snapshot.pricing_source
             timestamp = snapshot.timestamp
             is_stale = snapshot.is_stale
             stale_since = snapshot.stale_since
@@ -1149,6 +1150,7 @@ class ClaudeBarWindow:
                 today_tokens = 0
                 month_cost = 0.0
                 month_tokens = 0
+                pricing_source = "bundled"
                 timestamp = datetime.now()
             else:
                 session_pct = openai.session_percent
@@ -1160,6 +1162,7 @@ class ClaudeBarWindow:
                 today_tokens = openai.today_total_tokens
                 month_cost = openai.month_cost_usd
                 month_tokens = openai.month_total_tokens
+                pricing_source = openai.pricing_source
                 timestamp = openai.timestamp
                 is_stale = openai.is_stale
                 stale_since = openai.stale_since
@@ -1260,7 +1263,9 @@ class ClaudeBarWindow:
             if self._is_collecting and is_stale:
                 self._updated_label.config(text=f"{engine_name} · Collecting fresh data...")
             else:
-                self._updated_label.config(text=f"{engine_name} · Updated at {time_str}")
+                # Name the fallback so a models.dev outage is never silent.
+                suffix = "" if pricing_source == "models.dev" else " · bundled rates"
+                self._updated_label.config(text=f"{engine_name} · Updated at {time_str}{suffix}")
             # Clear once any snapshot has been applied (stale or fresh); token gaps
             # are now common, so don't pin "Collecting..." forever - the separate
             # stale label keeps communicating staleness.

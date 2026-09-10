@@ -19,6 +19,9 @@ class TokenUsage:
     output_tokens: int = 0
     cache_read_input_tokens: int = 0
     cache_creation_input_tokens: int = 0
+    # Subset of cache_creation_input_tokens written with the 1-hour TTL (2x
+    # input rate; the 5-minute remainder is 1.25x).
+    cache_creation_1h_input_tokens: int = 0
 
     @property
     def total_input_tokens(self) -> int:
@@ -36,6 +39,7 @@ class TokenUsage:
             output_tokens=self.output_tokens + other.output_tokens,
             cache_read_input_tokens=self.cache_read_input_tokens + other.cache_read_input_tokens,
             cache_creation_input_tokens=self.cache_creation_input_tokens + other.cache_creation_input_tokens,
+            cache_creation_1h_input_tokens=self.cache_creation_1h_input_tokens + other.cache_creation_1h_input_tokens,
         )
 
 
@@ -92,6 +96,7 @@ class UsageSnapshot(_UsageStatus):
     today_tokens: TokenUsage = field(default_factory=TokenUsage)
     month_tokens: TokenUsage = field(default_factory=TokenUsage)
     models_used: list[ModelUsage] = field(default_factory=list)
+    pricing_source: str = "bundled"      # "models.dev" or "bundled"
 
     # Status
     cli_available: bool = True
@@ -131,6 +136,7 @@ class OpenAISnapshot(_UsageStatus):
     # Cost calculations (from log parsing + pricing)
     today_cost_usd: float = 0.0
     month_cost_usd: float = 0.0
+    pricing_source: str = "bundled"      # "models.dev" or "bundled"
 
     # Plan type and credits
     plan_type: Optional[str] = None  # "plus", "pro", "enterprise", "free"

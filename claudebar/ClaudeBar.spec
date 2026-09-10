@@ -10,7 +10,7 @@ a = Analysis(
         'config', 'data_collector', 'tray', 'models', 'oauth_usage',
         'openai_usage', 'claude_check', 'codex_log_parser',
         'codex_pricing', 'currency', 'icons', 'log_parser', 'pricing',
-        'snapshot_cache', 'stats_parser', 'ui_window',
+        'snapshot_cache', 'model_catalog', 'ui_window',
     ],
     hookspath=[],
     hooksconfig={},

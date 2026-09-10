@@ -113,7 +113,9 @@ Right-clicking the tray icon shows a quick summary of usage for both providers. 
 
 ClaudeBar reads OAuth tokens from CLI credential files only. It does not work with Claude Desktop App or ChatGPT web since these use browser-based authentication which is incompatible with the usage APIs.
 
-Claude usage data comes from three sources. The OAuth API at api.anthropic.com provides session and weekly usage percentages using tokens from the Claude CLI credentials file at `~/.claude/.credentials.json`. JSONL logs in `~/.claude/projects/` provide token counts per model for cost calculation. The daily_stats.json file provides API-reported costs which are more accurate for billing purposes.
+Claude usage data comes from three sources. The OAuth API at api.anthropic.com provides session and weekly usage percentages using tokens from the Claude CLI credentials file at `~/.claude/.credentials.json`. JSONL logs in `~/.claude/projects/` provide token counts per model for cost calculation.
+
+Costs are API-equivalent estimates, not subscription charges: every token is priced at what the same call would cost on the public API. Rates come from models.dev, downloaded at most once a day and cached at `%LOCALAPPDATA%\ClaudeBar\models_dev.json`; while no download has succeeded the bundled tables apply and the footer says "bundled rates". Claude 1-hour cache writes are billed at 2x the input rate and 5-minute writes at 1.25x. OpenAI requests whose input exceeds 272K tokens use the long-context tier for that request. Models from other providers (for example Ollama through Codex) count towards tokens but not cost.
 
 OpenAI/Codex usage data comes from the ChatGPT backend API using OAuth tokens from the Codex CLI credentials at `~/.codex/auth.json`. Local JSONL logs at `~/.codex/` provide token counts and cost estimates. Users must run `codex login` to authenticate before this data becomes available.
 

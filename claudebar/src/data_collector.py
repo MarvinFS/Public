@@ -1,16 +1,16 @@
 """Coordinate data collection from all sources."""
 
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
 import logging
 
-from models import UsageSnapshot, OpenAISnapshot, CombinedSnapshot, Engine
-from log_parser import get_today_usage, get_month_usage
+from models import UsageSnapshot, OpenAISnapshot, CombinedSnapshot, Engine, DAILY_HISTORY_DAYS
+from log_parser import collect_entries, aggregate_usage, daily_costs
 from oauth_usage import fetch_oauth_usage, OAuthUsageData
 from openai_usage import fetch_openai_usage, is_codex_configured
-from codex_log_parser import get_today_codex_usage, get_month_codex_usage
+from codex_log_parser import CodexTokenUsage, get_codex_daily_usage
 from config import get_claude_projects_dir
 import model_catalog
 from snapshot_cache import save_cache, load_cache
@@ -51,9 +51,11 @@ class DataCollector:
             if oauth_data.session:
                 snapshot.session_percent = oauth_data.session.percent
                 snapshot.session_reset = oauth_data.session.reset_str
+                snapshot.session_resets_at = oauth_data.session.resets_at
             if oauth_data.weekly:
                 snapshot.weekly_percent = oauth_data.weekly.percent
                 snapshot.weekly_reset = oauth_data.weekly.reset_str
+                snapshot.weekly_resets_at = oauth_data.weekly.resets_at
             if oauth_data.extra:
                 snapshot.extra_enabled = oauth_data.extra.enabled
                 snapshot.extra_percent = oauth_data.extra.percent
@@ -77,8 +79,10 @@ class DataCollector:
                 # Use cached OAuth data (session/weekly/extra percentages)
                 snapshot.session_percent = cached_claude.session_percent
                 snapshot.session_reset = cached_claude.session_reset
+                snapshot.session_resets_at = cached_claude.session_resets_at
                 snapshot.weekly_percent = cached_claude.weekly_percent
                 snapshot.weekly_reset = cached_claude.weekly_reset
+                snapshot.weekly_resets_at = cached_claude.weekly_resets_at
                 snapshot.extra_enabled = cached_claude.extra_enabled
                 snapshot.extra_percent = cached_claude.extra_percent
                 snapshot.extra_used = cached_claude.extra_used
@@ -96,16 +100,19 @@ class DataCollector:
             if self._on_oauth_success:
                 self._on_oauth_success()
 
-        # Collect log data for tokens and models
+        # Collect log data for tokens and models: one parse, several windows.
         try:
-            today_tokens, today_cost, today_models = get_today_usage(self.projects_dir)
-            snapshot.today_tokens = today_tokens
-
-            month_tokens, month_cost, month_models = get_month_usage(self.projects_dir)
-            snapshot.month_tokens = month_tokens
-            snapshot.month_cost_usd = month_cost
-            snapshot.models_used = month_models
-            snapshot.today_cost_usd = today_cost
+            today = date.today()
+            entries = collect_entries(self.projects_dir)
+            _, snapshot.today_tokens, snapshot.today_cost_usd = aggregate_usage(
+                entries=entries, start_date=today, end_date=today)
+            month_models, snapshot.month_tokens, snapshot.month_cost_usd = aggregate_usage(
+                entries=entries, start_date=today.replace(day=1), end_date=today)
+            snapshot.models_used = list(month_models.values())
+            _, last31_tokens, snapshot.last31_cost_usd = aggregate_usage(
+                entries=entries, start_date=today - timedelta(days=DAILY_HISTORY_DAYS - 1), end_date=today)
+            snapshot.last31_tokens = last31_tokens.total_tokens
+            snapshot.daily_costs = daily_costs(entries, DAILY_HISTORY_DAYS, today)
             snapshot.pricing_source = self._pricing_source
             snapshot.logs_available = True
         except Exception as e:
@@ -155,8 +162,10 @@ class DataCollector:
                 snapshot.session_percent = openai_data.session_percent
                 snapshot.session_reset = openai_data.session_reset
                 snapshot.session_available = openai_data.has_session_window
+                snapshot.session_resets_at = openai_data.five_hour.resets_at if openai_data.five_hour else None
                 snapshot.weekly_percent = openai_data.weekly_percent
                 snapshot.weekly_reset = openai_data.weekly_reset
+                snapshot.weekly_resets_at = openai_data.weekly.resets_at if openai_data.weekly else None
                 snapshot.credits_remaining = openai_data.credits_remaining
                 snapshot.plan_type = openai_data.plan_type
                 snapshot.available = True
@@ -177,26 +186,35 @@ class DataCollector:
                 snapshot.session_percent = cached_openai.session_percent
                 snapshot.session_reset = cached_openai.session_reset
                 snapshot.session_available = cached_openai.session_available
+                snapshot.session_resets_at = cached_openai.session_resets_at
                 snapshot.weekly_percent = cached_openai.weekly_percent
                 snapshot.weekly_reset = cached_openai.weekly_reset
+                snapshot.weekly_resets_at = cached_openai.weekly_resets_at
                 snapshot.credits_remaining = cached_openai.credits_remaining
                 snapshot.plan_type = cached_openai.plan_type
                 snapshot.is_stale = True
                 snapshot.stale_since = cached_at
 
-        # Fetch token usage and costs from local JSONL logs
+        # Fetch token usage and costs from local JSONL logs: the daily series
+        # ends today, so today, the month and the last 31 days are slices of it.
         try:
-            today_usage = get_today_codex_usage()
+            series = get_codex_daily_usage(days=DAILY_HISTORY_DAYS)
+            today_usage = series[-1]
             snapshot.today_input_tokens = today_usage.input_tokens
             snapshot.today_output_tokens = today_usage.output_tokens
             snapshot.today_cached_tokens = today_usage.cached_input_tokens
             snapshot.today_reasoning_tokens = today_usage.reasoning_tokens
             snapshot.today_cost_usd = today_usage.cost_usd
 
-            month_usage = get_month_codex_usage()
+            month_usage = sum(series[-datetime.now().day:], CodexTokenUsage())
             snapshot.month_input_tokens = month_usage.input_tokens
             snapshot.month_output_tokens = month_usage.output_tokens
             snapshot.month_cost_usd = month_usage.cost_usd
+
+            last31 = sum(series, CodexTokenUsage())
+            snapshot.last31_cost_usd = last31.cost_usd
+            snapshot.last31_tokens = last31.total_tokens
+            snapshot.daily_costs = [u.cost_usd for u in series]
             snapshot.pricing_source = self._pricing_source
         except Exception:
             pass  # Token counts are optional, don't fail if logs unavailable

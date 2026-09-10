@@ -3,7 +3,7 @@
 import json
 import os
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
@@ -127,25 +127,27 @@ def get_sessions_for_date(sessions_dir: Path, date: datetime) -> list[Path]:
     return list(date_dir.glob("*.jsonl"))
 
 
-def get_today_codex_usage(sessions_dir: Optional[Path] = None) -> CodexTokenUsage:
-    """Get token usage from today's Codex sessions."""
+def get_codex_daily_usage(sessions_dir: Optional[Path] = None, days: int = 31) -> list[CodexTokenUsage]:
+    """Usage per day for the last `days` days ending today, oldest first.
+
+    A session is bucketed to the day its file was started, as the daily
+    figure always was.
+    """
     if sessions_dir is None:
         sessions_dir = get_codex_sessions_dir()
-
     today = datetime.now()
-    session_files = get_sessions_for_date(sessions_dir, today)
-
-    total = CodexTokenUsage()
-    for file_path in session_files:
-        session_usage = parse_session_file(file_path)
-        total = total + session_usage
-
-    return total
+    series = []
+    for back in range(days - 1, -1, -1):
+        day = today - timedelta(days=back)
+        total = CodexTokenUsage()
+        for file_path in get_sessions_for_date(sessions_dir, day):
+            total = total + parse_session_file(file_path)
+        series.append(total)
+    return series
 
 
 def get_month_codex_usage(sessions_dir: Optional[Path] = None) -> CodexTokenUsage:
-    """Get token usage for the current calendar month, so the figure resets on
-    the 1st - matching `log_parser.get_month_usage` on the Claude side."""
+    """Get token usage for the current calendar month, so the figure resets on the 1st."""
     if sessions_dir is None:
         sessions_dir = get_codex_sessions_dir()
 

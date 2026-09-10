@@ -1,7 +1,7 @@
 """Parse Claude Code JSONL logs for token usage."""
 
 import json
-from datetime import datetime, date, timezone
+from datetime import datetime, date, timedelta, timezone
 from pathlib import Path
 from typing import Iterator, Optional
 from collections import defaultdict
@@ -122,13 +122,28 @@ def parse_jsonl_file(file_path: Path) -> Iterator[tuple[list, datetime, tuple]]:
         pass
 
 
+def collect_entries(projects_dir: Optional[Path] = None) -> dict[tuple, tuple[list, datetime]]:
+    """Parse every transcript once and dedup to one entry per API call.
+
+    The mid-stream lines of a response carry a placeholder output_tokens and
+    only the last one has the real count, so the last line to claim a key
+    wins. This is the expensive step; the aggregations below are cheap.
+    """
+    latest: dict[tuple, tuple[list, datetime]] = {}
+    for jsonl_file in find_jsonl_files(projects_dir):
+        for rows, timestamp, key in parse_jsonl_file(jsonl_file):
+            latest[key] = (rows, timestamp)
+    return latest
+
+
 def aggregate_usage(
     projects_dir: Optional[Path] = None,
     start_date: Optional[date] = None,
     end_date: Optional[date] = None,
+    entries: Optional[dict] = None,
 ) -> tuple[dict[str, ModelUsage], TokenUsage, float]:
     """
-    Aggregate token usage across all JSONL files.
+    Aggregate token usage across all JSONL files (or pre-collected entries).
 
     Returns:
         - Dictionary of model -> ModelUsage
@@ -141,15 +156,10 @@ def aggregate_usage(
     total_tokens = TokenUsage()
     total_cost = 0.0
 
-    # One entry per API call. The mid-stream lines of a response carry a
-    # placeholder output_tokens and only the last one has the real count, so
-    # the last line to claim a key wins.
-    latest: dict[tuple, tuple[list, datetime]] = {}
-    for jsonl_file in find_jsonl_files(projects_dir):
-        for rows, timestamp, key in parse_jsonl_file(jsonl_file):
-            latest[key] = (rows, timestamp)
+    if entries is None:
+        entries = collect_entries(projects_dir)
 
-    for rows, timestamp in latest.values():
+    for rows, timestamp in entries.values():
         # Filter by date range
         entry_date = timestamp.date()
         if start_date and entry_date < start_date:
@@ -176,16 +186,13 @@ def aggregate_usage(
     return dict(models), total_tokens, total_cost
 
 
-def get_today_usage(projects_dir: Optional[Path] = None) -> tuple[TokenUsage, float, list[ModelUsage]]:
-    """Get usage statistics for today."""
-    today = date.today()
-    models, tokens, cost = aggregate_usage(projects_dir, start_date=today, end_date=today)
-    return tokens, cost, list(models.values())
-
-
-def get_month_usage(projects_dir: Optional[Path] = None) -> tuple[TokenUsage, float, list[ModelUsage]]:
-    """Get usage statistics for the current month."""
-    today = date.today()
-    month_start = today.replace(day=1)
-    models, tokens, cost = aggregate_usage(projects_dir, start_date=month_start, end_date=today)
-    return tokens, cost, list(models.values())
+def daily_costs(entries: dict, days: int, end: Optional[date] = None) -> list[float]:
+    """Cost per day for the `days` days ending on `end` (today), oldest first."""
+    end = end or date.today()
+    start = end - timedelta(days=days - 1)
+    buckets = [0.0] * days
+    for rows, timestamp in entries.values():
+        offset = (timestamp.date() - start).days
+        if 0 <= offset < days:
+            buckets[offset] += sum(calculate_cost(model, tokens) for model, tokens in rows)
+    return buckets

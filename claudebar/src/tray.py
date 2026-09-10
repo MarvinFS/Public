@@ -132,6 +132,8 @@ class TrayManager:
 
         # Action items
         items.append(pystray.MenuItem("Refresh", self._on_refresh_click))
+        if self._ui_window:
+            items.append(pystray.MenuItem("Reset window position", self._on_reset_position))
 
         if self.on_settings:
             items.append(pystray.MenuItem("Settings", self._on_settings_click))
@@ -156,6 +158,10 @@ class TrayManager:
     def _on_refresh_click(self, icon, item):
         """Handle refresh menu click."""
         self.on_refresh()
+
+    def _on_reset_position(self, icon, item):
+        """Put the details window back at its default spot near the tray."""
+        self._ui_window.reset_position()
 
     def _on_settings_click(self, icon, item):
         """Handle settings menu click."""

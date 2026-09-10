@@ -10,7 +10,7 @@ Inspired by [CodexBar](https://github.com/steipete/CodexBar), which runs only on
 
 ClaudeBar provides a dark-themed UI with real-time usage tracking for both Claude and OpenAI Codex.
 
-The main window displays usage limits with gradient progress bars that transition from green through yellow to red as usage increases. Session and weekly limits are shown with countdown timers indicating when they reset. Cost tracking shows today's spend and 30-day totals with token counts formatted for readability.
+The main window shows each rate-limit window (5-hour session and weekly) as a bar with a tick at the point an even spend would have reached, how much is left, when it resets, and whether the remaining allowance lasts until the reset or runs out first at the pace spent so far. Below that, API-equivalent cost and token counts for today, this month and the last 31 days, output tokens and cache reads for today, a 31-day daily cost chart, and the model that dominates the month's cost.
 
 Engine selection buttons in the header allow switching between Claude and Codex views. The data refreshes automatically in the background and can be manually triggered with the refresh button.
 
@@ -135,7 +135,7 @@ If no data appears, verify that Claude Code has been used and created files in `
 
 If OpenAI data shows an error, ensure Codex CLI is installed and run `codex login` to authenticate with your OpenAI account.
 
-If the window appears in the wrong position on multi-monitor setups, the window positioning logic targets the primary monitor's bottom-right corner near the system tray.
+The window opens near the system tray on the primary monitor. Drag it anywhere and it stays there across restarts; if that spot is no longer on any monitor when the app starts, it returns to the default position. "Reset window position" in the tray menu does the same on demand.
 
 ## License
 

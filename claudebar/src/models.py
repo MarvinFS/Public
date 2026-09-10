@@ -5,6 +5,30 @@ from datetime import datetime
 from enum import Enum
 from typing import Optional
 
+SESSION_WINDOW_HOURS = 5
+WEEKLY_WINDOW_HOURS = 168
+DAILY_HISTORY_DAYS = 31
+
+
+def project_window(percent: float, resets_at: Optional[datetime], window_hours: float,
+                   now: Optional[datetime] = None) -> Optional[tuple[float, float, float]]:
+    """Pace of a rate-limit window: (expected_percent, remaining_hours, runout_hours).
+
+    expected_percent is where an even spend would sit right now; runout_hours
+    is how long the remaining allowance lasts at the pace spent so far (inf
+    when nothing was spent). None when the reset time is unknown.
+    """
+    if resets_at is None:
+        return None
+    if now is None:
+        now = datetime.now(resets_at.tzinfo)
+    remaining = max((resets_at - now).total_seconds() / 3600, 0.0)
+    elapsed = max(window_hours - remaining, 0.0)
+    expected = min(elapsed / window_hours * 100, 100.0)
+    rate = percent / elapsed if elapsed > 0 else 0.0
+    runout = (100 - percent) / rate if rate > 0 else float("inf")
+    return expected, remaining, runout
+
 
 class Engine(Enum):
     """AI engine/provider selection."""
@@ -80,8 +104,10 @@ class UsageSnapshot(_UsageStatus):
     # CLI data
     session_percent: float = 0.0
     session_reset: Optional[str] = None
+    session_resets_at: Optional[datetime] = None
     weekly_percent: float = 0.0
     weekly_reset: Optional[str] = None
+    weekly_resets_at: Optional[datetime] = None
 
     # Extra usage (paid overage)
     extra_enabled: bool = False
@@ -96,6 +122,9 @@ class UsageSnapshot(_UsageStatus):
     today_tokens: TokenUsage = field(default_factory=TokenUsage)
     month_tokens: TokenUsage = field(default_factory=TokenUsage)
     models_used: list[ModelUsage] = field(default_factory=list)
+    last31_cost_usd: float = 0.0
+    last31_tokens: int = 0
+    daily_costs: list[float] = field(default_factory=list)   # oldest first, ends today
     pricing_source: str = "bundled"      # "models.dev" or "bundled"
 
     # Status
@@ -122,8 +151,10 @@ class OpenAISnapshot(_UsageStatus):
     session_percent: float = 0.0
     session_reset: Optional[str] = None
     session_available: bool = True  # False when the plan has no 5-hour window
+    session_resets_at: Optional[datetime] = None
     weekly_percent: float = 0.0
     weekly_reset: Optional[str] = None
+    weekly_resets_at: Optional[datetime] = None
 
     # Token usage (from local JSONL logs)
     today_input_tokens: int = 0
@@ -136,6 +167,9 @@ class OpenAISnapshot(_UsageStatus):
     # Cost calculations (from log parsing + pricing)
     today_cost_usd: float = 0.0
     month_cost_usd: float = 0.0
+    last31_cost_usd: float = 0.0
+    last31_tokens: int = 0
+    daily_costs: list[float] = field(default_factory=list)   # oldest first, ends today
     pricing_source: str = "bundled"      # "models.dev" or "bundled"
 
     # Plan type and credits

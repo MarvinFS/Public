@@ -126,7 +126,9 @@ def calculate_cost(model: str, tokens: TokenUsage) -> float:
 
 
 def format_tokens(count: int) -> str:
-    """Format token count for display (e.g., 1.2M, 500K)."""
+    """Format token count for display (e.g., 1.2B, 1.2M, 500K)."""
+    if count >= 1_000_000_000:
+        return f"{count / 1_000_000_000:.2f}B"
     if count >= 1_000_000:
         return f"{count / 1_000_000:.1f}M"
     if count >= 1_000:

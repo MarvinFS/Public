@@ -1,8 +1,10 @@
 """Premium popup window UI for ClaudeBar."""
 
 import tkinter as tk
+import tkinter.font as tkfont
 from tkinter import ttk
 from typing import Optional, Callable
+import ctypes
 import threading
 import io
 import urllib.request
@@ -11,7 +13,8 @@ from pathlib import Path
 
 from PIL import Image, ImageTk
 
-from models import UsageSnapshot, OpenAISnapshot, CombinedSnapshot, Engine
+from models import (UsageSnapshot, OpenAISnapshot, CombinedSnapshot, Engine, project_window,
+                    SESSION_WINDOW_HOURS, WEEKLY_WINDOW_HOURS, DAILY_HISTORY_DAYS)
 from config import Config, save_config, get_resources_path
 from currency import (
     format_currency, get_exchange_rates, get_supported_currencies,
@@ -59,73 +62,65 @@ _CLAUDE_ICON_URL = "https://cdn.iconscout.com/icon/free/png-256/free-anthropic-l
 _OPENAI_ICON_URL = "https://cdn.iconscout.com/icon/free/png-256/free-openai-logo-icon-download-in-svg-png-gif-file-formats--technology-social-media-company-brand-vol-4-pack-logos-icons-8800152.png"
 
 
-class ModernProgressBar(tk.Canvas):
-    """Custom progress bar with gradient and smooth animations."""
+class PaceBar(tk.Canvas):
+    """Slim usage bar with a tick at the even-spend position."""
 
-    def __init__(self, parent, width=300, height=20, **kwargs):
-        super().__init__(parent, width=width, height=height,
-                        highlightthickness=0, **kwargs)
-        self.width = width
-        self.height = height
-        self._value = 0.0
+    def __init__(self, parent, width=348, height=6, accent="#F59E0B", **kwargs):
+        super().__init__(parent, width=width, height=height + 2, highlightthickness=0, **kwargs)
+        self.w, self.h, self.accent = width, height, accent
+        self.create_rectangle(0, 1, width, height + 1, fill="#262626", outline="")
 
-        # Colors
-        self.bg_color = "#252525"
-        self.border_color = "#3a3a3a"
+    def set_value(self, percent, expected=None):
+        self.delete("v")
+        pct = max(0.0, min(100.0, percent))
+        if pct > 0:
+            self.create_rectangle(0, 1, self.w * pct / 100, self.h + 1,
+                                  fill=self.accent, outline="", tags="v")
+        if expected is not None:
+            x = self.w * max(0.0, min(100.0, expected)) / 100
+            self.create_rectangle(x - 1, 0, x + 1, self.h + 2, fill="#f3f4f6", outline="", tags="v")
 
-        # Draw background
-        self._setup_background()
 
-    def _setup_background(self):
-        """Setup the background and border."""
-        radius = self.height // 2
-        self.create_rounded_rect(0, 0, self.width, self.height,
-                                radius, fill=self.bg_color,
-                                outline=self.border_color, width=1)
+class BarChart(tk.Canvas):
+    """Daily bars, today highlighted, oldest on the left."""
 
-    def create_rounded_rect(self, x1, y1, x2, y2, radius, **kwargs):
-        """Create a rounded rectangle."""
-        points = [
-            x1 + radius, y1, x1 + radius, y1, x2 - radius, y1, x2 - radius, y1,
-            x2, y1, x2, y1 + radius, x2, y1 + radius, x2, y2 - radius,
-            x2, y2 - radius, x2, y2, x2 - radius, y2, x2 - radius, y2,
-            x1 + radius, y2, x1 + radius, y2, x1, y2, x1, y2 - radius,
-            x1, y2 - radius, x1, y1 + radius, x1, y1 + radius, x1, y1,
-        ]
-        return self.create_polygon(points, smooth=True, **kwargs)
+    def __init__(self, parent, width=348, height=44, accent="#F59E0B", **kwargs):
+        super().__init__(parent, width=width, height=height, highlightthickness=0, **kwargs)
+        self.w, self.h, self.accent = width, height, accent
 
-    def _get_gradient_color(self, percent):
-        """Get color based on percentage (green -> yellow -> red)."""
-        if percent < 50:
-            r = int(16 + (245 - 16) * (percent / 50))
-            g = int(185 + (158 - 185) * (percent / 50))
-            b = int(129 + (11 - 129) * (percent / 50))
-        elif percent < 80:
-            r = int(245 + (251 - 245) * ((percent - 50) / 30))
-            g = int(158 + (146 - 158) * ((percent - 50) / 30))
-            b = int(11 + (60 - 11) * ((percent - 50) / 30))
-        else:
-            r = int(251 + (239 - 251) * ((percent - 80) / 20))
-            g = int(146 + (68 - 146) * ((percent - 80) / 20))
-            b = int(60 + (68 - 60) * ((percent - 80) / 20))
-        return f"#{r:02x}{g:02x}{b:02x}"
+    def set_values(self, values):
+        self.delete("v")
+        if not values:
+            return
+        n = len(values)
+        gap = 2
+        bw = (self.w - gap * (n - 1)) / n
+        peak = max(max(values), 0.01)
+        for i, v in enumerate(values):
+            x0 = i * (bw + gap)
+            h = max(v / peak * (self.h - 2), 1)
+            self.create_rectangle(x0, self.h - h, x0 + bw, self.h,
+                                  fill=self.accent if i == n - 1 else "#7a5210", outline="", tags="v")
 
-    def _redraw(self):
-        """Redraw the progress bar."""
-        self.delete("progress")
-        if self._value > 0:
-            bar_width = (self.width - 4) * (self._value / 100)
-            radius = (self.height - 4) // 2
-            color = self._get_gradient_color(self._value)
-            if bar_width > radius * 2:
-                self.create_rounded_rect(2, 2, 2 + bar_width, self.height - 2,
-                                       radius, fill=color, outline="",
-                                       tags="progress")
 
-    def set_value(self, percent):
-        """Set the progress bar value (0-100)."""
-        self._value = max(0, min(100, percent))
-        self._redraw()
+def _point_on_screen(x: int, y: int) -> bool:
+    """Whether a screen point lies on any monitor (Win32; assume yes elsewhere)."""
+    try:
+        class _Point(ctypes.Structure):
+            _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
+        # MONITOR_DEFAULTTONULL: a point in no monitor's rect returns NULL.
+        return bool(ctypes.windll.user32.MonitorFromPoint(_Point(x, y), 0))
+    except Exception:
+        return True
+
+
+def _fmt_hours(h: float) -> str:
+    if h == float("inf"):
+        return "never"
+    d, r = divmod(h, 24)
+    if d >= 1:
+        return f"{int(d)}d {int(r)}h"
+    return f"{int(r)}h {int((r % 1) * 60)}m"
 
 
 class SettingsDialog:
@@ -341,44 +336,35 @@ class ClaudeBarWindow:
         self._active_engine: Engine = Engine.CLAUDE
         self._openai_available: bool = False
 
-        # UI elements
+        # UI elements (built in _create_window)
         self._status_indicator: Optional[tk.Label] = None
         self._status_text: Optional[tk.Label] = None
-        self._session_frame: Optional[tk.Frame] = None
-        self._weekly_frame: Optional[tk.Frame] = None
-        self._session_bar: Optional[ModernProgressBar] = None
-        self._weekly_bar: Optional[ModernProgressBar] = None
-        self._session_label: Optional[tk.Label] = None
-        self._weekly_label: Optional[tk.Label] = None
-        self._session_reset: Optional[tk.Label] = None
-        self._weekly_reset: Optional[tk.Label] = None
-        self._extra_frame: Optional[tk.Frame] = None
-        self._extra_bar: Optional[ModernProgressBar] = None
-        self._extra_label: Optional[tk.Label] = None
-        self._extra_amount: Optional[tk.Label] = None
-        self._today_cost: Optional[tk.Label] = None
-        self._today_tokens: Optional[tk.Label] = None
-        self._month_cost: Optional[tk.Label] = None
-        self._month_tokens: Optional[tk.Label] = None
+        self._engine_name: Optional[tk.Label] = None
         self._updated_label: Optional[tk.Label] = None
         self._stale_label: Optional[tk.Label] = None
+        self._rates_label: Optional[tk.Label] = None
+        self._limits: dict = {}          # "session" / "weekly" -> widget dict
+        self._extra_frame: Optional[tk.Frame] = None
+        self._extra_bar: Optional[PaceBar] = None
+        self._extra_amount: Optional[tk.Label] = None
+        self._stats: dict = {}           # key -> (title, value, sub) labels
+        self._chart: Optional[BarChart] = None
+        self._chart_note: Optional[tk.Label] = None
+        self._top_model: Optional[tk.Label] = None
+        self._top_share: Optional[tk.Label] = None
+        self._source_label: Optional[tk.Label] = None
         self._logo_image: Optional[ImageTk.PhotoImage] = None
         self._opening_link = False  # Flag to prevent hide during link click
+        self._layout_key = None      # which optional rows are visible
 
         # Engine toggle UI elements
         self._claude_btn: Optional[tk.Label] = None
         self._openai_btn: Optional[tk.Label] = None
-        self._claude_icon: Optional[ImageTk.PhotoImage] = None
-        self._openai_icon: Optional[ImageTk.PhotoImage] = None
-        self._engine_label: Optional[tk.Label] = None
         self._engine_frame: Optional[tk.Frame] = None
-
-        self._last_extra_visible: Optional[bool] = None  # Track extra usage visibility
-        self._last_session_visible: Optional[bool] = None  # Track 5-hour row visibility
 
         # Drag-to-move state (the window is borderless, so there is no title bar)
         self._drag_origin: Optional[tuple] = None
-        self._user_position: Optional[tuple] = None  # Set once the user drags
+        self._user_position: Optional[tuple] = self._saved_position()
 
         # Colors
         self.bg_color = "#0f0f0f"
@@ -391,6 +377,11 @@ class ClaudeBarWindow:
         self.accent_color = "#F59E0B"  # Claude orange
         self.active_engine_bg = "#2a2a2a"  # Active engine button background
         self.inactive_engine_bg = "#0f0f0f"  # Inactive engine button background
+        self.ok_color = "#22c55e"
+        self.warn_color = "#ef4444"
+        # Fonts: resolved in _create_window, font.families() needs a Tk root.
+        self.sans = "Segoe UI"
+        self.mono = "Consolas"
 
     def _load_engine_icon(self, local_path: Path, url: str, size: int = 24) -> Optional[ImageTk.PhotoImage]:
         """Load engine icon from local cache or download from URL."""
@@ -424,6 +415,12 @@ class ClaudeBarWindow:
         # Use Toplevel since main.py creates the hidden root
         self._window = tk.Toplevel()
         self._window.title("ClaudeBar")
+        # Windows 11 ships both; older installs keep the classic defaults above.
+        families = set(tkfont.families(self._window))
+        if "Segoe UI Variable Text" in families:
+            self.sans = "Segoe UI Variable Text"
+        if "Cascadia Mono" in families:
+            self.mono = "Cascadia Mono"
         self._window.configure(bg=self.bg_color)
 
         # Fixed width, dynamic height
@@ -443,9 +440,13 @@ class ClaudeBarWindow:
         content.pack(fill=tk.BOTH, expand=True, padx=16, pady=16)
 
         self._create_header(content)
-        self._create_status_section(content)
-        self._create_usage_section(content)
-        self._create_cost_section(content)
+        self._create_engine_rows(content)
+        self._hairline(content)
+        self._create_limits(content)
+        self._hairline(content)
+        self._create_stats(content)
+        self._hairline(content)
+        self._create_chart(content)
         self._create_footer(content)
 
         self._window.bind('<Escape>', lambda e: self.hide())
@@ -453,6 +454,7 @@ class ClaudeBarWindow:
         # the whole popup is a drag handle - it has no title bar to grab.
         self._window.bind('<Button-1>', self._on_drag_start, add='+')
         self._window.bind('<B1-Motion>', self._on_drag_move, add='+')
+        self._window.bind('<ButtonRelease-1>', self._on_drag_end, add='+')
         self._window.withdraw()
 
         # Load initial data
@@ -475,6 +477,29 @@ class ClaudeBarWindow:
         self._user_position = (x, y)
         self._window.geometry(f"+{x}+{y}")
 
+    def _on_drag_end(self, event):
+        """Persist the dragged position so it survives a restart."""
+        if self._drag_origin and self._user_position:
+            self.config.window_x, self.config.window_y = self._user_position
+            save_config(self.config)
+        self._drag_origin = None
+
+    def _saved_position(self) -> Optional[tuple]:
+        """The persisted position, unless it would land off every monitor
+        (a screen was unplugged or rearranged) - then the default spot."""
+        x, y = self.config.window_x, self.config.window_y
+        if isinstance(x, int) and isinstance(y, int) and _point_on_screen(x + 40, y + 20):
+            return (x, y)
+        return None
+
+    def reset_position(self):
+        """Forget the dragged position and return to the spot near the tray."""
+        self._user_position = None
+        self.config.window_x = self.config.window_y = None
+        save_config(self.config)
+        if self._window and self._window.winfo_exists():
+            self._update_window_size()
+
     def _update_window_size(self):
         """Update window size based on content and position near system tray."""
         if not self._window or not self._window.winfo_exists():
@@ -486,8 +511,7 @@ class ClaudeBarWindow:
         # Get required height from content
         required_height = self._main_frame.winfo_reqheight()
 
-        # Add some padding and ensure minimum height
-        window_height = max(500, required_height + 4)  # +4 for border
+        window_height = required_height + 4  # +4 for border
 
         # Keep wherever the user dragged it to; otherwise sit near the tray.
         if self._user_position:
@@ -552,173 +576,189 @@ class ClaudeBarWindow:
             engines.append(Engine.CODEX)
         return engines
 
+    def _font(self, size, weight="normal", mono=False):
+        return (self.mono if mono else self.sans, size, weight)
+
+    def _hairline(self, parent, pady=(10, 10)):
+        tk.Frame(parent, bg=self.separator_color, height=1).pack(fill=tk.X, pady=pady)
+
+    def _row(self, parent, left, right, lf, rf, lc, rc, pady=0):
+        """Two labels on one line, left- and right-aligned. Returns (row, left, right)."""
+        r = tk.Frame(parent, bg=self.bg_color)
+        r.pack(fill=tk.X, pady=pady)
+        l = tk.Label(r, text=left, font=lf, fg=lc, bg=self.bg_color)
+        l.pack(side=tk.LEFT)
+        rr = tk.Label(r, text=right, font=rf, fg=rc, bg=self.bg_color)
+        rr.pack(side=tk.RIGHT)
+        return r, l, rr
+
     def _create_header(self, parent):
-        """Create the header with title, engine toggle, and GitHub link."""
+        """Logo, title (links to GitHub), engine toggle, close."""
         header = tk.Frame(parent, bg=self.bg_color)
-        header.pack(fill=tk.X, pady=(0, 12))
+        header.pack(fill=tk.X)
 
-        # Left side - Logo and title
-        left_frame = tk.Frame(header, bg=self.bg_color)
-        left_frame.pack(side=tk.LEFT)
-
-        # Logo - use custom icon if available (72px for better visibility)
-        logo_size = 72
         if _CUSTOM_ICON_PATH.exists():
             try:
-                img = Image.open(_CUSTOM_ICON_PATH)
-                img = img.resize((logo_size, logo_size), Image.Resampling.LANCZOS)
+                img = Image.open(_CUSTOM_ICON_PATH).resize((28, 28), Image.Resampling.LANCZOS)
                 self._logo_image = ImageTk.PhotoImage(img)
-                logo = tk.Label(left_frame, image=self._logo_image,
-                               bg=self.bg_color)
-                logo.pack(side=tk.LEFT, padx=(0, 12))
+                tk.Label(header, image=self._logo_image, bg=self.bg_color).pack(side=tk.LEFT, padx=(0, 8))
             except Exception:
-                # Fallback to drawn logo
-                logo = tk.Canvas(left_frame, width=64, height=64,
-                                bg=self.bg_color, highlightthickness=0)
-                logo.pack(side=tk.LEFT, padx=(0, 12))
-                logo.create_oval(2, 2, 62, 62, fill=self.accent_color, outline="")
-                logo.create_text(32, 32, text="C", fill="#ffffff",
-                                font=("Segoe UI", 24, "bold"))
-        else:
-            # Fallback to drawn logo
-            logo = tk.Canvas(left_frame, width=64, height=64,
-                            bg=self.bg_color, highlightthickness=0)
-            logo.pack(side=tk.LEFT, padx=(0, 12))
-            logo.create_oval(2, 2, 62, 62, fill=self.accent_color, outline="")
-            logo.create_text(32, 32, text="C", fill="#ffffff",
-                            font=("Segoe UI", 24, "bold"))
+                self._logo_image = None
 
-        title_frame = tk.Frame(left_frame, bg=self.bg_color)
-        title_frame.pack(side=tk.LEFT)
+        title = tk.Label(header, text="ClaudeBar", font=self._font(11, "bold"),
+                         fg=self.text_primary, bg=self.bg_color, cursor="hand2")
+        title.pack(side=tk.LEFT)
+        title.bind("<Button-1>", self._on_github_click)
+        title.bind("<Enter>", lambda e: title.config(fg=self.accent_color))
+        title.bind("<Leave>", lambda e: title.config(fg=self.text_primary))
 
-        title = tk.Label(title_frame, text="ClaudeBar",
-                        font=("Segoe UI", 16, "bold"),
-                        fg=self.text_primary, bg=self.bg_color)
-        title.pack(anchor=tk.W)
-
-        subtitle = tk.Label(title_frame, text="AI Usage Tracker",
-                           font=("Segoe UI", 9),
-                           fg=self.text_muted, bg=self.bg_color)
-        subtitle.pack(anchor=tk.W)
-
-        # Right side - Close button, Engine toggle and GitHub link
-        right_frame = tk.Frame(header, bg=self.bg_color)
-        right_frame.pack(side=tk.RIGHT)
-
-        # Close button (hides window, doesn't exit app)
-        close_btn = tk.Label(right_frame, text="✕",
-                            font=("Segoe UI", 12),
-                            fg=self.text_muted, bg=self.bg_color,
-                            cursor="hand2", padx=4)
-        close_btn.pack(side=tk.TOP, anchor=tk.E)
+        close_btn = tk.Label(header, text="\u2715", font=self._font(10),
+                             fg=self.text_muted, bg=self.bg_color, cursor="hand2", padx=4)
+        close_btn.pack(side=tk.RIGHT)
         close_btn.bind("<Button-1>", lambda e: self.hide())
-        close_btn.bind("<Enter>", lambda e: close_btn.config(fg="#EF4444"))
+        close_btn.bind("<Enter>", lambda e: close_btn.config(fg=self.warn_color))
         close_btn.bind("<Leave>", lambda e: close_btn.config(fg=self.text_muted))
 
-        # GitHub link
-        github_btn = tk.Label(right_frame, text="GitHub ↗",
-                             font=("Segoe UI", 9),
-                             fg=self.accent_color, bg=self.bg_color,
-                             cursor="hand2")
-        github_btn.pack(side=tk.TOP, anchor=tk.E)
-        github_btn.bind("<Button-1>", self._on_github_click)
-        github_btn.bind("<Enter>", lambda e: github_btn.config(fg="#FCD34D"))
-        github_btn.bind("<Leave>", lambda e: github_btn.config(fg=self.accent_color))
-
-        # Engine toggle buttons (only show if more than one engine enabled)
         enabled_engines = self._get_enabled_engines()
-
-        # Set active engine to first enabled if current is disabled
         if self._active_engine not in enabled_engines and enabled_engines:
             self._active_engine = enabled_engines[0]
-
         if len(enabled_engines) > 1:
-            self._engine_frame = tk.Frame(right_frame, bg=self.bg_color)
-            self._engine_frame.pack(side=tk.TOP, anchor=tk.E, pady=(8, 0))
+            self._engine_frame = tk.Frame(header, bg=self.bg_color)
+            self._engine_frame.pack(side=tk.RIGHT, padx=(0, 8))
+            for engine, name in ((Engine.CLAUDE, "Claude"), (Engine.CODEX, "Codex")):
+                btn = tk.Label(self._engine_frame, text=name, font=self._font(8),
+                               fg=self.text_primary, bg=self.inactive_engine_bg,
+                               padx=10, pady=3, cursor="hand2")
+                btn.pack(side=tk.LEFT)
+                btn.bind("<Button-1>", lambda e, en=engine: self._on_engine_select(en))
+                if engine == Engine.CLAUDE:
+                    self._claude_btn = btn
+                else:
+                    self._openai_btn = btn
+            self._paint_engine_buttons()
 
-            # Load engine icons
-            self._claude_icon = self._load_engine_icon(_CLAUDE_ICON_PATH, _CLAUDE_ICON_URL, 20)
-            self._openai_icon = self._load_engine_icon(_OPENAI_ICON_PATH, _OPENAI_ICON_URL, 20)
-
-            btn_padx = 8
-            btn_gap = 4
-
-            # Claude button (if enabled)
-            if self.config.claude_enabled:
-                claude_bg = self.active_engine_bg if self._active_engine == Engine.CLAUDE else self.inactive_engine_bg
-                self._claude_btn = tk.Label(self._engine_frame, text=" Claude" if not self._claude_icon else "",
-                                            image=self._claude_icon if self._claude_icon else None,
-                                            compound=tk.LEFT,
-                                            font=("Segoe UI", 9),
-                                            fg=self.text_primary, bg=claude_bg,
-                                            padx=btn_padx, pady=4, cursor="hand2")
-                if not self._claude_icon:
-                    self._claude_btn.config(text="Claude")
-                self._claude_btn.pack(side=tk.LEFT, padx=(0, btn_gap))
-                self._claude_btn.bind("<Button-1>", lambda e: self._on_engine_select(Engine.CLAUDE))
-
-            # OpenAI/Codex button (if enabled)
-            if self.config.codex_enabled:
-                openai_bg = self.active_engine_bg if self._active_engine == Engine.CODEX else self.inactive_engine_bg
-                self._openai_btn = tk.Label(self._engine_frame, text=" Codex" if not self._openai_icon else "",
-                                            image=self._openai_icon if self._openai_icon else None,
-                                            compound=tk.LEFT,
-                                            font=("Segoe UI", 9),
-                                            fg=self.text_primary, bg=openai_bg,
-                                            padx=btn_padx, pady=4, cursor="hand2")
-                if not self._openai_icon:
-                    self._openai_btn.config(text="Codex")
-                self._openai_btn.pack(side=tk.LEFT)
-                self._openai_btn.bind("<Button-1>", lambda e: self._on_engine_select(Engine.CODEX))
+    def _paint_engine_buttons(self):
+        for btn, engine in ((self._claude_btn, Engine.CLAUDE), (self._openai_btn, Engine.CODEX)):
+            if btn:
+                on = self._active_engine == engine
+                btn.config(bg=self.active_engine_bg if on else self.inactive_engine_bg,
+                           fg=self.text_primary if on else self.text_muted,
+                           font=self._font(8, "bold" if on else "normal"))
 
     def _on_engine_select(self, engine: Engine):
-        """Handle engine selection with smooth fade transition."""
+        """Switch the displayed engine."""
         if self._active_engine == engine:
             return
-
-        # Update button backgrounds immediately (this is the "tab" change)
-        if self._claude_btn:
-            bg = self.active_engine_bg if engine == Engine.CLAUDE else self.inactive_engine_bg
-            self._claude_btn.config(bg=bg)
-        if self._openai_btn:
-            bg = self.active_engine_bg if engine == Engine.CODEX else self.inactive_engine_bg
-            self._openai_btn.config(bg=bg)
-
         self._active_engine = engine
-
-        # Notify callback
+        self._paint_engine_buttons()
         if self.on_engine_change:
             self.on_engine_change(engine)
-
-        # Update status display for new engine
         self._update_status_display()
-
-        # Update display with current data (this will also resize)
         self._refresh_display_immediate()
 
-    def _create_status_section(self, parent):
-        """Create Claude connection status section."""
-        status_frame = tk.Frame(parent, bg=self.card_color)
-        status_frame.pack(fill=tk.X, pady=(0, 16))
+    def _create_engine_rows(self, parent):
+        """Engine name + connection status, then updated time + rate source."""
+        _, self._engine_name, status = self._row(parent, "Claude", "", self._font(9, "bold"),
+                                                  self._font(8), self.text_primary, self.text_muted,
+                                                  pady=(10, 0))
+        # The status label is the right-hand cell; the dot sits just before it.
+        status.pack_forget()
+        self._status_text = status
+        self._status_text.pack(side=tk.RIGHT)
+        self._status_indicator = tk.Label(status.master, text="\u25cf", font=self._font(8),
+                                          fg=self.text_muted, bg=self.bg_color)
+        self._status_indicator.pack(side=tk.RIGHT, padx=(0, 4))
 
-        inner = tk.Frame(status_frame, bg=self.card_color)
-        inner.pack(fill=tk.X, padx=12, pady=10)
+        r, self._updated_label, self._rates_label = self._row(
+            parent, "Updated just now", "", self._font(8), self._font(8), self.text_muted, self.text_muted)
+        self._stale_label = tk.Label(r, text="", font=self._font(8), fg=self.accent_color, bg=self.bg_color)
+        self._stale_label.pack(side=tk.LEFT, padx=(6, 0))
 
-        # Status indicator
-        self._status_indicator = tk.Label(inner, text="●",
-                                         font=("Segoe UI", 12),
-                                         fg="#6b7280", bg=self.card_color)
-        self._status_indicator.pack(side=tk.LEFT)
+    def _create_limit(self, parent, key, title):
+        """One rate-limit block: title/reset, bar, left/run-out, pace/elapsed."""
+        frame = tk.Frame(parent, bg=self.bg_color)
+        frame.pack(fill=tk.X, pady=(0, 8))
+        _, _, reset = self._row(frame, title, "", self._font(9, "bold"), self._font(8),
+                                self.text_primary, self.text_muted)
+        bar = PaceBar(frame, width=348, bg=self.bg_color)
+        bar.pack(fill=tk.X)
+        _, left, note = self._row(frame, "", "", self._font(8, mono=True), self._font(8),
+                                  self.text_secondary, self.text_muted)
+        _, pace, elapsed = self._row(frame, "", "", self._font(8), self._font(8),
+                                     self.text_muted, self.text_muted)
+        self._limits[key] = {"frame": frame, "reset": reset, "bar": bar, "left": left,
+                             "note": note, "pace": pace, "elapsed": elapsed}
 
-        self._status_text = tk.Label(inner, text="Checking...",
-                                    font=("Segoe UI", 10),
-                                    fg=self.text_secondary, bg=self.card_color)
-        self._status_text.pack(side=tk.LEFT, padx=(8, 0))
+    def _create_limits(self, parent):
+        self._create_limit(parent, "session", "Session (5-hour)")
+        self._create_limit(parent, "weekly", "Weekly")
+
+        # Extra usage (paid overage), packed only when enabled.
+        self._extra_frame = tk.Frame(parent, bg=self.bg_color)
+        _, _, self._extra_amount = self._row(self._extra_frame, "Extra usage", "", self._font(9, "bold"),
+                                             self._font(8), self.text_primary, self.text_muted)
+        self._extra_bar = PaceBar(self._extra_frame, width=348, bg=self.bg_color)
+        self._extra_bar.pack(fill=tk.X)
+
+    def _create_stat(self, parent, key, title):
+        f = tk.Frame(parent, bg=self.bg_color)
+        f.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        tk.Label(f, text=title, font=self._font(8), fg=self.text_muted, bg=self.bg_color).pack(anchor=tk.W)
+        value = tk.Label(f, text="", font=self._font(12, "bold", mono=True), fg=self.text_primary, bg=self.bg_color)
+        value.pack(anchor=tk.W)
+        sub = tk.Label(f, text="", font=self._font(8), fg=self.text_muted, bg=self.bg_color)
+        sub.pack(anchor=tk.W)
+        self._stats[key] = (value, sub)
+
+    def _create_stats(self, parent):
+        """2x2 grid: today / last 31 days, this month / output today."""
+        top = tk.Frame(parent, bg=self.bg_color)
+        top.pack(fill=tk.X)
+        self._create_stat(top, "today", "Today")
+        self._create_stat(top, "last31", f"Last {DAILY_HISTORY_DAYS} days")
+        tk.Frame(parent, bg=self.bg_color, height=8).pack()
+        bottom = tk.Frame(parent, bg=self.bg_color)
+        bottom.pack(fill=tk.X)
+        self._create_stat(bottom, "month", "This month")
+        self._create_stat(bottom, "output", "Output today")
+
+    def _create_chart(self, parent):
+        _, _, self._chart_note = self._row(parent, "Daily API-equivalent cost", "", self._font(8),
+                                           self._font(8), self.text_muted, self.text_muted)
+        tk.Frame(parent, bg=self.bg_color, height=4).pack()
+        self._chart = BarChart(parent, width=348, bg=self.bg_color)
+        self._chart.pack(fill=tk.X)
+        tk.Frame(parent, bg=self.bg_color, height=6).pack()
+        _, self._top_model, self._top_share = self._row(
+            parent, "", "", self._font(8, mono=True), self._font(8), self.text_secondary, self.text_muted)
+
+    def _create_footer(self, parent):
+        """Source note on the left, actions on the right."""
+        self._hairline(parent, (12, 6))
+        footer = tk.Frame(parent, bg=self.bg_color)
+        footer.pack(fill=tk.X)
+        self._source_label = tk.Label(footer, text="", font=self._font(8), fg=self.text_muted, bg=self.bg_color)
+        self._source_label.pack(side=tk.LEFT)
+
+        button_style = {
+            "font": self._font(8), "bg": self.bg_color, "fg": self.text_secondary,
+            "activebackground": self.active_engine_bg, "activeforeground": self.text_primary,
+            "relief": tk.FLAT, "cursor": "hand2", "padx": 6, "pady": 2, "bd": 0,
+        }
+        for text, command, hover in (("Exit", self._on_exit_click, self.warn_color),
+                                     ("Refresh", self._on_refresh_click, self.text_primary),
+                                     ("Settings", self._on_settings_click, self.text_primary)):
+            btn = tk.Button(footer, text=text, command=command, **button_style)
+            btn.pack(side=tk.RIGHT)
+            btn.bind("<Enter>", lambda e, b=btn, c=hover: b.config(fg=c))
+            btn.bind("<Leave>", lambda e, b=btn: b.config(fg=self.text_secondary))
 
     def _update_status_display(self):
         """Update the status display based on active engine."""
         if not self._status_indicator or not self._status_text:
             return
+        if self._engine_name:
+            self._engine_name.config(text="Claude" if self._active_engine == Engine.CLAUDE else "Codex")
 
         # Read shared state under a single lock acquisition
         with self._lock:
@@ -814,211 +854,6 @@ class ClaudeBarWindow:
                 self._status_indicator.config(fg="#6b7280")
                 self._status_text.config(text="Checking...")
 
-    def _create_section_title(self, parent, text):
-        """Create a section title."""
-        label = tk.Label(parent, text=text.upper(),
-                        font=("Segoe UI", 9, "bold"),
-                        fg=self.text_muted, bg=self.bg_color)
-        label.pack(anchor=tk.W, pady=(0, 10))
-
-    def _create_separator(self, parent):
-        """Create a horizontal separator."""
-        sep = tk.Frame(parent, bg=self.separator_color, height=1)
-        sep.pack(fill=tk.X, pady=16)
-
-    def _create_usage_section(self, parent):
-        """Create the usage progress section."""
-        self._create_section_title(parent, "Usage Limits")
-
-        # Session usage
-        session_frame = tk.Frame(parent, bg=self.bg_color)
-        session_frame.pack(fill=tk.X, pady=(0, 14))
-        self._session_frame = session_frame
-
-        session_header = tk.Frame(session_frame, bg=self.bg_color)
-        session_header.pack(fill=tk.X, pady=(0, 6))
-
-        self._session_label = tk.Label(session_header, text="5-Hour · 0% used",
-                                       font=("Segoe UI", 11),
-                                       fg=self.text_secondary, bg=self.bg_color)
-        self._session_label.pack(side=tk.LEFT)
-
-        self._session_reset = tk.Label(session_header, text="",
-                                       font=("Segoe UI", 9),
-                                       fg=self.text_muted, bg=self.bg_color)
-        self._session_reset.pack(side=tk.RIGHT)
-
-        self._session_bar = ModernProgressBar(session_frame, width=348, height=20,
-                                              bg=self.bg_color)
-        self._session_bar.pack()
-
-        # Weekly usage
-        weekly_frame = tk.Frame(parent, bg=self.bg_color)
-        weekly_frame.pack(fill=tk.X)
-        self._weekly_frame = weekly_frame
-
-        weekly_header = tk.Frame(weekly_frame, bg=self.bg_color)
-        weekly_header.pack(fill=tk.X, pady=(0, 6))
-
-        self._weekly_label = tk.Label(weekly_header, text="Weekly · 0% used",
-                                      font=("Segoe UI", 11),
-                                      fg=self.text_secondary, bg=self.bg_color)
-        self._weekly_label.pack(side=tk.LEFT)
-
-        self._weekly_reset = tk.Label(weekly_header, text="",
-                                      font=("Segoe UI", 9),
-                                      fg=self.text_muted, bg=self.bg_color)
-        self._weekly_reset.pack(side=tk.RIGHT)
-
-        self._weekly_bar = ModernProgressBar(weekly_frame, width=348, height=20,
-                                            bg=self.bg_color)
-        self._weekly_bar.pack()
-
-        # Extra usage (initially hidden, shown only when enabled)
-        self._extra_frame = tk.Frame(parent, bg=self.bg_color)
-        # Don't pack yet - will be shown conditionally in _refresh_display
-
-        extra_header = tk.Frame(self._extra_frame, bg=self.bg_color)
-        extra_header.pack(fill=tk.X, pady=(14, 6))
-
-        self._extra_label = tk.Label(extra_header, text="Extra · 0% used",
-                                     font=("Segoe UI", 11),
-                                     fg=self.text_secondary, bg=self.bg_color)
-        self._extra_label.pack(side=tk.LEFT)
-
-        self._extra_amount = tk.Label(extra_header, text="",
-                                      font=("Segoe UI", 9),
-                                      fg=self.text_muted, bg=self.bg_color)
-        self._extra_amount.pack(side=tk.RIGHT)
-
-        self._extra_bar = ModernProgressBar(self._extra_frame, width=348, height=20,
-                                           bg=self.bg_color)
-        self._extra_bar.pack()
-
-        self._create_separator(parent)
-
-    def _create_cost_section(self, parent):
-        """Create the cost information section."""
-        self._create_section_title(parent, "API-equivalent cost")
-
-        cost_frame = tk.Frame(parent, bg=self.bg_color)
-        cost_frame.pack(fill=tk.X)
-
-        # Today
-        today_row = tk.Frame(cost_frame, bg=self.bg_color)
-        today_row.pack(fill=tk.X, pady=(0, 10))
-
-        today_label = tk.Label(today_row, text="Today",
-                              font=("Segoe UI", 10),
-                              fg=self.text_muted, bg=self.bg_color)
-        today_label.pack(side=tk.LEFT)
-
-        today_value = tk.Frame(today_row, bg=self.bg_color)
-        today_value.pack(side=tk.RIGHT)
-
-        self._today_cost = tk.Label(today_value, text="$0.00",
-                                   font=("Segoe UI", 12, "bold"),
-                                   fg=self.text_primary, bg=self.bg_color)
-        self._today_cost.pack(side=tk.LEFT)
-
-        today_sep = tk.Label(today_value, text=" · ",
-                           font=("Segoe UI", 10),
-                           fg=self.text_muted, bg=self.bg_color)
-        today_sep.pack(side=tk.LEFT)
-
-        self._today_tokens = tk.Label(today_value, text="0 tokens",
-                                     font=("Segoe UI", 10),
-                                     fg=self.text_tertiary, bg=self.bg_color)
-        self._today_tokens.pack(side=tk.LEFT)
-
-        # Current calendar month
-        month_row = tk.Frame(cost_frame, bg=self.bg_color)
-        month_row.pack(fill=tk.X)
-
-        month_label = tk.Label(month_row, text="This month",
-                              font=("Segoe UI", 10),
-                              fg=self.text_muted, bg=self.bg_color)
-        month_label.pack(side=tk.LEFT)
-
-        month_value = tk.Frame(month_row, bg=self.bg_color)
-        month_value.pack(side=tk.RIGHT)
-
-        self._month_cost = tk.Label(month_value, text="$0.00",
-                                   font=("Segoe UI", 12, "bold"),
-                                   fg=self.text_primary, bg=self.bg_color)
-        self._month_cost.pack(side=tk.LEFT)
-
-        month_sep = tk.Label(month_value, text=" · ",
-                           font=("Segoe UI", 10),
-                           fg=self.text_muted, bg=self.bg_color)
-        month_sep.pack(side=tk.LEFT)
-
-        self._month_tokens = tk.Label(month_value, text="0 tokens",
-                                     font=("Segoe UI", 10),
-                                     fg=self.text_tertiary, bg=self.bg_color)
-        self._month_tokens.pack(side=tk.LEFT)
-
-        self._create_separator(parent)
-
-    def _create_footer(self, parent):
-        """Create footer with action buttons and update time."""
-        # Update time
-        update_frame = tk.Frame(parent, bg=self.bg_color)
-        update_frame.pack(fill=tk.X, pady=(0, 12))
-
-        self._updated_label = tk.Label(update_frame, text="Updated just now",
-                                       font=("Segoe UI", 9),
-                                       fg=self.text_muted, bg=self.bg_color)
-        self._updated_label.pack(side=tk.LEFT)
-
-        # Stale data warning (hidden by default)
-        self._stale_label = tk.Label(update_frame, text="",
-                                     font=("Segoe UI", 9),
-                                     fg="#F59E0B", bg=self.bg_color)
-        self._stale_label.pack(side=tk.LEFT, padx=(8, 0))
-
-        # Buttons
-        footer = tk.Frame(parent, bg=self.bg_color)
-        footer.pack(fill=tk.X)
-
-        button_style = {
-            "font": ("Segoe UI", 10),
-            "bg": "#2a2a2a",
-            "fg": self.text_primary,
-            "activebackground": "#3a3a3a",
-            "activeforeground": self.text_primary,
-            "relief": tk.FLAT,
-            "cursor": "hand2",
-            "padx": 14,
-            "pady": 8,
-        }
-
-        settings_btn = tk.Button(footer, text="⚙ Settings",
-                                command=self._on_settings_click,
-                                **button_style)
-        settings_btn.pack(side=tk.LEFT)
-        self._add_hover(settings_btn, "#2a2a2a", "#3a3a3a")
-
-        right_buttons = tk.Frame(footer, bg=self.bg_color)
-        right_buttons.pack(side=tk.RIGHT)
-
-        refresh_btn = tk.Button(right_buttons, text="↻ Refresh",
-                               command=self._on_refresh_click,
-                               **button_style)
-        refresh_btn.pack(side=tk.LEFT, padx=(0, 8))
-        self._add_hover(refresh_btn, "#2a2a2a", "#3a3a3a")
-
-        exit_btn = tk.Button(right_buttons, text="✕ Exit",
-                            command=self._on_exit_click,
-                            **button_style)
-        exit_btn.pack(side=tk.LEFT)
-        self._add_hover(exit_btn, "#2a2a2a", "#EF4444")
-
-    def _add_hover(self, widget, normal, hover):
-        """Add hover effect."""
-        widget.bind("<Enter>", lambda e: widget.config(bg=hover))
-        widget.bind("<Leave>", lambda e: widget.config(bg=normal))
-
     def _on_refresh_click(self):
         """Handle refresh button."""
         self.on_refresh()
@@ -1051,7 +886,7 @@ class ClaudeBarWindow:
             self._claude_btn = None
             self._openai_btn = None
             self._engine_frame = None
-            self._last_extra_visible = None  # Reset layout tracking
+            self._layout_key = None
 
         # Recreate and show
         self._create_window()
@@ -1103,186 +938,118 @@ class ClaudeBarWindow:
         if not updated:
             return
 
-        self._refresh_display()
-
-    def _refresh_display(self):
-        """Refresh display (extra-usage visibility may change the layout/size)."""
-        if not self._window or not self._window.winfo_exists():
-            return
         self._refresh_display_immediate()
 
     def _refresh_display_immediate(self):
-        """Refresh the display immediately (no fade)."""
+        """Fill every widget from the active engine's snapshot."""
         if not self._window or not self._window.winfo_exists():
             return
 
-        # Get data for active engine
-        snapshot = None  # Track for extra usage visibility check
-        is_stale = False
-        stale_since = None
-        session_available = True  # Claude always reports a 5-hour window
-        if self._active_engine == Engine.CLAUDE:
-            snapshot = self._snapshot
-            if not snapshot:
-                return
-
-            session_pct = snapshot.session_percent
-            session_reset = snapshot.session_reset
-            weekly_pct = snapshot.weekly_percent
-            weekly_reset = snapshot.weekly_reset
-            today_cost = snapshot.today_cost_usd
-            today_tokens = snapshot.today_tokens.total_tokens
-            month_cost = snapshot.month_cost_usd
-            month_tokens = snapshot.month_tokens.total_tokens
-            pricing_source = snapshot.pricing_source
-            timestamp = snapshot.timestamp
-            is_stale = snapshot.is_stale
-            stale_since = snapshot.stale_since
-        elif self._active_engine == Engine.CODEX:
-            openai = self._openai_snapshot
-            if not openai:
-                # Show placeholder when no OpenAI data
-                session_pct = 0.0
-                session_reset = None
-                weekly_pct = 0.0
-                weekly_reset = None
-                today_cost = 0.0
-                today_tokens = 0
-                month_cost = 0.0
-                month_tokens = 0
-                pricing_source = "bundled"
-                timestamp = datetime.now()
-            else:
-                session_pct = openai.session_percent
-                session_reset = openai.session_reset
-                session_available = openai.session_available
-                weekly_pct = openai.weekly_percent
-                weekly_reset = openai.weekly_reset
-                today_cost = openai.today_cost_usd  # From log parsing
-                today_tokens = openai.today_total_tokens
-                month_cost = openai.month_cost_usd
-                month_tokens = openai.month_total_tokens
-                pricing_source = openai.pricing_source
-                timestamp = openai.timestamp
-                is_stale = openai.is_stale
-                stale_since = openai.stale_since
-
         currency = self.config.currency
+        money = lambda usd: format_currency(usd, currency, self._exchange_rates)
+        claude = self._active_engine == Engine.CLAUDE
+        snap = self._snapshot if claude else self._openai_snapshot
+        if snap is None:
+            return
 
-        # Update progress bars (animate=False to ensure immediate rendering).
-        # When there's no usable data, show a placeholder instead of a misleading
-        # "0% used": "Collecting..." on the first cycle, "Unavailable" once OAuth
-        # is confirmed down with no cache (Claude snapshot present but cli_available False).
-        collecting_text = None
-        if session_pct == 0 and weekly_pct == 0 and not is_stale:
-            if self._is_collecting:
-                collecting_text = "Collecting..."
-            elif (self._active_engine == Engine.CLAUDE and snapshot
-                    and not snapshot.cli_available):
-                collecting_text = "Unavailable"
+        # Which optional rows show; a change re-measures the window.
+        session_visible = claude or snap.session_available
+        extra_visible = claude and snap.extra_enabled
+        layout_key = (claude, session_visible, extra_visible)
 
-        if self._session_frame and self._weekly_frame:
-            if session_available and not self._session_frame.winfo_manager():
-                self._session_frame.pack(fill=tk.X, pady=(0, 14), before=self._weekly_frame)
-            elif not session_available:
-                self._session_frame.pack_forget()
+        collecting = (self._is_collecting and snap.session_percent == 0 and snap.weekly_percent == 0
+                      and not snap.is_stale)
+        unavailable = claude and not snap.cli_available and not snap.is_stale
+        placeholder = "Collecting..." if collecting else ("Unavailable" if unavailable else None)
 
-        if self._session_bar and self._session_label:
-            self._session_bar.set_value(session_pct)
-            self._session_label.config(
-                text=collecting_text or f"5-Hour · {session_pct:.0f}% used"
-            )
-        if self._session_reset:
-            if session_reset:
-                self._session_reset.config(text=f"Resets {session_reset}")
-            elif not collecting_text:
-                self._session_reset.config(text="")
+        self._fill_limit("session", snap.session_percent, snap.session_reset,
+                         snap.session_resets_at, SESSION_WINDOW_HOURS, placeholder)
+        self._fill_limit("weekly", snap.weekly_percent, snap.weekly_reset,
+                         snap.weekly_resets_at, WEEKLY_WINDOW_HOURS, placeholder)
+        frame = self._limits["session"]["frame"]
+        if session_visible and not frame.winfo_manager():
+            frame.pack(fill=tk.X, pady=(0, 8), before=self._limits["weekly"]["frame"])
+        elif not session_visible and frame.winfo_manager():
+            frame.pack_forget()
 
-        if self._weekly_bar and self._weekly_label:
-            self._weekly_bar.set_value(weekly_pct)
-            self._weekly_label.config(
-                text=collecting_text or f"Weekly · {weekly_pct:.0f}% used"
-            )
-        if self._weekly_reset:
-            if weekly_reset:
-                self._weekly_reset.config(text=f"Resets {weekly_reset}")
-            elif not collecting_text:
-                self._weekly_reset.config(text="")
+        if extra_visible:
+            if not self._extra_frame.winfo_manager():
+                self._extra_frame.pack(fill=tk.X, after=self._limits["weekly"]["frame"])
+            symbol = get_currency_symbol(snap.extra_currency.upper())
+            self._extra_bar.set_value(snap.extra_percent)
+            self._extra_amount.config(
+                text=f"{snap.extra_percent:.0f}% used \u00b7 {symbol}{snap.extra_used:.2f} / {symbol}{snap.extra_limit:.2f}")
+        elif self._extra_frame.winfo_manager():
+            self._extra_frame.pack_forget()
 
-        # Update extra usage section (Claude only)
-        # Track visibility changes for resize optimization
-        extra_visible = False
-        if self._extra_frame and self._extra_bar and self._extra_label and self._extra_amount:
-            if self._active_engine == Engine.CLAUDE and snapshot and snapshot.extra_enabled:
-                extra_visible = True
-                # Show extra usage frame
-                if not self._extra_frame.winfo_manager():
-                    self._extra_frame.pack(fill=tk.X, after=self._weekly_bar.master)
+        # Cost grid
+        if claude:
+            today_tokens = snap.today_tokens.total_tokens
+            month_tokens = snap.month_tokens.total_tokens
+            output_today = snap.today_tokens.output_tokens
+            cache_reads = snap.today_tokens.cache_read_input_tokens
+        else:
+            today_tokens = snap.today_total_tokens
+            month_tokens = snap.month_total_tokens
+            output_today = snap.today_output_tokens
+            cache_reads = snap.today_cached_tokens
+        self._set_stat("today", money(snap.today_cost_usd), f"{format_tokens(today_tokens)} tokens")
+        self._set_stat("last31", money(snap.last31_cost_usd), f"{format_tokens(snap.last31_tokens)} tokens")
+        self._set_stat("month", money(snap.month_cost_usd), f"{format_tokens(month_tokens)} tokens")
+        self._set_stat("output", format_tokens(output_today), f"{format_tokens(cache_reads)} cache reads")
 
-                # Update extra usage values
-                extra_pct = snapshot.extra_percent
-                extra_used = snapshot.extra_used
-                extra_limit = snapshot.extra_limit
-                extra_currency = snapshot.extra_currency.upper()
+        # Chart + top model (per-model split exists for Claude only)
+        self._chart.set_values(snap.daily_costs)
+        peak = max(snap.daily_costs) if snap.daily_costs else 0.0
+        self._chart_note.config(text=f"{len(snap.daily_costs)} days, peak {money(peak)}")
+        top = max(snap.models_used, key=lambda m: m.cost_usd, default=None) if claude else None
+        if top and snap.month_cost_usd > 0:
+            self._top_model.config(text=f"Top model  {top.model}")
+            self._top_share.config(text=f"{top.cost_usd / snap.month_cost_usd * 100:.0f}% of month")
+        else:
+            self._top_model.config(text="")
+            self._top_share.config(text="")
 
-                self._extra_bar.set_value(extra_pct)
-                self._extra_label.config(text=f"Extra · {extra_pct:.0f}% used")
+        # Meta rows and footer
+        self._rates_label.config(text=f"{snap.pricing_source} rates")
+        if self._is_collecting and snap.is_stale:
+            self._updated_label.config(text="Collecting fresh data...")
+        else:
+            self._updated_label.config(text=f"Updated {snap.timestamp.strftime('%H:%M')}")
+        # Clear once any snapshot has been applied (stale or fresh); the stale
+        # label keeps communicating staleness.
+        self._is_collecting = False
+        self._stale_label.config(
+            text=f"(cached from {get_staleness_text(snap.stale_since)})" if snap.is_stale and snap.stale_since else "")
+        self._source_label.config(
+            text=f"Estimated from local {'Claude Code' if claude else 'Codex'} logs")
 
-                # Format amount with proper currency symbol
-                symbol = get_currency_symbol(extra_currency)
-                self._extra_amount.config(text=f"{symbol}{extra_used:.2f} / {symbol}{extra_limit:.2f}")
-            else:
-                # Hide extra usage frame
-                if self._extra_frame.winfo_manager():
-                    self._extra_frame.pack_forget()
-
-        # Track if layout changed
-        layout_changed = (self._last_extra_visible != extra_visible
-                          or self._last_session_visible != session_available)
-        self._last_extra_visible = extra_visible
-        self._last_session_visible = session_available
-
-        # Update costs with currency conversion
-        if self._today_cost:
-            cost_str = format_currency(today_cost, currency, self._exchange_rates)
-            self._today_cost.config(text=cost_str)
-        if self._today_tokens:
-            self._today_tokens.config(text=f"{format_tokens(today_tokens)} tokens")
-
-        if self._month_cost:
-            cost_str = format_currency(month_cost, currency, self._exchange_rates)
-            self._month_cost.config(text=cost_str)
-        if self._month_tokens:
-            self._month_tokens.config(text=f"{format_tokens(month_tokens)} tokens")
-
-        # Update timestamp and stale indicator
-        if self._updated_label:
-            time_str = timestamp.strftime("%H:%M")
-            engine_names = {Engine.CLAUDE: "Claude", Engine.CODEX: "Codex"}
-            engine_name = engine_names.get(self._active_engine, "Unknown")
-            if self._is_collecting and is_stale:
-                self._updated_label.config(text=f"{engine_name} · Collecting fresh data...")
-            else:
-                # Name the fallback so a models.dev outage is never silent.
-                suffix = "" if pricing_source == "models.dev" else " · bundled rates"
-                self._updated_label.config(text=f"{engine_name} · Updated at {time_str}{suffix}")
-            # Clear once any snapshot has been applied (stale or fresh); token gaps
-            # are now common, so don't pin "Collecting..." forever - the separate
-            # stale label keeps communicating staleness.
-            self._is_collecting = False
-
-        # Update stale indicator
-        if self._stale_label:
-            if is_stale and stale_since:
-                stale_text = get_staleness_text(stale_since)
-                self._stale_label.config(text=f"(cached from {stale_text})")
-            else:
-                self._stale_label.config(text="")
-
-        # Only resize window when layout structure changes (extra usage visibility)
-        # This prevents flickering on regular data updates
-        if layout_changed:
+        if layout_key != self._layout_key:
+            self._layout_key = layout_key
             self._update_window_size()
+
+    def _fill_limit(self, key, percent, reset_str, resets_at, window_hours, placeholder):
+        w = self._limits[key]
+        proj = project_window(percent, resets_at, window_hours)
+        w["bar"].set_value(percent, proj[0] if proj else None)
+        w["reset"].config(text=f"Resets {reset_str}" if reset_str else "")
+        w["left"].config(text=placeholder or f"{100 - percent:.0f}% left")
+        if placeholder or proj is None:
+            for cell in ("note", "pace", "elapsed"):
+                w[cell].config(text="")
+            return
+        expected, remaining, runout = proj
+        lasts = runout >= remaining
+        w["note"].config(text="Lasts until reset" if lasts else f"Runs out in {_fmt_hours(runout)}",
+                         fg=self.ok_color if lasts else self.warn_color)
+        ahead = percent - expected
+        w["pace"].config(text="On pace" if ahead <= 5 else f"{ahead:.0f}% ahead of pace")
+        w["elapsed"].config(text=f"{_fmt_hours(window_hours - remaining)} elapsed of {_fmt_hours(window_hours)}")
+
+    def _set_stat(self, key, value, sub):
+        v, s = self._stats[key]
+        v.config(text=value)
+        s.config(text=sub)
 
     def show(self, snapshot: Optional[UsageSnapshot] = None):
         """Show the window."""

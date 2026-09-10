@@ -1,93 +1,53 @@
 # ClaudeBar
 
-Windows system tray application for tracking Claude Code and OpenAI Codex usage statistics.
-
-Inspired by [CodexBar](https://github.com/steipete/CodexBar), which runs only on macOS.
+Windows system tray app that tracks Claude Code and OpenAI Codex usage. Inspired by [CodexBar](https://github.com/steipete/CodexBar), which runs only on macOS.
 
 ![ClaudeBar Main Window](mainwindow.jpg)
 
-## Features
+## What the panel shows
 
-ClaudeBar provides a dark-themed UI with real-time usage tracking for both Claude and OpenAI Codex.
+One engine at a time, switched with the buttons in the header.
 
-The main window shows each rate-limit window (5-hour session and weekly) as a bar with a tick at the point an even spend would have reached, how much is left, when it resets, and whether the remaining allowance lasts until the reset or runs out first at the pace spent so far. Below that, API-equivalent cost and token counts for today, this month and the last 31 days, output tokens and cache reads for today, a 31-day daily cost chart, and the model that dominates the month's cost.
+For each rate-limit window (5-hour session and weekly): a bar with a tick at the point an even spend would have reached, how much is left, when it resets, and whether the remaining allowance lasts until the reset or runs out first at the pace spent so far.
 
-Engine selection buttons in the header allow switching between Claude and Codex views. The data refreshes automatically in the background and can be manually triggered with the refresh button.
+Below the bars: API-equivalent cost and token counts for today, this month, and the last 31 days, today's output tokens and cache reads, a 31-day daily cost chart, and the model that dominates the month's cost.
 
-The tray icon displays a custom app icon if one exists at `resources/icons/app_icon.png`, otherwise it generates a dynamic icon that changes color based on usage level.
+The right-click tray menu shows a short summary of both engines without opening the panel.
 
-## Supported Engines
+## Supported engines
 
-ClaudeBar reads OAuth tokens from command-line tools only. Desktop apps and web interfaces use different authentication systems (browser-based cookies) that are not compatible with the usage APIs.
+ClaudeBar reads OAuth tokens from the CLI credential files only.
 
-**Supported:**
+Claude Code CLI: session and weekly limits, tokens per model, and costs from the JSONL logs. Requires an installed and authenticated Claude Code CLI.
 
-**Claude Code CLI** tracks session and weekly usage limits, token counts per model, and costs calculated from JSONL logs. Requires Claude Code CLI to be installed and authenticated.
+Codex CLI: session and weekly limits, tokens, and costs from the local logs. Requires Codex CLI with `codex login` completed.
 
-**OpenAI Codex CLI** tracks session and weekly rate limits, token usage, and estimated costs from local logs. Requires Codex CLI with `codex login` completed.
+Not supported: the Claude Desktop app and the ChatGPT web interface, which authenticate with browser cookies that the usage APIs do not accept, and GitHub Copilot, whose metrics API serves organisation and enterprise accounts only.
 
-**Not Supported:**
+## Install and run
 
-**Claude Desktop App** uses browser-based authentication stored in `%APPDATA%\Claude\` (Chromium profile cookies). This is a completely separate authentication system from the CLI's OAuth tokens, so ClaudeBar cannot read usage data from it.
-
-**ChatGPT web interface** uses browser session cookies with no API access for usage metrics.
-
-**GitHub Copilot** was investigated but the metrics API only provides usage data for organization and enterprise accounts. Individual users can view their Copilot usage at github.com/settings/copilot.
-
-## Requirements
-
-ClaudeBar requires Python 3.11 or higher and runs on Windows 10 and 11. You need Claude Code CLI installed for Claude tracking, and optionally Codex CLI with `codex login` completed for OpenAI tracking.
-
-## Installation
-
-Navigate to the claudebar directory and install dependencies:
+Requires Windows 10 or 11 and Python 3.11 or newer. The [Releases](https://github.com/MarvinFS/Public/releases) page has a signed installer if you would rather skip Python.
 
 ```powershell
-cd claudebar
 pip install -r requirements.txt
-```
-
-Dependencies are minimal: pystray for system tray functionality, Pillow for image handling, and pyinstaller for building executables.
-
-## Running
-
-Start the application from the command line:
-
-```powershell
 python src/main.py
 ```
 
-The app starts in the system tray. Left-click the tray icon to open the premium UI window, or right-click for a simple menu. Press Escape or click outside the window to close it.
+The app starts in the tray. Left-click the icon to open the panel, right-click for the menu. Escape closes the panel.
 
-## Building Standalone Executable
-
-Use the build script to create a portable executable:
+## Build the executable
 
 ```powershell
-.\build.ps1
+.\build.ps1            # writes dist\ClaudeBar.exe, about 20 MB
+.\build.ps1 -Install   # also copies it to the Startup folder
+.\build.ps1 -Clean     # rebuilds from scratch
 ```
 
-The executable will be created at `dist/ClaudeBar.exe` (approximately 20MB). To also install to Windows startup folder:
-
-```powershell
-.\build.ps1 -Install
-```
-
-For a clean rebuild:
-
-```powershell
-.\build.ps1 -Clean
-```
-
-The build excludes numpy, scipy, and other heavy optional dependencies to keep the executable size small.
-
-## Customizing the Icon
-
-Place a custom PNG icon at `resources/icons/app_icon.png` to replace the default icon in both the system tray and UI header. For the standalone exe, also create an ICO version at `resources/icons/app_icon.ico` which will be embedded as the Windows executable icon. The build process bundles these resources automatically.
+To use your own icon, put `app_icon.png` (tray and header) and `app_icon.ico` (the exe) in `resources/icons/`.
 
 ## Configuration
 
-Configuration is stored in `%LOCALAPPDATA%\ClaudeBar\config.json` with the following options:
+Settings live in `%LOCALAPPDATA%\ClaudeBar\config.json`:
 
 ```json
 {
@@ -99,43 +59,33 @@ Configuration is stored in `%LOCALAPPDATA%\ClaudeBar\config.json` with the follo
   "start_minimized": true,
   "currency": "USD",
   "claude_enabled": true,
-  "codex_enabled": true
+  "codex_enabled": true,
+  "window_x": null,
+  "window_y": null
 }
 ```
 
-The refresh_interval controls how often data updates automatically in seconds. Warning and critical thresholds determine when the tray icon changes from green to yellow to red. Currency can be set to USD, EUR, RUB, or RON for cost display. Engine toggles allow enabling or disabling Claude and Codex tracking independently.
+`refresh_interval` is in seconds. The two thresholds turn the tray icon yellow and red. `currency` accepts USD, EUR, GBP, RUB, or RON. The engine toggles hide an engine you do not use. `window_x` and `window_y` hold the last dragged panel position.
 
-## Tray Context Menu
+## Where the numbers come from
 
-Right-clicking the tray icon shows a quick summary of usage for both providers. The Claude section displays today's cost, monthly cost, and token count since these values come from the JSONL logs and API. The OpenAI section shows session and weekly usage percentages along with token counts, as OpenAI's API provides rate limit information but not cost breakdowns.
+Rate limits come from the Anthropic OAuth API, with the token from `~/.claude/.credentials.json`, and from the ChatGPT backend API, with the token from `~/.codex/auth.json`. Tokens and costs come from the JSONL logs in `~/.claude/projects/` and `~/.codex/`.
 
-## Data Sources
+Costs are API-equivalent estimates, not subscription charges: every token is priced at what the same call would cost on the public API. Rates come from models.dev, downloaded at most once a day and cached at `%LOCALAPPDATA%\ClaudeBar\models_dev.json`. Until a download has succeeded the bundled tables apply and the footer says "bundled rates". Claude 1-hour cache writes cost 2x the input rate and 5-minute writes 1.25x. OpenAI requests with more than 272K input tokens use the long-context tier. Models from other providers, such as a local model through Codex, count towards tokens but not cost.
 
-ClaudeBar reads OAuth tokens from CLI credential files only. It does not work with Claude Desktop App or ChatGPT web since these use browser-based authentication which is incompatible with the usage APIs.
+## Expired tokens
 
-Claude usage data comes from three sources. The OAuth API at api.anthropic.com provides session and weekly usage percentages using tokens from the Claude CLI credentials file at `~/.claude/.credentials.json`. JSONL logs in `~/.claude/projects/` provide token counts per model for cost calculation.
-
-Costs are API-equivalent estimates, not subscription charges: every token is priced at what the same call would cost on the public API. Rates come from models.dev, downloaded at most once a day and cached at `%LOCALAPPDATA%\ClaudeBar\models_dev.json`; while no download has succeeded the bundled tables apply and the footer says "bundled rates". Claude 1-hour cache writes are billed at 2x the input rate and 5-minute writes at 1.25x. OpenAI requests whose input exceeds 272K tokens use the long-context tier for that request. Models from other providers (for example Ollama through Codex) count towards tokens but not cost.
-
-OpenAI/Codex usage data comes from the ChatGPT backend API using OAuth tokens from the Codex CLI credentials at `~/.codex/auth.json`. Local JSONL logs at `~/.codex/` provide token counts and cost estimates. Users must run `codex login` to authenticate before this data becomes available.
-
-## OAuth Token Limitations
-
-ClaudeBar does not store any authentication credentials. It reads OAuth tokens from the Claude Code CLI credentials file at `~/.claude/.credentials.json`. These tokens have a maximum validity of approximately 8 hours. When the token expires, ClaudeBar cannot fetch fresh usage data from the Anthropic API.
-
-When the OAuth token expires, the app displays cached data with an amber indicator showing when the data was last refreshed (e.g., "cached from 2h ago"). The cached data persists in `%LOCALAPPDATA%\ClaudeBar\snapshot_cache.json` so usage information remains visible even when fresh data cannot be fetched.
-
-To refresh the OAuth token, simply open Claude Code CLI in any terminal. Claude Code automatically refreshes its tokens on startup, which allows ClaudeBar to fetch fresh data again. There is no way to refresh tokens from within ClaudeBar itself since the app intentionally avoids handling authentication to maintain simplicity and security.
+Claude OAuth tokens last about 8 hours. When the token has expired the panel keeps showing the last data, marked with an amber "cached from 2h ago", from `%LOCALAPPDATA%\ClaudeBar\snapshot_cache.json`. To get a fresh token, open Claude Code in any terminal: it refreshes the token on startup. ClaudeBar never stores or refreshes credentials itself.
 
 ## Troubleshooting
 
-If the tray icon is not visible, check the system tray overflow area by clicking the arrow in the taskbar. Windows may hide new tray icons by default.
+If the tray icon is missing, open the taskbar overflow arrow. Windows hides new tray icons by default.
 
-If no data appears, verify that Claude Code has been used and created files in `~/.claude/projects/`. Check that the Claude CLI is authenticated by running `claude /usage` in a terminal.
+If no Claude data appears, use Claude Code once so that `~/.claude/projects/` exists, and run `claude /usage` to check that the CLI is signed in.
 
-If OpenAI data shows an error, ensure Codex CLI is installed and run `codex login` to authenticate with your OpenAI account.
+If the Codex view shows an error, install Codex CLI and run `codex login`.
 
-The window opens near the system tray on the primary monitor. Drag it anywhere and it stays there across restarts; if that spot is no longer on any monitor when the app starts, it returns to the default position. "Reset window position" in the tray menu does the same on demand.
+The panel opens near the tray on the primary monitor. Drag it anywhere and it stays there across restarts. If that spot is no longer on any monitor when the app starts, the panel returns to the default position. "Reset window position" in the tray menu does the same on demand.
 
 ## License
 

@@ -10,7 +10,7 @@ One engine at a time, switched with the buttons in the header.
 
 For each rate-limit window (5-hour session and weekly): a bar with a tick at the point an even spend would have reached, how much is left, when it resets, and whether the remaining allowance lasts until the reset or runs out first at the pace spent so far.
 
-Below the bars: API-equivalent cost and token counts for today, this month, and the last 31 days, today's output tokens and cache reads, a 31-day daily cost chart, and the model that dominates the month's cost.
+Below the bars: API-equivalent cost and token counts for today, this month, and the last 31 days, today's output tokens and cache reads, a 7-day daily cost chart, and the model that dominates the month's cost.
 
 The right-click tray menu shows a short summary of both engines without opening the panel.
 

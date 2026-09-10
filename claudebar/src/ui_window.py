@@ -8,7 +8,7 @@ import ctypes
 import threading
 import io
 import urllib.request
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from PIL import Image, ImageTk
@@ -82,25 +82,31 @@ class PaceBar(tk.Canvas):
 
 
 class BarChart(tk.Canvas):
-    """Daily bars, today highlighted, oldest on the left."""
+    """Daily bars with a label under each, today highlighted, oldest on the left."""
 
-    def __init__(self, parent, width=348, height=44, accent="#F59E0B", **kwargs):
-        super().__init__(parent, width=width, height=height, highlightthickness=0, **kwargs)
-        self.w, self.h, self.accent = width, height, accent
+    LABEL_H = 14
 
-    def set_values(self, values):
+    def __init__(self, parent, width=348, height=44, accent="#F59E0B", font=None, **kwargs):
+        super().__init__(parent, width=width, height=height + self.LABEL_H, highlightthickness=0, **kwargs)
+        self.w, self.h, self.accent, self.font = width, height, accent, font
+
+    def set_values(self, values, labels=()):
         self.delete("v")
         if not values:
             return
         n = len(values)
-        gap = 2
+        gap = 4
         bw = (self.w - gap * (n - 1)) / n
         peak = max(max(values), 0.01)
         for i, v in enumerate(values):
             x0 = i * (bw + gap)
             h = max(v / peak * (self.h - 2), 1)
+            today = i == n - 1
             self.create_rectangle(x0, self.h - h, x0 + bw, self.h,
-                                  fill=self.accent if i == n - 1 else "#7a5210", outline="", tags="v")
+                                  fill=self.accent if today else "#7a5210", outline="", tags="v")
+            if i < len(labels):
+                self.create_text(x0 + bw / 2, self.h + self.LABEL_H / 2, text=labels[i], font=self.font,
+                                 fill=self.accent if today else "#6b7280", tags="v")
 
 
 def _point_on_screen(x: int, y: int) -> bool:
@@ -726,7 +732,7 @@ class ClaudeBarWindow:
         _, _, self._chart_note = self._row(parent, "Daily API-equivalent cost", "", self._font(8),
                                            self._font(8), self.text_muted, self.text_muted)
         tk.Frame(parent, bg=self.bg_color, height=4).pack()
-        self._chart = BarChart(parent, width=348, bg=self.bg_color)
+        self._chart = BarChart(parent, width=348, bg=self.bg_color, font=self._font(7))
         self._chart.pack(fill=tk.X)
         tk.Frame(parent, bg=self.bg_color, height=6).pack()
         _, self._top_model, self._top_share = self._row(
@@ -999,9 +1005,12 @@ class ClaudeBarWindow:
         self._set_stat("output", format_tokens(output_today), f"{format_tokens(cache_reads)} cache reads")
 
         # Chart + top model (per-model split exists for Claude only)
-        self._chart.set_values(snap.daily_costs)
-        peak = max(snap.daily_costs) if snap.daily_costs else 0.0
-        self._chart_note.config(text=f"{len(snap.daily_costs)} days, peak {money(peak)}")
+        # Last 7 days of the series; the 31-day total sits in the grid above.
+        week = snap.daily_costs[-7:]
+        today = snap.timestamp.date()
+        labels = [(today - timedelta(days=len(week) - 1 - i)).strftime("%a") for i in range(len(week))]
+        self._chart.set_values(week, labels)
+        self._chart_note.config(text=f"7 days, peak {money(max(week))}" if week else "")
         top = max(snap.models_used, key=lambda m: m.cost_usd, default=None) if claude else None
         if top and snap.month_cost_usd > 0:
             self._top_model.config(text=f"Top model  {top.model}")

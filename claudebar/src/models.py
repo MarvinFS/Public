@@ -34,6 +34,7 @@ class Engine(Enum):
     """AI engine/provider selection."""
     CLAUDE = "claude"
     CODEX = "codex"
+    DEEPSEEK = "deepseek"
 
 
 @dataclass
@@ -194,10 +195,95 @@ class OpenAISnapshot(_UsageStatus):
 
 
 @dataclass
+class DeepSeekSnapshot:
+    """DeepSeek balance and spend.
+
+    DeepSeek is API-only: it has no session or weekly quota, so this snapshot
+    carries no percentages and deliberately does not inherit _UsageStatus.
+    Money is the primary figure, with token counts alongside it.
+
+    Balance comes from the public API (an API key is enough). Usage comes from
+    the platform's private dashboard endpoints and needs a signed-in platform
+    token, so `usage_available` is False while `balance_available` can be True.
+    """
+    timestamp: datetime = field(default_factory=datetime.now)
+
+    # Balance (public API, API key). Amounts are USD; `balance_currency` is the
+    # currency the platform reported, kept so the panel can note a conversion.
+    balance_available: bool = False    # we have a reading
+    balance_usable: bool = False       # the API reports it can still serve calls
+    balance_total: float = 0.0
+    balance_topped_up: float = 0.0
+    balance_granted: float = 0.0
+    balance_currency: str = "USD"
+
+    # Usage (platform endpoints, userToken). All cost fields are USD.
+    usage_available: bool = False
+    usage_currency: str = "USD"      # currency the platform reported, before conversion
+
+    today_cost_usd: float = 0.0
+    today_tokens: int = 0
+    today_requests: int = 0
+
+    month_cost_usd: float = 0.0
+    month_tokens: int = 0
+    month_requests: int = 0
+
+    last7_cost_usd: float = 0.0
+    last7_tokens: int = 0
+    last7_requests: int = 0
+
+    # Token split across the trailing 7 days
+    week_cache_hit: int = 0
+    week_cache_miss: int = 0
+    week_output: int = 0
+
+    # Trailing 7 days, oldest first, ending today (zero-filled for quiet days)
+    daily_costs: list[float] = field(default_factory=list)
+    daily_tokens: list[int] = field(default_factory=list)
+    daily_requests: list[int] = field(default_factory=list)
+    daily_dates: list[str] = field(default_factory=list)
+
+    # Month-to-date per model, cost-descending
+    models_used: list[ModelUsage] = field(default_factory=list)
+
+    # Status
+    error_message: Optional[str] = None   # why there is no balance
+    usage_error: Optional[str] = None     # why there is no usage
+
+    # Staleness tracking (for cached data)
+    is_stale: bool = False
+    stale_since: Optional[datetime] = None
+
+    @property
+    def week_tokens(self) -> int:
+        return self.last7_tokens
+
+    @property
+    def status_level(self) -> str:
+        """normal with usage, warning with balance only, error with neither."""
+        if self.usage_available:
+            return "normal"
+        if self.balance_available:
+            return "warning"
+        return "error"
+
+    @property
+    def balance_message(self) -> str:
+        """Plain-language state of the balance, mirroring the platform."""
+        if not self.balance_available:
+            return self.error_message or "Balance unavailable"
+        if not self.balance_usable:
+            return "Add credits" if self.balance_total <= 0 else "Balance unavailable for API calls"
+        return "Available for API calls"
+
+
+@dataclass
 class CombinedSnapshot:
-    """Combined snapshot for both Claude and OpenAI/Codex."""
+    """Combined snapshot for Claude, OpenAI/Codex and DeepSeek."""
     claude: Optional[UsageSnapshot] = None
     openai: Optional[OpenAISnapshot] = None
+    deepseek: Optional[DeepSeekSnapshot] = None
     active_engine: Engine = Engine.CLAUDE
     timestamp: datetime = field(default_factory=datetime.now)
 

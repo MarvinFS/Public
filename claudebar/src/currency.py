@@ -27,7 +27,13 @@ FALLBACK_RATES = {
     "GBP": 0.79,
     "RUB": 97.5,
     "RON": 4.58,
+    "CNY": 7.10,
 }
+
+# Rates to keep in the table. CNY is not a display currency in the dropdown,
+# but DeepSeek's platform reports its cost in CNY for some accounts, so the
+# rate is needed to normalise those figures to USD.
+RATE_CURRENCIES = list(CURRENCIES.keys()) + ["CNY"]
 
 
 @dataclass
@@ -99,7 +105,7 @@ def fetch_exchange_rates() -> Optional[ExchangeRates]:
             all_rates = data.get("rates", {})
             rates = {
                 currency: all_rates.get(currency, FALLBACK_RATES[currency])
-                for currency in CURRENCIES.keys()
+                for currency in RATE_CURRENCIES
             }
 
             exchange_rates = ExchangeRates(
@@ -150,6 +156,26 @@ def convert_usd(amount_usd: float, currency: str, rates: Optional[ExchangeRates]
     return amount_usd * rate
 
 
+def to_usd(amount: float, currency: str, rates: Optional[ExchangeRates] = None) -> float:
+    """Convert an amount in `currency` to USD.
+
+    Every cost field in the snapshots is USD, so a source that reports in
+    another currency (DeepSeek's platform can report CNY) is normalised at the
+    point of ingest rather than downstream.
+    """
+    code = (currency or "USD").upper()
+    if code == "USD":
+        return amount
+
+    if rates is None:
+        rates = get_exchange_rates()
+
+    rate = rates.rates.get(code)
+    if not rate:  # unknown currency: leave the figure unconverted rather than zero it
+        return amount
+    return amount / rate
+
+
 def format_currency(amount_usd: float, currency: str, rates: Optional[ExchangeRates] = None) -> str:
     """Format an amount in the specified currency."""
     if currency not in CURRENCIES:
@@ -158,10 +184,13 @@ def format_currency(amount_usd: float, currency: str, rates: Optional[ExchangeRa
     converted = convert_usd(amount_usd, currency, rates)
     symbol = CURRENCIES[currency]["symbol"]
 
-    # Format based on magnitude
-    if converted < 0.01:
+    # Format based on magnitude. An exact zero reads as money ("$0.00"), not as
+    # the four-decimal form reserved for genuinely sub-cent spending.
+    if converted == 0:
+        return f"{symbol}0.00"
+    elif abs(converted) < 0.01:
         return f"{symbol}{converted:.4f}"
-    elif converted < 100:
+    elif abs(converted) < 100:
         return f"{symbol}{converted:.2f}"
     else:
         return f"{symbol}{converted:,.0f}"

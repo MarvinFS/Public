@@ -127,15 +127,16 @@ def get_sessions_for_date(sessions_dir: Path, date: datetime) -> list[Path]:
     return list(date_dir.glob("*.jsonl"))
 
 
-def get_codex_daily_usage(sessions_dir: Optional[Path] = None, days: int = 31) -> list[CodexTokenUsage]:
-    """Usage per day for the last `days` days ending today, oldest first.
+def get_codex_daily_usage(sessions_dir: Optional[Path] = None, days: int = 31,
+                          end: Optional[datetime] = None) -> list[CodexTokenUsage]:
+    """Usage per day for the last `days` days ending on `end` (today), oldest first.
 
     A session is bucketed to the day its file was started, as the daily
     figure always was.
     """
     if sessions_dir is None:
         sessions_dir = get_codex_sessions_dir()
-    today = datetime.now()
+    today = end or datetime.now()
     series = []
     for back in range(days - 1, -1, -1):
         day = today - timedelta(days=back)

@@ -11,6 +11,7 @@ a = Analysis(
         'openai_usage', 'claude_check', 'codex_log_parser',
         'codex_pricing', 'currency', 'icons', 'log_parser', 'pricing',
         'snapshot_cache', 'model_catalog', 'ui_window',
+        'deepseek_auth', 'deepseek_usage', 'secret_store',
     ],
     hookspath=[],
     hooksconfig={},

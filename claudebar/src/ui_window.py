@@ -13,16 +13,17 @@ from pathlib import Path
 
 from PIL import Image, ImageTk
 
-from models import (UsageSnapshot, OpenAISnapshot, CombinedSnapshot, Engine, project_window,
-                    SESSION_WINDOW_HOURS, WEEKLY_WINDOW_HOURS, DAILY_HISTORY_DAYS)
+from models import (UsageSnapshot, OpenAISnapshot, DeepSeekSnapshot, CombinedSnapshot, Engine,
+                    project_window, SESSION_WINDOW_HOURS, WEEKLY_WINDOW_HOURS, DAILY_HISTORY_DAYS)
 from config import Config, save_config, get_resources_path
 from currency import (
-    format_currency, get_exchange_rates, get_supported_currencies,
+    format_currency, convert_usd, get_exchange_rates, get_supported_currencies,
     get_currency_symbol, ExchangeRates
 )
 from claude_check import check_claude_status, ClaudeStatus
 from snapshot_cache import get_staleness_text
 from pricing import format_tokens
+import deepseek_auth
 
 # GitHub repository URL
 GITHUB_URL = "https://github.com/MarvinFS/Public/tree/main/claudebar"
@@ -56,10 +57,87 @@ _CUSTOM_ICON_PATH = get_resources_path() / "icons" / "app_icon.png"
 _ICONS_DIR = get_resources_path() / "icons"
 _CLAUDE_ICON_PATH = _ICONS_DIR / "claude_icon.png"
 _OPENAI_ICON_PATH = _ICONS_DIR / "openai_icon.png"
+_DEEPSEEK_ICON_PATH = _ICONS_DIR / "deepseek_icon.png"
 
-# Fallback icon URLs (B&W/monochrome versions for dark UI)
-_CLAUDE_ICON_URL = "https://cdn.iconscout.com/icon/free/png-256/free-anthropic-logo-icon-download-in-svg-png-gif-file-formats--technology-social-media-company-vol-2-pack-logos-icons-9294364.png"
-_OPENAI_ICON_URL = "https://cdn.iconscout.com/icon/free/png-256/free-openai-logo-icon-download-in-svg-png-gif-file-formats--technology-social-media-company-brand-vol-4-pack-logos-icons-8800152.png"
+# Fallback mark sources. Raster favicons keep an SVG rasteriser out of the
+# bundle, and a missing local asset still self-heals on the next run.
+def _icon_url(domain: str) -> str:
+    return f"https://www.google.com/s2/favicons?domain={domain}&sz=64"
+
+
+# engine -> (display name, local icon, fallback domain, accent colour)
+_ENGINE_META = {
+    Engine.CLAUDE: ("Claude", _CLAUDE_ICON_PATH, "anthropic.com", "#F59E0B"),
+    Engine.CODEX: ("Codex", _OPENAI_ICON_PATH, "openai.com", "#F59E0B"),
+    Engine.DEEPSEEK: ("DeepSeek", _DEEPSEEK_ICON_PATH, "deepseek.com", "#4D6BFE"),
+}
+
+# engine -> Config attribute that enables it
+_ENABLED_FLAG = {
+    Engine.CLAUDE: "claude_enabled",
+    Engine.CODEX: "codex_enabled",
+    Engine.DEEPSEEK: "deepseek_enabled",
+}
+
+# Selector glyph geometry
+_GLYPH_CANVAS = 64
+_GLYPH_BOX = 52
+_GLYPH_SIZE = 20
+
+
+def _monochrome_glyph(img: Image.Image, canvas: int = _GLYPH_CANVAS,
+                      box: int = _GLYPH_BOX) -> Image.Image:
+    """Reduce a provider mark to a white-on-transparent mask of uniform size.
+
+    Marks arrive in two shapes: an opaque card with a dark glyph, or a coloured
+    glyph that already carries transparency. The opaque kind takes its mask from
+    inverted luminance, the transparent kind keeps its own alpha. Either way the
+    glyph is cropped and scaled to a common optical size so the selector row
+    looks even.
+    """
+    rgba = img.convert("RGBA")
+    alpha = rgba.getchannel("A")
+    transparent = sum(alpha.histogram()[:16])
+    if transparent > rgba.size[0] * rgba.size[1] * 0.05:
+        mask = alpha
+    else:
+        flat = Image.new("RGB", rgba.size, (255, 255, 255))
+        flat.paste(rgba, mask=alpha)
+        mask = flat.convert("L").point(lambda v: 255 - v)
+
+    mask = mask.point(lambda v: 0 if v < 14 else v)  # drop the halo
+    bounds = mask.getbbox()
+    if bounds:
+        mask = mask.crop(bounds)
+        w, h = mask.size
+        scale = box / max(w, h)
+        mask = mask.resize((max(1, round(w * scale)), max(1, round(h * scale))),
+                           Image.Resampling.LANCZOS)
+
+    out = Image.new("L", (canvas, canvas), 0)
+    out.paste(mask, ((canvas - mask.size[0]) // 2, (canvas - mask.size[1]) // 2))
+    return out
+
+
+def _dim(hex_color: str, factor: float = 0.45) -> str:
+    """A darker version of an accent, for the bars that are not today."""
+    try:
+        value = hex_color.lstrip("#")
+        r, g, b = (int(value[i:i + 2], 16) for i in (0, 2, 4))
+        return "#%02x%02x%02x" % (int(r * factor), int(g * factor), int(b * factor))
+    except (ValueError, IndexError):
+        return hex_color
+
+
+def bar_index_at(x: int, n: int, width: int, gap: int = 4) -> Optional[int]:
+    """Index of the bar under canvas x, or None when there are no bars.
+
+    Bars sit on a fixed pitch of (width + gap) / n, so the hit test is a
+    division rather than a scan. Pure maths, so it is unit-tested without Tk.
+    """
+    if n <= 0 or width <= 0 or x < 0 or x > width:
+        return None
+    return max(0, min(n - 1, int(x // ((width + gap) / n))))
 
 
 class PaceBar(tk.Canvas):
@@ -69,6 +147,10 @@ class PaceBar(tk.Canvas):
         super().__init__(parent, width=width, height=height + 2, highlightthickness=0, **kwargs)
         self.w, self.h, self.accent = width, height, accent
         self.create_rectangle(0, 1, width, height + 1, fill="#262626", outline="")
+
+    def set_accent(self, accent: str):
+        """Recolour without a repaint; the next set_value uses it."""
+        self.accent = accent
 
     def set_value(self, percent, expected=None):
         self.delete("v")
@@ -82,16 +164,32 @@ class PaceBar(tk.Canvas):
 
 
 class BarChart(tk.Canvas):
-    """Daily bars with a label under each, today highlighted, oldest on the left."""
+    """Daily bars with a label under each, today highlighted, oldest on the left.
 
-    LABEL_H = 14
+    Hovering a bar shows that day's figures in a flyout drawn on the canvas
+    itself. Drawing in-canvas rather than in a Toplevel keeps the panel's
+    topmost, borderless geometry out of the picture entirely.
+    """
 
     def __init__(self, parent, width=348, height=44, accent="#F59E0B", font=None, **kwargs):
-        super().__init__(parent, width=width, height=height + self.LABEL_H, highlightthickness=0, **kwargs)
+        # Label band from the font metrics, so a DPI-scaled font does not overlap the bars.
+        self.label_h = tkfont.Font(root=parent, font=font).metrics("linespace") + 2 if font else 14
+        super().__init__(parent, width=width, height=height + self.label_h, highlightthickness=0, **kwargs)
         self.w, self.h, self.accent, self.font = width, height, accent, font
+        self._tooltips: list = []
+        self._n = 0
+        self._tip_index: Optional[int] = None
+        self.bind("<Motion>", self._on_motion)
+        self.bind("<Leave>", lambda e: self._show_tip(None))
 
-    def set_values(self, values, labels=()):
+    def set_accent(self, accent: str):
+        self.accent = accent
+
+    def set_values(self, values, labels=(), tooltips=()):
         self.delete("v")
+        self._show_tip(None)
+        self._tooltips = list(tooltips)
+        self._n = len(values)
         if not values:
             return
         n = len(values)
@@ -103,10 +201,39 @@ class BarChart(tk.Canvas):
             h = max(v / peak * (self.h - 2), 1)
             today = i == n - 1
             self.create_rectangle(x0, self.h - h, x0 + bw, self.h,
-                                  fill=self.accent if today else "#7a5210", outline="", tags="v")
+                                  fill=self.accent if today else _dim(self.accent), outline="", tags="v")
             if i < len(labels):
-                self.create_text(x0 + bw / 2, self.h + self.LABEL_H / 2, text=labels[i], font=self.font,
+                self.create_text(x0 + bw / 2, self.h + self.label_h / 2, text=labels[i], font=self.font,
                                  fill=self.accent if today else "#6b7280", tags="v")
+
+    def _on_motion(self, event):
+        self._show_tip(bar_index_at(event.x, self._n, self.w))
+
+    def _show_tip(self, index: Optional[int]):
+        """Draw the flyout for one bar, or clear it. Cheap to call repeatedly."""
+        if index == self._tip_index:
+            return
+        self._tip_index = index
+        self.delete("tip")
+        if index is None or not self._tooltips:
+            return
+        if index >= len(self._tooltips):
+            return
+        text = self._tooltips[index]
+        if not text:
+            return
+
+        font = tkfont.Font(root=self, font=self.font)
+        pad = 5
+        box_w = font.measure(text) + pad * 2
+        box_h = font.metrics("linespace") + pad
+        slot = (self.w + 4) / max(self._n, 1)
+        centre = index * slot + slot / 2
+        x0 = max(0, min(self.w - box_w, centre - box_w / 2))
+        self.create_rectangle(x0, 0, x0 + box_w, box_h, fill="#000000", outline="#3a3a3a", tags="tip")
+        self.create_text(x0 + box_w / 2, box_h / 2, text=text, font=self.font,
+                         fill="#ffffff", tags="tip")
+
 
 
 def _point_on_screen(x: int, y: int) -> bool:
@@ -147,17 +274,22 @@ class SettingsDialog:
         self.dialog = tk.Toplevel(parent)
         self.dialog.title("Settings")
         self.dialog.configure(bg="#0f0f0f")
-        self.dialog.geometry("300x420")
+        self.dialog.geometry("360x600")
         self.dialog.resizable(False, False)
         self.dialog.transient(parent)
         self.dialog.grab_set()
         self.dialog.attributes('-topmost', True)
 
-        # Center on parent
+        # Center on the parent, then keep it on the monitor: the panel sits near
+        # the tray, so a tall dialog would otherwise hang off the bottom edge
+        # and hide its own Save button.
         self.dialog.update_idletasks()
-        x = parent.winfo_x() + (parent.winfo_width() - 300) // 2
-        y = parent.winfo_y() + (parent.winfo_height() - 300) // 2
-        self.dialog.geometry(f"+{x}+{y}")
+        width, height = 360, 600
+        x = parent.winfo_x() + (parent.winfo_width() - width) // 2
+        y = parent.winfo_y() + (parent.winfo_height() - height) // 2
+        x = max(0, min(x, self.dialog.winfo_screenwidth() - width))
+        y = max(0, min(y, self.dialog.winfo_screenheight() - height - 60))
+        self.dialog.geometry(f"{width}x{height}+{x}+{y}")
 
         # Ensure dialog is focused and on top
         self.dialog.lift()
@@ -208,6 +340,18 @@ class SettingsDialog:
                                   activeforeground="#ffffff",
                                   selectcolor="#1a1a1a")
         codex_cb.pack(side=tk.LEFT, padx=(10, 0))
+
+        self.deepseek_var = tk.BooleanVar(value=self.config.deepseek_enabled)
+        deepseek_cb = tk.Checkbutton(engines_frame, text="DeepSeek",
+                                     variable=self.deepseek_var,
+                                     font=("Segoe UI", 10),
+                                     fg="#ffffff", bg="#0f0f0f",
+                                     activebackground="#0f0f0f",
+                                     activeforeground="#ffffff",
+                                     selectcolor="#1a1a1a")
+        deepseek_cb.pack(side=tk.LEFT, padx=(10, 0))
+
+        self._create_deepseek_credentials(frame)
 
         # Currency selection
         currency_frame = tk.Frame(frame, bg="#0f0f0f")
@@ -275,6 +419,59 @@ class SettingsDialog:
                               relief=tk.FLAT, padx=20, pady=8)
         cancel_btn.pack(side=tk.RIGHT, padx=(0, 10))
 
+    def _credential_entry(self, parent, label, hint, show):
+        """One masked credential field with its explanatory line."""
+        tk.Label(parent, text=label, font=("Segoe UI", 9),
+                 fg="#9ca3af", bg="#0f0f0f").pack(anchor=tk.W)
+        var = tk.StringVar()
+        tk.Entry(parent, textvariable=var, show=show, width=34,
+                 bg="#1a1a1a", fg="#ffffff", insertbackground="#ffffff",
+                 relief=tk.FLAT).pack(anchor=tk.W, pady=(2, 0))
+        if hint:
+            tk.Label(parent, text=hint, font=("Segoe UI", 8), wraplength=320,
+                     justify=tk.LEFT, fg="#6b7280", bg="#0f0f0f").pack(anchor=tk.W)
+        return var
+
+    def _create_deepseek_credentials(self, frame):
+        """DeepSeek has two credentials, and they unlock different things."""
+        section = tk.Frame(frame, bg="#0f0f0f")
+        section.pack(fill=tk.X, pady=(0, 15))
+
+        discovered = deepseek_auth.discover_api_key()
+        if discovered and discovered.source == "harness":
+            key_hint = "Blank: using the API key found in the DeepSeek Harness."
+        elif discovered:
+            key_hint = f"Blank: using the API key from {discovered.source}."
+        else:
+            key_hint = "From platform.deepseek.com. Balance only, no usage."
+        self.deepseek_key_var = self._credential_entry(
+            section, "DeepSeek API key", key_hint, show="\u2022")
+
+        self.deepseek_token_var = self._credential_entry(
+            section, "DeepSeek platform token",
+            "Sign in at platform.deepseek.com, then run "
+            "localStorage.getItem(\"userToken\") in the browser console and "
+            "paste the result here. Either the bare token or the whole "
+            "{\"value\":...} object is accepted. Needed for the cost and "
+            "token figures.",
+            show="\u2022")
+
+        actions = tk.Frame(section, bg="#0f0f0f")
+        actions.pack(fill=tk.X, pady=(4, 0))
+        tk.Button(actions, text="Clear saved credentials", command=self._clear_credentials,
+                  font=("Segoe UI", 8), bg="#2a2a2a", fg="#d1d5db",
+                  activebackground="#3a3a3a", activeforeground="#ffffff",
+                  relief=tk.FLAT, padx=10, pady=3).pack(side=tk.LEFT)
+        self._credential_note = tk.Label(actions, text="", font=("Segoe UI", 8),
+                                         fg="#6b7280", bg="#0f0f0f")
+        self._credential_note.pack(side=tk.LEFT, padx=(8, 0))
+
+    def _clear_credentials(self):
+        deepseek_auth.clear_credentials()
+        self.deepseek_key_var.set("")
+        self.deepseek_token_var.set("")
+        self._credential_note.config(text="Saved credentials removed")
+
     def _restore_parent(self):
         """Restore parent window's topmost state."""
         try:
@@ -294,13 +491,15 @@ class SettingsDialog:
         # Validate at least one engine is enabled
         claude_enabled = self.claude_var.get()
         codex_enabled = self.codex_var.get()
+        deepseek_enabled = self.deepseek_var.get()
 
-        if not claude_enabled and not codex_enabled:
+        if not claude_enabled and not codex_enabled and not deepseek_enabled:
             self.error_label.config(text="At least one engine must be enabled")
             return
 
         self.config.claude_enabled = claude_enabled
         self.config.codex_enabled = codex_enabled
+        self.config.deepseek_enabled = deepseek_enabled
         self.config.currency = self.currency_var.get()
         try:
             self.config.refresh_interval = int(self.refresh_var.get())
@@ -308,6 +507,16 @@ class SettingsDialog:
             pass
 
         save_config(self.config)
+
+        # Credentials never touch config.json; a blank field keeps whatever is
+        # already stored (or auto-detected) rather than clearing it.
+        entered_key = self.deepseek_key_var.get().strip()
+        if entered_key and not deepseek_auth.save_api_key(entered_key):
+            self.error_label.config(text="Could not save the API key securely")
+        entered_token = self.deepseek_token_var.get().strip()
+        if entered_token and not deepseek_auth.save_user_token(entered_token):
+            self.error_label.config(text="Could not save the platform token securely")
+
         self.on_save()
         self._restore_parent()
         self.dialog.destroy()
@@ -329,9 +538,11 @@ class ClaudeBarWindow:
         self._lock = threading.RLock()
         self._snapshot: Optional[UsageSnapshot] = None
         self._openai_snapshot: Optional[OpenAISnapshot] = None
+        self._deepseek_snapshot: Optional[DeepSeekSnapshot] = None
         self._combined_snapshot: Optional[CombinedSnapshot] = None
         self._pending_snapshot: Optional[UsageSnapshot] = None  # Thread-safe pending update
         self._pending_openai_snapshot: Optional[OpenAISnapshot] = None
+        self._pending_deepseek_snapshot: Optional[DeepSeekSnapshot] = None
         self._exchange_rates: Optional[ExchangeRates] = None
         self._claude_status: Optional[ClaudeStatus] = None
         self._status_needs_update = False
@@ -364,8 +575,8 @@ class ClaudeBarWindow:
         self._layout_key = None      # which optional rows are visible
 
         # Engine toggle UI elements
-        self._claude_btn: Optional[tk.Label] = None
-        self._openai_btn: Optional[tk.Label] = None
+        self._engine_btns: dict = {}       # Engine -> selector Label
+        self._engine_icons: dict = {}      # Engine -> (active, inactive) PhotoImage
         self._engine_frame: Optional[tk.Frame] = None
 
         # Drag-to-move state (the window is borderless, so there is no title bar)
@@ -389,32 +600,41 @@ class ClaudeBarWindow:
         self.sans = "Segoe UI"
         self.mono = "Consolas"
 
-    def _load_engine_icon(self, local_path: Path, url: str, size: int = 24) -> Optional[ImageTk.PhotoImage]:
-        """Load engine icon from local cache or download from URL."""
+    def _load_engine_glyph(self, local_path: Path, url: str) -> Optional[Image.Image]:
+        """Load a provider mark, downloading and caching it on a miss."""
         try:
-            # Try local file first
-            if local_path.exists():
-                img = Image.open(local_path)
-            else:
-                # Download and cache
+            if not local_path.exists():
                 try:
                     req = urllib.request.Request(url, headers={"User-Agent": "ClaudeBar/1.0"})
                     with urllib.request.urlopen(req, timeout=5) as response:
                         data = response.read()
                     img = Image.open(io.BytesIO(data))
-                    # Save to cache
                     local_path.parent.mkdir(parents=True, exist_ok=True)
                     img.save(local_path)
                 except Exception:
                     return None
-
-            # Resize and convert to grayscale for B&W look
-            img = img.resize((size, size), Image.Resampling.LANCZOS)
-            # Convert to grayscale, then boost brightness for dark UI
-            img = img.convert("LA")  # Luminance + Alpha
-            return ImageTk.PhotoImage(img)
+            with Image.open(local_path) as img:
+                return _monochrome_glyph(img)
         except Exception:
             return None
+
+    def _engine_icon_images(self, engine: Engine) -> Optional[tuple]:
+        """(active, inactive) PhotoImages for one engine, or None.
+
+        Both states come from one mask, so only the tint differs. The caller
+        must keep the returned images alive or Tk will collect them.
+        """
+        _, local_path, domain, _ = _ENGINE_META[engine]
+        mask = self._load_engine_glyph(local_path, _icon_url(domain))
+        if mask is None:
+            return None
+        mask = mask.resize((_GLYPH_SIZE, _GLYPH_SIZE), Image.Resampling.LANCZOS)
+        images = []
+        for colour in (self.text_primary, self.text_muted):
+            tinted = Image.new("RGBA", mask.size, colour)
+            tinted.putalpha(mask)
+            images.append(ImageTk.PhotoImage(tinted))
+        return tuple(images)
 
     def _create_window(self):
         """Create the popup window."""
@@ -448,7 +668,13 @@ class ClaudeBarWindow:
         self._create_header(content)
         self._create_engine_rows(content)
         self._hairline(content)
-        self._create_limits(content)
+        # Host for the region holding either the rate-limit rows or the DeepSeek
+        # balance block. Children pack and unpack inside it, so re-showing one
+        # never reorders the panel around it.
+        self._limits_host = tk.Frame(content, bg=self.bg_color)
+        self._limits_host.pack(fill=tk.X)
+        self._create_limits(self._limits_host)
+        self._create_balance(self._limits_host)
         self._hairline(content)
         self._create_stats(content)
         self._hairline(content)
@@ -574,13 +800,9 @@ class ClaudeBarWindow:
         self._opening_link = False
 
     def _get_enabled_engines(self) -> list[Engine]:
-        """Get list of enabled engines from config."""
-        engines = []
-        if self.config.claude_enabled:
-            engines.append(Engine.CLAUDE)
-        if self.config.codex_enabled:
-            engines.append(Engine.CODEX)
-        return engines
+        """Get list of enabled engines from config, in selector order."""
+        return [engine for engine in _ENGINE_META
+                if getattr(self.config, _ENABLED_FLAG[engine], True)]
 
     def _font(self, size, weight="normal", mono=False):
         return (self.mono if mono else self.sans, size, weight)
@@ -631,24 +853,35 @@ class ClaudeBarWindow:
         if len(enabled_engines) > 1:
             self._engine_frame = tk.Frame(header, bg=self.bg_color)
             self._engine_frame.pack(side=tk.RIGHT, padx=(0, 8))
-            for engine, name in ((Engine.CLAUDE, "Claude"), (Engine.CODEX, "Codex")):
-                btn = tk.Label(self._engine_frame, text=name, font=self._font(8),
-                               fg=self.text_primary, bg=self.inactive_engine_bg,
-                               padx=10, pady=3, cursor="hand2")
+            for engine in enabled_engines:
+                name = _ENGINE_META[engine][0]
+                # The icon carries the button; the text is the fallback when a
+                # mark is missing and could not be downloaded.
+                icons = self._engine_icon_images(engine)
+                if icons:
+                    self._engine_icons[engine] = icons
+                    btn = tk.Label(self._engine_frame, image=icons[0], bg=self.inactive_engine_bg,
+                                   padx=8, pady=3, cursor="hand2")
+                else:
+                    btn = tk.Label(self._engine_frame, text=name, font=self._font(8),
+                                   fg=self.text_primary, bg=self.inactive_engine_bg,
+                                   padx=10, pady=3, cursor="hand2")
                 btn.pack(side=tk.LEFT)
                 btn.bind("<Button-1>", lambda e, en=engine: self._on_engine_select(en))
-                if engine == Engine.CLAUDE:
-                    self._claude_btn = btn
-                else:
-                    self._openai_btn = btn
+                self._engine_btns[engine] = btn
             self._paint_engine_buttons()
 
     def _paint_engine_buttons(self):
-        for btn, engine in ((self._claude_btn, Engine.CLAUDE), (self._openai_btn, Engine.CODEX)):
-            if btn:
-                on = self._active_engine == engine
-                btn.config(bg=self.active_engine_bg if on else self.inactive_engine_bg,
-                           fg=self.text_primary if on else self.text_muted,
+        for engine, btn in self._engine_btns.items():
+            if not btn:
+                continue
+            on = self._active_engine == engine
+            btn.config(bg=self.active_engine_bg if on else self.inactive_engine_bg)
+            icons = self._engine_icons.get(engine)
+            if icons:
+                btn.config(image=icons[0] if on else icons[1])
+            else:
+                btn.config(fg=self.text_primary if on else self.text_muted,
                            font=self._font(8, "bold" if on else "normal"))
 
     def _on_engine_select(self, engine: Engine):
@@ -706,15 +939,28 @@ class ClaudeBarWindow:
         self._extra_bar = PaceBar(self._extra_frame, width=348, bg=self.bg_color)
         self._extra_bar.pack(fill=tk.X)
 
+    def _create_balance(self, parent):
+        """DeepSeek balance block. Stands in the row where the limits sit,
+        because DeepSeek exposes no session or weekly quota."""
+        self._balance_frame = tk.Frame(parent, bg=self.bg_color)
+        _, _, self._balance_note = self._row(self._balance_frame, "Balance", "", self._font(9, "bold"),
+                                             self._font(8), self.text_primary, self.text_muted)
+        self._balance_value = tk.Label(self._balance_frame, text="", font=self._font(16, "bold", mono=True),
+                                       fg=self.text_primary, bg=self.bg_color)
+        self._balance_value.pack(anchor=tk.W, pady=(2, 0))
+        _, self._balance_state, self._balance_currency = self._row(
+            self._balance_frame, "", "", self._font(8), self._font(8), self.ok_color, self.text_muted)
+
     def _create_stat(self, parent, key, title):
         f = tk.Frame(parent, bg=self.bg_color)
         f.pack(side=tk.LEFT, fill=tk.X, expand=True)
-        tk.Label(f, text=title, font=self._font(8), fg=self.text_muted, bg=self.bg_color).pack(anchor=tk.W)
+        heading = tk.Label(f, text=title, font=self._font(8), fg=self.text_muted, bg=self.bg_color)
+        heading.pack(anchor=tk.W)
         value = tk.Label(f, text="", font=self._font(12, "bold", mono=True), fg=self.text_primary, bg=self.bg_color)
         value.pack(anchor=tk.W)
         sub = tk.Label(f, text="", font=self._font(8), fg=self.text_muted, bg=self.bg_color)
         sub.pack(anchor=tk.W)
-        self._stats[key] = (value, sub)
+        self._stats[key] = (heading, value, sub)
 
     def _create_stats(self, parent):
         """2x2 grid: today / last 31 days, this month / output today."""
@@ -729,8 +975,9 @@ class ClaudeBarWindow:
         self._create_stat(bottom, "output", "Output today")
 
     def _create_chart(self, parent):
-        _, _, self._chart_note = self._row(parent, "Daily API-equivalent cost", "", self._font(8),
-                                           self._font(8), self.text_muted, self.text_muted)
+        _, self._chart_title, self._chart_note = self._row(
+            parent, "Daily API-equivalent cost", "", self._font(8),
+            self._font(8), self.text_muted, self.text_muted)
         tk.Frame(parent, bg=self.bg_color, height=4).pack()
         self._chart = BarChart(parent, width=348, bg=self.bg_color, font=self._font(7))
         self._chart.pack(fill=tk.X)
@@ -764,7 +1011,7 @@ class ClaudeBarWindow:
         if not self._status_indicator or not self._status_text:
             return
         if self._engine_name:
-            self._engine_name.config(text="Claude" if self._active_engine == Engine.CLAUDE else "Codex")
+            self._engine_name.config(text=_ENGINE_META[self._active_engine][0])
 
         # Read shared state under a single lock acquisition
         with self._lock:
@@ -859,6 +1106,29 @@ class ClaudeBarWindow:
             else:
                 self._status_indicator.config(fg="#6b7280")
                 self._status_text.config(text="Checking...")
+        elif self._active_engine == Engine.DEEPSEEK:
+            # DeepSeek has no quota to report, so the balance is the status
+            snap = self._deepseek_snapshot
+            if snap is None:
+                self._status_indicator.config(fg="#6b7280")
+                self._status_text.config(text="Checking...")
+            elif snap.balance_available:
+                if snap.usage_available:
+                    self._status_indicator.config(fg="#10B981")
+                    text = "Connected"
+                else:
+                    self._status_indicator.config(fg="#F59E0B")
+                    text = "Connected \u00b7 balance only"
+                self._status_text.config(text=f"{text} \u00b7 {self._money_fixed(snap.balance_total)}")
+            elif snap.error_message == "No API key":
+                self._status_indicator.config(fg="#6b7280")
+                self._status_text.config(text="No API key")
+            elif snap.usage_error == "Session expired":
+                self._status_indicator.config(fg="#EF4444")
+                self._status_text.config(text="Session expired")
+            else:
+                self._status_indicator.config(fg="#EF4444")
+                self._status_text.config(text=snap.balance_message)
 
     def _on_refresh_click(self):
         """Handle refresh button."""
@@ -889,8 +1159,8 @@ class ClaudeBarWindow:
             self._window.destroy()
             self._window = None
             # Reset UI element references
-            self._claude_btn = None
-            self._openai_btn = None
+            self._engine_btns = {}
+            self._engine_icons = {}
             self._engine_frame = None
             self._layout_key = None
 
@@ -900,6 +1170,8 @@ class ClaudeBarWindow:
             self.update(self._snapshot)
         if self._openai_snapshot:
             self.update_openai(self._openai_snapshot)
+        if self._deepseek_snapshot:
+            self.update_deepseek(self._deepseek_snapshot)
         self.show()
 
     def _on_exit_click(self):
@@ -917,11 +1189,17 @@ class ClaudeBarWindow:
         with self._lock:
             self._pending_openai_snapshot = snapshot
 
+    def update_deepseek(self, snapshot: DeepSeekSnapshot):
+        """Queue DeepSeek snapshot update (thread-safe)."""
+        with self._lock:
+            self._pending_deepseek_snapshot = snapshot
+
     def update_combined(self, combined: CombinedSnapshot):
         """Queue combined snapshot update (thread-safe)."""
         with self._lock:
             self._pending_snapshot = combined.claude
             self._pending_openai_snapshot = combined.openai
+            self._pending_deepseek_snapshot = combined.deepseek
             self._active_engine = combined.active_engine
             # Clear OAuth error if we received valid Claude data
             if combined.claude and combined.claude.cli_available:
@@ -940,6 +1218,10 @@ class ClaudeBarWindow:
                 self._openai_snapshot = self._pending_openai_snapshot
                 self._pending_openai_snapshot = None
                 updated = True
+            if self._pending_deepseek_snapshot:
+                self._deepseek_snapshot = self._pending_deepseek_snapshot
+                self._pending_deepseek_snapshot = None
+                updated = True
 
         if not updated:
             return
@@ -951,76 +1233,224 @@ class ClaudeBarWindow:
         if not self._window or not self._window.winfo_exists():
             return
 
-        currency = self.config.currency
-        money = lambda usd: format_currency(usd, currency, self._exchange_rates)
-        claude = self._active_engine == Engine.CLAUDE
-        snap = self._snapshot if claude else self._openai_snapshot
-        if snap is None:
-            return
+        money = lambda usd: format_currency(usd, self.config.currency, self._exchange_rates)
+        engine = self._active_engine
+        self._apply_accent(engine)
 
-        # Which optional rows show; a change re-measures the window.
-        session_visible = claude or snap.session_available
-        extra_visible = claude and snap.extra_enabled
-        layout_key = (claude, session_visible, extra_visible)
+        if engine == Engine.CLAUDE and self._snapshot:
+            self._fill_claude_view(self._snapshot, money)
+        elif engine == Engine.CODEX and self._openai_snapshot:
+            self._fill_codex_view(self._openai_snapshot, money)
+        elif engine == Engine.DEEPSEEK and self._deepseek_snapshot:
+            self._fill_deepseek_view(self._deepseek_snapshot, money)
 
+    def _apply_accent(self, engine: Engine):
+        """Each engine tints the shared bars and chart with its own colour."""
+        accent = _ENGINE_META[engine][3]
+        for widget in (self._limits["session"]["bar"], self._limits["weekly"]["bar"],
+                       self._extra_bar, self._chart):
+            if widget is not None:
+                widget.set_accent(accent)
+
+    def _show_limits(self, session_visible: bool, extra_visible: bool):
+        """Show the rate-limit rows and hide the DeepSeek balance block."""
+        if self._balance_frame.winfo_manager():
+            self._balance_frame.pack_forget()
+
+        session_frame = self._limits["session"]["frame"]
+        weekly_frame = self._limits["weekly"]["frame"]
+
+        if not weekly_frame.winfo_manager():
+            weekly_frame.pack(fill=tk.X)
+        if session_visible and not session_frame.winfo_manager():
+            session_frame.pack(fill=tk.X, pady=(0, 8), before=weekly_frame)
+        elif not session_visible and session_frame.winfo_manager():
+            session_frame.pack_forget()
+
+        if extra_visible and not self._extra_frame.winfo_manager():
+            self._extra_frame.pack(fill=tk.X, after=weekly_frame)
+        elif not extra_visible and self._extra_frame.winfo_manager():
+            self._extra_frame.pack_forget()
+
+    def _show_balance(self) -> None:
+        """Show the balance block, which stands where the limits would be."""
+        for widget in (self._limits["session"]["frame"], self._limits["weekly"]["frame"],
+                       self._extra_frame):
+            if widget.winfo_manager():
+                widget.pack_forget()
+        if not self._balance_frame.winfo_manager():
+            self._balance_frame.pack(fill=tk.X, pady=(0, 8))
+
+    def _fill_claude_view(self, snap: UsageSnapshot, money):
         collecting = (self._is_collecting and snap.session_percent == 0 and snap.weekly_percent == 0
                       and not snap.is_stale)
-        unavailable = claude and not snap.cli_available and not snap.is_stale
+        unavailable = not snap.cli_available and not snap.is_stale
         placeholder = "Collecting..." if collecting else ("Unavailable" if unavailable else None)
 
         self._fill_limit("session", snap.session_percent, snap.session_reset,
                          snap.session_resets_at, SESSION_WINDOW_HOURS, placeholder)
         self._fill_limit("weekly", snap.weekly_percent, snap.weekly_reset,
                          snap.weekly_resets_at, WEEKLY_WINDOW_HOURS, placeholder)
-        frame = self._limits["session"]["frame"]
-        if session_visible and not frame.winfo_manager():
-            frame.pack(fill=tk.X, pady=(0, 8), before=self._limits["weekly"]["frame"])
-        elif not session_visible and frame.winfo_manager():
-            frame.pack_forget()
+        self._show_limits(session_visible=True, extra_visible=snap.extra_enabled)
 
-        if extra_visible:
-            if not self._extra_frame.winfo_manager():
-                self._extra_frame.pack(fill=tk.X, after=self._limits["weekly"]["frame"])
+        if snap.extra_enabled:
             symbol = get_currency_symbol(snap.extra_currency.upper())
             self._extra_bar.set_value(snap.extra_percent)
             self._extra_amount.config(
                 text=f"{snap.extra_percent:.0f}% used \u00b7 {symbol}{snap.extra_used:.2f} / {symbol}{snap.extra_limit:.2f}")
-        elif self._extra_frame.winfo_manager():
-            self._extra_frame.pack_forget()
 
-        # Cost grid
-        if claude:
-            today_tokens = snap.today_tokens.total_tokens
-            month_tokens = snap.month_tokens.total_tokens
-            output_today = snap.today_tokens.output_tokens
-            cache_reads = snap.today_tokens.cache_read_input_tokens
+        self._set_stat("today", money(snap.today_cost_usd),
+                       f"{format_tokens(snap.today_tokens.total_tokens)} tokens", "Today")
+        self._set_stat("last31", money(snap.last31_cost_usd),
+                       f"{format_tokens(snap.last31_tokens)} tokens", f"Last {DAILY_HISTORY_DAYS} days")
+        self._set_stat("month", money(snap.month_cost_usd),
+                       f"{format_tokens(snap.month_tokens.total_tokens)} tokens", "This month")
+        self._set_stat("output", format_tokens(snap.today_tokens.output_tokens),
+                       f"{format_tokens(snap.today_tokens.cache_read_input_tokens)} cache reads",
+                       "Output today")
+
+        week, labels = self._week_series(snap.daily_costs, snap.timestamp.date())
+        self._fill_chart(week, labels, [f"{labels[i]} \u00b7 {money(v)}" for i, v in enumerate(week)],
+                         "Daily API-equivalent cost", money)
+        self._fill_top_model(snap.models_used, snap.month_cost_usd)
+        self._fill_meta(snap, "Estimated from local Claude Code logs", f"{snap.pricing_source} rates")
+        self._apply_layout(("claude", snap.extra_enabled))
+
+    def _fill_codex_view(self, snap: OpenAISnapshot, money):
+        collecting = (self._is_collecting and snap.session_percent == 0 and snap.weekly_percent == 0
+                      and not snap.is_stale)
+        placeholder = "Collecting..." if collecting else None
+
+        self._fill_limit("session", snap.session_percent, snap.session_reset,
+                         snap.session_resets_at, SESSION_WINDOW_HOURS, placeholder)
+        self._fill_limit("weekly", snap.weekly_percent, snap.weekly_reset,
+                         snap.weekly_resets_at, WEEKLY_WINDOW_HOURS, placeholder)
+        self._show_limits(session_visible=snap.session_available, extra_visible=False)
+
+        self._set_stat("today", money(snap.today_cost_usd),
+                       f"{format_tokens(snap.today_total_tokens)} tokens", "Today")
+        self._set_stat("last31", money(snap.last31_cost_usd),
+                       f"{format_tokens(snap.last31_tokens)} tokens", f"Last {DAILY_HISTORY_DAYS} days")
+        self._set_stat("month", money(snap.month_cost_usd),
+                       f"{format_tokens(snap.month_total_tokens)} tokens", "This month")
+        self._set_stat("output", format_tokens(snap.today_output_tokens),
+                       f"{format_tokens(snap.today_cached_tokens)} cache reads", "Output today")
+
+        week, labels = self._week_series(snap.daily_costs, snap.timestamp.date())
+        self._fill_chart(week, labels, [f"{labels[i]} \u00b7 {money(v)}" for i, v in enumerate(week)],
+                         "Daily API-equivalent cost", money)
+        self._fill_top_model([], 0.0)
+        self._fill_meta(snap, "Estimated from local Codex logs", f"{snap.pricing_source} rates")
+        self._apply_layout(("codex", snap.session_available))
+
+    def _money_fixed(self, usd: float) -> str:
+        """Money with two decimals. format_currency drops to four below a cent,
+        which is right for a day's spend but wrong for a balance."""
+        symbol = get_currency_symbol(self.config.currency)
+        return f"{symbol}{convert_usd(usd, self.config.currency, self._exchange_rates):,.2f}"
+
+    def _fill_deepseek_view(self, snap: DeepSeekSnapshot, money):
+        """DeepSeek has no quota, so its limits give way to balance and spend."""
+        self._show_balance()
+
+        self._balance_value.config(text=self._money_fixed(snap.balance_total) if snap.balance_available else "\u2014")
+        if snap.balance_available:
+            self._balance_note.config(
+                text=f"Topped up {self._money_fixed(snap.balance_topped_up)} \u00b7 "
+                     f"Granted {self._money_fixed(snap.balance_granted)}")
+            self._balance_state.config(text=snap.balance_message,
+                                       fg=self.ok_color if snap.balance_usable else self.warn_color)
+            self._balance_currency.config(text=self.config.currency)
         else:
-            today_tokens = snap.today_total_tokens
-            month_tokens = snap.month_total_tokens
-            output_today = snap.today_output_tokens
-            cache_reads = snap.today_cached_tokens
-        self._set_stat("today", money(snap.today_cost_usd), f"{format_tokens(today_tokens)} tokens")
-        self._set_stat("last31", money(snap.last31_cost_usd), f"{format_tokens(snap.last31_tokens)} tokens")
-        self._set_stat("month", money(snap.month_cost_usd), f"{format_tokens(month_tokens)} tokens")
-        self._set_stat("output", format_tokens(output_today), f"{format_tokens(cache_reads)} cache reads")
+            self._balance_note.config(text="")
+            self._balance_state.config(text=snap.balance_message, fg=self.warn_color)
+            self._balance_currency.config(text="")
 
-        # Chart + top model (per-model split exists for Claude only)
-        # Last 7 days of the series; the 31-day total sits in the grid above.
-        week = snap.daily_costs[-7:]
-        today = snap.timestamp.date()
-        labels = [(today - timedelta(days=len(week) - 1 - i)).strftime("%a") for i in range(len(week))]
-        self._chart.set_values(week, labels)
-        self._chart_note.config(text=f"7 days, peak {money(max(week))}" if week else "")
-        top = max(snap.models_used, key=lambda m: m.cost_usd, default=None) if claude else None
-        if top and snap.month_cost_usd > 0:
+        if snap.usage_available:
+            self._set_stat("today", money(snap.today_cost_usd),
+                           self._usage_sub(snap.today_tokens, snap.today_requests), "Today")
+            self._set_stat("last31", money(snap.month_cost_usd),
+                           self._usage_sub(snap.month_tokens, snap.month_requests), "This month")
+            self._set_stat("month", money(snap.last7_cost_usd),
+                           self._usage_sub(snap.last7_tokens, snap.last7_requests), "Last 7 days")
+            self._set_stat("output", format_tokens(snap.week_tokens),
+                           f"{format_tokens(snap.week_cache_hit)} in \u00b7 "
+                           f"{format_tokens(snap.week_output)} out", "Tokens this week")
+        else:
+            hint = "Add a platform token" if snap.usage_error else "No usage reported"
+            for key, title in (("today", "Today"), ("last31", "This month"),
+                               ("month", "Last 7 days"), ("output", "Tokens this week")):
+                self._set_stat(key, "\u2014", hint, title)
+
+        week, labels = self._week_series(snap.daily_costs, snap.timestamp.date(),
+                                         dates=snap.daily_dates)
+        tooltips = []
+        for i, value in enumerate(week):
+            parts = [f"{labels[i]} \u00b7 {money(value)}"]
+            if i < len(snap.daily_tokens):
+                parts.append(f"{format_tokens(snap.daily_tokens[i])} tokens")
+            if i < len(snap.daily_requests):
+                parts.append(f"{snap.daily_requests[i]:,} req")
+            tooltips.append(" \u00b7 ".join(parts))
+        self._fill_chart(week, labels, tooltips, "Daily spend, last 7 days", money)
+        self._fill_top_model(snap.models_used, snap.month_cost_usd)
+
+        # Both money sources normalise to USD upstream; say so when the account
+        # is billed in something else, rather than showing a silent conversion.
+        source_currencies = {snap.usage_currency if snap.usage_available else None,
+                             snap.balance_currency if snap.balance_available else None}
+        foreign = sorted(c for c in source_currencies if c and c != "USD")
+        rates = f"converted from {', '.join(foreign)}" if foreign else ""
+        if snap.usage_available:
+            source = "Official DeepSeek platform usage"
+        elif snap.balance_available:
+            source = "Balance only \u00b7 add a platform token in Settings"
+        else:
+            source = "Add a DeepSeek API key in Settings"
+        self._fill_meta(snap, source, rates)
+        self._apply_layout(("deepseek", snap.usage_available))
+
+    @staticmethod
+    def _usage_sub(tokens: int, requests: int) -> str:
+        return f"{format_tokens(tokens)} tokens \u00b7 {requests:,} req"
+
+    @staticmethod
+    def _week_series(values, today, dates=()) -> tuple[list, list]:
+        """Trailing 7 values plus weekday labels, oldest first.
+
+        DeepSeek supplies its own dates (the platform buckets by its own day),
+        so those win when present; otherwise the labels count back from today.
+        """
+        week = list(values)[-7:]
+        labels = []
+        for i in range(len(week)):
+            index = len(week) - 1 - i
+            iso = dates[index] if index < len(dates) else None
+            stamp = None
+            if iso:
+                try:
+                    stamp = datetime.strptime(iso, "%Y-%m-%d")
+                except ValueError:
+                    stamp = None
+            labels.append((stamp or (today - timedelta(days=index))).strftime("%a"))
+        return week, labels
+
+    def _fill_chart(self, values, labels, tooltips, title, money):
+        self._chart_title.config(text=title)
+        self._chart.set_values(values, labels, tooltips)
+        self._chart_note.config(text=f"7 days, peak {money(max(values))}" if values else "")
+
+    def _fill_top_model(self, models, month_cost: float):
+        top = max(models, key=lambda m: m.cost_usd, default=None)
+        if top and month_cost > 0:
             self._top_model.config(text=f"Top model  {top.model}")
-            self._top_share.config(text=f"{top.cost_usd / snap.month_cost_usd * 100:.0f}% of month")
+            self._top_share.config(text=f"{top.cost_usd / month_cost * 100:.0f}% of month")
         else:
             self._top_model.config(text="")
             self._top_share.config(text="")
 
-        # Meta rows and footer
-        self._rates_label.config(text=f"{snap.pricing_source} rates")
+    def _fill_meta(self, snap, source_text: str, rates_text: str):
+        self._rates_label.config(text=rates_text)
         if self._is_collecting and snap.is_stale:
             self._updated_label.config(text="Collecting fresh data...")
         else:
@@ -1030,9 +1460,9 @@ class ClaudeBarWindow:
         self._is_collecting = False
         self._stale_label.config(
             text=f"(cached from {get_staleness_text(snap.stale_since)})" if snap.is_stale and snap.stale_since else "")
-        self._source_label.config(
-            text=f"Estimated from local {'Claude Code' if claude else 'Codex'} logs")
+        self._source_label.config(text=source_text)
 
+    def _apply_layout(self, layout_key):
         if layout_key != self._layout_key:
             self._layout_key = layout_key
             self._update_window_size()
@@ -1055,8 +1485,10 @@ class ClaudeBarWindow:
         w["pace"].config(text="On pace" if ahead <= 5 else f"{ahead:.0f}% ahead of pace")
         w["elapsed"].config(text=f"{_fmt_hours(window_hours - remaining)} elapsed of {_fmt_hours(window_hours)}")
 
-    def _set_stat(self, key, value, sub):
-        v, s = self._stats[key]
+    def _set_stat(self, key, value, sub, title=None):
+        heading, v, s = self._stats[key]
+        if title is not None:
+            heading.config(text=title)
         v.config(text=value)
         s.config(text=sub)
 

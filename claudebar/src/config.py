@@ -21,6 +21,7 @@ class Config:
     # Engine toggles
     claude_enabled: bool = True
     codex_enabled: bool = True
+    deepseek_enabled: bool = True
     # Where the user last dragged the panel; None = default spot near the tray
     window_x: Optional[int] = None
     window_y: Optional[int] = None

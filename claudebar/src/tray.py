@@ -3,12 +3,12 @@
 import threading
 from typing import Callable, Optional
 
-from PIL import Image
+from PIL import Image, ImageDraw
 import pystray
 
 from models import UsageSnapshot, CombinedSnapshot, Engine
 from config import Config, get_resources_path
-from icons import create_premium_icon
+from icons import create_premium_icon, STATUS_COLORS
 from pricing import format_tokens
 
 try:
@@ -27,13 +27,22 @@ _CUSTOM_ICON_PATH = get_resources_path() / "icons" / "app_icon.png"
 
 
 def create_icon(status: str = "normal", percent: Optional[float] = None) -> Image.Image:
-    """Create a tray icon - use custom icon if available, else generate."""
+    """Create a tray icon - use custom icon if available, else generate.
+
+    The custom icon gets a corner badge in the status colour once a limit
+    crosses the warning threshold, so the thresholds stay visible with it.
+    """
     # Use larger size for better quality (Windows scales down as needed)
     icon_size = 128
     if _CUSTOM_ICON_PATH.exists():
         try:
             with Image.open(_CUSTOM_ICON_PATH) as img:
-                return img.resize((icon_size, icon_size), Image.Resampling.LANCZOS)
+                icon = img.convert("RGBA").resize((icon_size, icon_size), Image.Resampling.LANCZOS)
+            if status in ("warning", "critical"):
+                r = icon_size // 5
+                ImageDraw.Draw(icon).ellipse((icon_size - 2 * r, icon_size - 2 * r, icon_size, icon_size),
+                                             fill=STATUS_COLORS[status]["primary"], outline="#111111", width=4)
+            return icon
         except Exception:
             pass
     return create_premium_icon(status, percent, icon_size)
@@ -125,9 +134,26 @@ class TrayManager:
             if openai.today_total_tokens > 0:
                 items.append(pystray.MenuItem(f"  {format_tokens(openai.today_total_tokens)} tokens", None, enabled=False))
 
+        # DeepSeek summary: balance always, spend when the usage fetch worked
+        deepseek = self._combined.deepseek if self._combined else None
+        if deepseek and (deepseek.balance_available or deepseek.usage_available):
+            items.append(pystray.Menu.SEPARATOR)
+            items.append(pystray.MenuItem("DeepSeek", None, enabled=False))
+            if deepseek.balance_available:
+                items.append(pystray.MenuItem(
+                    f"  Balance: ${deepseek.balance_total:.2f}",
+                    None, enabled=False))
+            if deepseek.usage_available:
+                items.append(pystray.MenuItem(f"  Today: ${deepseek.today_cost_usd:.2f}", None, enabled=False))
+                items.append(pystray.MenuItem(f"  Month: ${deepseek.month_cost_usd:.2f}", None, enabled=False))
+                if deepseek.week_tokens > 0:
+                    items.append(pystray.MenuItem(
+                        f"  {format_tokens(deepseek.week_tokens)} tokens this week", None, enabled=False))
+
         has_claude_stats = self._snapshot and self._snapshot.logs_available
         has_openai_stats = self._combined and self._combined.openai and self._combined.openai.available
-        if has_claude_stats or has_openai_stats:
+        has_deepseek_stats = deepseek and (deepseek.balance_available or deepseek.usage_available)
+        if has_claude_stats or has_openai_stats or has_deepseek_stats:
             items.append(pystray.Menu.SEPARATOR)
 
         # Action items
@@ -224,6 +250,13 @@ class TrayManager:
                 lines.append(f"OpenAI: {openai.session_percent:.0f}%/{openai.weekly_percent:.0f}%")
             else:
                 lines.append(f"OpenAI: {openai.weekly_percent:.0f}% weekly")
+
+        # DeepSeek stats
+        deepseek = self._combined.deepseek if self._combined else None
+        if deepseek and deepseek.balance_available:
+            lines.append(f"DeepSeek: ${deepseek.balance_total:.2f} balance")
+        if deepseek and deepseek.usage_available:
+            lines.append(f"DeepSeek today: ${deepseek.today_cost_usd:.2f}")
 
         lines.append(f"Updated: {self._snapshot.timestamp.strftime('%H:%M')}")
 

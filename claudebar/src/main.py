@@ -59,13 +59,15 @@ class ClaudeBar:
     def _load_cached_initial(self) -> None:
         """Load cached data for immediate display on startup."""
         try:
-            from snapshot_cache import load_cache
-            from models import CombinedSnapshot, OpenAISnapshot, UsageSnapshot
+            from snapshot_cache import load_cache, load_deepseek_cache
+            from models import CombinedSnapshot, DeepSeekSnapshot, OpenAISnapshot, UsageSnapshot
             cached_claude, cached_openai, cached_at = load_cache()
-            if cached_claude or cached_openai:
+            cached_deepseek, _ = load_deepseek_cache()
+            if cached_claude or cached_openai or cached_deepseek:
                 combined = CombinedSnapshot(
                     claude=cached_claude or UsageSnapshot(timestamp=datetime.now()),
                     openai=cached_openai or OpenAISnapshot(timestamp=datetime.now()),
+                    deepseek=cached_deepseek or DeepSeekSnapshot(timestamp=datetime.now()),
                     active_engine=self.collector.active_engine,
                     timestamp=datetime.now(),
                 )

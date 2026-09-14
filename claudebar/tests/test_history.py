@@ -58,8 +58,10 @@ def test_daily_costs_buckets_by_local_day_and_pads_empty_days(tmp_path):
     assert sum(series) == pytest.approx(one_call)
 
 
-def test_codex_daily_series_ends_today_and_pads_missing_days(tmp_path):
-    today = datetime.now()
+def test_codex_daily_series_ends_on_the_given_day_and_pads_missing_days(tmp_path):
+    """The collector passes the snapshot timestamp as `end`, so a refresh that
+    straddles midnight labels the bars for the day the snapshot carries."""
+    today = datetime(2026, 9, 9, 23, 59, 59)
     day_dir = tmp_path / str(today.year) / f"{today.month:02d}" / f"{today.day:02d}"
     day_dir.mkdir(parents=True)
     (day_dir / "rollout.jsonl").write_text("\n".join(json.dumps(e) for e in [
@@ -71,7 +73,7 @@ def test_codex_daily_series_ends_today_and_pads_missing_days(tmp_path):
                                  "reasoning_output_tokens": 0}}}},
     ]) + "\n", encoding="utf-8")
 
-    series = get_codex_daily_usage(tmp_path, days=5)
+    series = get_codex_daily_usage(tmp_path, days=5, end=today)
 
     assert len(series) == 5
     assert series[-1].input_tokens == 1_000 and series[-1].cost_usd > 0

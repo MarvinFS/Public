@@ -1,19 +1,23 @@
 """Coordinate data collection from all sources."""
 
-from datetime import date, datetime, timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
 import logging
 
-from models import UsageSnapshot, OpenAISnapshot, CombinedSnapshot, Engine, DAILY_HISTORY_DAYS
+from models import (UsageSnapshot, OpenAISnapshot, DeepSeekSnapshot, CombinedSnapshot,
+                    Engine, ModelUsage, DAILY_HISTORY_DAYS)
 from log_parser import collect_entries, aggregate_usage, daily_costs
 from oauth_usage import fetch_oauth_usage, OAuthUsageData
 from openai_usage import fetch_openai_usage, is_codex_configured
 from codex_log_parser import CodexTokenUsage, get_codex_daily_usage
 from config import get_claude_projects_dir
 import model_catalog
-from snapshot_cache import save_cache, load_cache
+import deepseek_auth
+from deepseek_usage import fetch_balance, fetch_usage, last_n_days, month_days
+from currency import to_usd
+from snapshot_cache import save_cache, load_cache, load_deepseek_cache
 
 logger = logging.getLogger("claudebar")
 
@@ -27,6 +31,7 @@ class DataCollector:
         self.projects_dir = projects_dir or get_claude_projects_dir()
         self._last_snapshot: Optional[UsageSnapshot] = None
         self._last_openai_snapshot: Optional[OpenAISnapshot] = None
+        self._last_deepseek_snapshot: Optional[DeepSeekSnapshot] = None
         self._last_combined: Optional[CombinedSnapshot] = None
         self._active_engine: Engine = Engine.CLAUDE
         self._on_oauth_failure = on_oauth_failure
@@ -102,7 +107,7 @@ class DataCollector:
 
         # Collect log data for tokens and models: one parse, several windows.
         try:
-            today = date.today()
+            today = snapshot.timestamp.date()
             entries = collect_entries(self.projects_dir)
             _, snapshot.today_tokens, snapshot.today_cost_usd = aggregate_usage(
                 entries=entries, start_date=today, end_date=today)
@@ -198,7 +203,7 @@ class DataCollector:
         # Fetch token usage and costs from local JSONL logs: the daily series
         # ends today, so today, the month and the last 31 days are slices of it.
         try:
-            series = get_codex_daily_usage(days=DAILY_HISTORY_DAYS)
+            series = get_codex_daily_usage(days=DAILY_HISTORY_DAYS, end=snapshot.timestamp)
             today_usage = series[-1]
             snapshot.today_input_tokens = today_usage.input_tokens
             snapshot.today_output_tokens = today_usage.output_tokens
@@ -206,7 +211,7 @@ class DataCollector:
             snapshot.today_reasoning_tokens = today_usage.reasoning_tokens
             snapshot.today_cost_usd = today_usage.cost_usd
 
-            month_usage = sum(series[-datetime.now().day:], CodexTokenUsage())
+            month_usage = sum(series[-snapshot.timestamp.day:], CodexTokenUsage())
             snapshot.month_input_tokens = month_usage.input_tokens
             snapshot.month_output_tokens = month_usage.output_tokens
             snapshot.month_cost_usd = month_usage.cost_usd
@@ -232,16 +237,144 @@ class DataCollector:
         """Get the most recent OpenAI snapshot without refreshing."""
         return self._last_openai_snapshot
 
+    def collect_deepseek(self) -> DeepSeekSnapshot:
+        """Collect DeepSeek balance and spend.
+
+        The two halves have different credentials and fail independently: a
+        missing platform token still leaves a perfectly good balance.
+        """
+        snapshot = DeepSeekSnapshot(timestamp=datetime.now())
+        today = snapshot.timestamp.date()
+        balance_fresh = False
+        usage_fresh = False
+
+        api_key = deepseek_auth.discover_api_key()
+        if api_key:
+            balance = fetch_balance(api_key.value)
+            if balance.error:
+                snapshot.error_message = balance.error
+            else:
+                snapshot.balance_available = True
+                snapshot.balance_usable = balance.available
+                # Amounts normalise to USD like every other cost field; the
+                # reported currency is kept so the panel can say it converted.
+                snapshot.balance_total = to_usd(balance.total, balance.currency)
+                snapshot.balance_topped_up = to_usd(balance.topped_up, balance.currency)
+                snapshot.balance_granted = to_usd(balance.granted, balance.currency)
+                snapshot.balance_currency = balance.currency
+                balance_fresh = True
+        else:
+            snapshot.error_message = "No API key"
+
+        token = deepseek_auth.discover_user_token()
+        if token:
+            usage = fetch_usage(token.value, today)
+            if usage.available:
+                self._apply_usage(snapshot, usage, today)
+                usage_fresh = True
+            else:
+                snapshot.usage_error = usage.error or "Usage unavailable"
+        else:
+            snapshot.usage_error = "No platform token"
+
+        # Carry over whatever the last good fetch had, so a transient failure
+        # does not blank the panel or evict a good cache entry.
+        if not (balance_fresh and usage_fresh):
+            cached, cached_at = load_deepseek_cache()
+            carried = False
+            if cached:
+                if not balance_fresh and cached.balance_available:
+                    snapshot.balance_available = True
+                    snapshot.balance_usable = cached.balance_usable
+                    snapshot.balance_total = cached.balance_total
+                    snapshot.balance_topped_up = cached.balance_topped_up
+                    snapshot.balance_granted = cached.balance_granted
+                    snapshot.balance_currency = cached.balance_currency
+                    snapshot.error_message = None
+                    carried = True
+                if not usage_fresh and cached.usage_available:
+                    for name in ("usage_available", "usage_currency", "today_cost_usd",
+                                 "today_tokens", "today_requests", "month_cost_usd",
+                                 "month_tokens", "month_requests", "last7_cost_usd",
+                                 "last7_tokens", "last7_requests", "week_cache_hit",
+                                 "week_cache_miss", "week_output", "daily_costs",
+                                 "daily_tokens", "daily_requests", "daily_dates",
+                                 "models_used"):
+                        setattr(snapshot, name, getattr(cached, name))
+                    snapshot.usage_error = None
+                    carried = True
+            # Anything shown from the cache is stale, whether or not the other
+            # half refreshed in this pass.
+            if carried:
+                snapshot.is_stale = True
+                snapshot.stale_since = cached_at
+
+        self._last_deepseek_snapshot = snapshot
+
+        # Only a snapshot carrying something fresh is worth persisting
+        if balance_fresh or usage_fresh:
+            save_cache(deepseek=snapshot)
+
+        return snapshot
+
+    def _apply_usage(self, snapshot: DeepSeekSnapshot, usage, today) -> None:
+        """Fold parsed platform usage into the snapshot.
+
+        Costs stay in USD: when the platform reports another currency (CNY for
+        some accounts) the whole set is scaled once at this boundary.
+        """
+        currency = (usage.currency or "USD").upper()
+        factor = to_usd(1.0, currency) if currency != "USD" else 1.0
+
+        week = last_n_days(usage.days, today, 7)
+        month = month_days(usage.days, today)
+
+        snapshot.usage_available = True
+        snapshot.usage_currency = currency
+
+        snapshot.daily_costs = [d.cost * factor for d in week]
+        snapshot.daily_tokens = [d.tokens for d in week]
+        snapshot.daily_requests = [d.requests for d in week]
+        snapshot.daily_dates = [d.date for d in week]
+
+        snapshot.last7_cost_usd = sum(snapshot.daily_costs)
+        snapshot.last7_tokens = sum(snapshot.daily_tokens)
+        snapshot.last7_requests = sum(snapshot.daily_requests)
+
+        snapshot.week_cache_hit = sum(d.cache_hit for d in week)
+        snapshot.week_cache_miss = sum(d.cache_miss for d in week)
+        snapshot.week_output = sum(d.output for d in week)
+
+        snapshot.today_cost_usd = week[-1].cost * factor
+        snapshot.today_tokens = week[-1].tokens
+        snapshot.today_requests = week[-1].requests
+
+        snapshot.month_cost_usd = sum(d.cost for d in month) * factor
+        snapshot.month_tokens = sum(d.tokens for d in month)
+        snapshot.month_requests = sum(d.requests for d in month)
+
+        snapshot.models_used = [
+            ModelUsage(model=m.model, cost_usd=m.cost * factor, message_count=0)
+            for m in usage.models
+        ]
+
+    @property
+    def last_deepseek_snapshot(self) -> Optional[DeepSeekSnapshot]:
+        """Get the most recent DeepSeek snapshot without refreshing."""
+        return self._last_deepseek_snapshot
+
     def collect_combined(self) -> CombinedSnapshot:
-        """Collect data from Claude and OpenAI/Codex."""
+        """Collect data from Claude, OpenAI/Codex and DeepSeek."""
         # Refresh price tables first so both parsers below use the same rates.
         self._pricing_source = "models.dev" if model_catalog.apply() else "bundled"
         claude_snapshot = self.collect()
         openai_snapshot = self.collect_openai()
+        deepseek_snapshot = self.collect_deepseek()
 
         combined = CombinedSnapshot(
             claude=claude_snapshot,
             openai=openai_snapshot,
+            deepseek=deepseek_snapshot,
             active_engine=self._active_engine,
             timestamp=datetime.now(),
         )

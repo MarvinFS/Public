@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Optional
 
 from config import get_config_dir
-from models import UsageSnapshot, OpenAISnapshot, TokenUsage, ModelUsage
+from models import UsageSnapshot, OpenAISnapshot, DeepSeekSnapshot, TokenUsage, ModelUsage
 
 
 def get_cache_path() -> Path:
@@ -29,9 +29,11 @@ class CachedSnapshot:
     """
     claude: Optional[dict] = None
     openai: Optional[dict] = None
+    deepseek: Optional[dict] = None
     cached_at: str = ""  # ISO timestamp - legacy, fallback for old caches
     claude_cached_at: str = ""
     openai_cached_at: str = ""
+    deepseek_cached_at: str = ""
 
 
 def _json_default(o):
@@ -141,7 +143,54 @@ def _dict_to_openai_snapshot(data: dict, is_stale: bool = False, stale_since: Op
     return snapshot
 
 
-def save_cache(claude: Optional[UsageSnapshot] = None, openai: Optional[OpenAISnapshot] = None) -> None:
+def _dict_to_deepseek_snapshot(data: dict, is_stale: bool = False,
+                               stale_since: Optional[datetime] = None) -> DeepSeekSnapshot:
+    """Convert dict back to DeepSeekSnapshot."""
+    models_used = [
+        ModelUsage(
+            model=m.get("model", ""),
+            cost_usd=m.get("cost_usd", 0.0),
+            message_count=m.get("message_count", 0),
+        )
+        for m in data.get("models_used", [])
+        if isinstance(m, dict)
+    ]
+    return DeepSeekSnapshot(
+        timestamp=datetime.fromisoformat(data.get("timestamp", datetime.now().isoformat())),
+        balance_available=data.get("balance_available", False),
+        balance_usable=data.get("balance_usable", False),
+        balance_total=data.get("balance_total", 0.0),
+        balance_topped_up=data.get("balance_topped_up", 0.0),
+        balance_granted=data.get("balance_granted", 0.0),
+        balance_currency=data.get("balance_currency", "USD"),
+        usage_available=data.get("usage_available", False),
+        usage_currency=data.get("usage_currency", "USD"),
+        today_cost_usd=data.get("today_cost_usd", 0.0),
+        today_tokens=data.get("today_tokens", 0),
+        today_requests=data.get("today_requests", 0),
+        month_cost_usd=data.get("month_cost_usd", 0.0),
+        month_tokens=data.get("month_tokens", 0),
+        month_requests=data.get("month_requests", 0),
+        last7_cost_usd=data.get("last7_cost_usd", 0.0),
+        last7_tokens=data.get("last7_tokens", 0),
+        last7_requests=data.get("last7_requests", 0),
+        week_cache_hit=data.get("week_cache_hit", 0),
+        week_cache_miss=data.get("week_cache_miss", 0),
+        week_output=data.get("week_output", 0),
+        daily_costs=list(data.get("daily_costs") or []),
+        daily_tokens=list(data.get("daily_tokens") or []),
+        daily_requests=list(data.get("daily_requests") or []),
+        daily_dates=list(data.get("daily_dates") or []),
+        models_used=models_used,
+        error_message=data.get("error_message"),
+        usage_error=data.get("usage_error"),
+        is_stale=is_stale,
+        stale_since=stale_since,
+    )
+
+
+def save_cache(claude: Optional[UsageSnapshot] = None, openai: Optional[OpenAISnapshot] = None,
+               deepseek: Optional[DeepSeekSnapshot] = None) -> None:
     """Save snapshots to cache file, merging with existing data.
 
     Only the engine being saved gets its `*_cached_at` bumped — the other
@@ -166,9 +215,11 @@ def save_cache(claude: Optional[UsageSnapshot] = None, openai: Optional[OpenAISn
     cached = CachedSnapshot(
         claude=_to_dict(claude) if claude else existing.get("claude"),
         openai=_to_dict(openai) if openai else existing.get("openai"),
+        deepseek=_to_dict(deepseek) if deepseek else existing.get("deepseek"),
         cached_at=now_iso,
         claude_cached_at=now_iso if claude else (existing.get("claude_cached_at") or legacy),
         openai_cached_at=now_iso if openai else (existing.get("openai_cached_at") or legacy),
+        deepseek_cached_at=now_iso if deepseek else (existing.get("deepseek_cached_at") or legacy),
     )
 
     try:
@@ -226,6 +277,30 @@ def load_cache() -> tuple[Optional[UsageSnapshot], Optional[OpenAISnapshot], Opt
 
     except (json.JSONDecodeError, KeyError, TypeError, ValueError):
         return None, None, None
+
+
+def load_deepseek_cache() -> tuple[Optional[DeepSeekSnapshot], Optional[datetime]]:
+    """Load the cached DeepSeek snapshot.
+
+    Separate from load_cache() so the existing three-value contract (and its
+    callers) stay untouched.
+    """
+    cache_path = get_cache_path()
+    if not cache_path.exists():
+        return None, None
+
+    try:
+        with open(cache_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+
+        if not data.get("deepseek"):
+            return None, None
+
+        cached_at = (_parse_iso(data.get("deepseek_cached_at", ""))
+                     or _parse_iso(data.get("cached_at", "")))
+        return _dict_to_deepseek_snapshot(data["deepseek"], is_stale=True, stale_since=cached_at), cached_at
+    except (json.JSONDecodeError, KeyError, TypeError, ValueError):
+        return None, None
 
 
 def get_staleness_text(stale_since: Optional[datetime]) -> str:

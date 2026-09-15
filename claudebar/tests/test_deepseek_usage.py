@@ -138,6 +138,18 @@ class TestWindows:
         days = self.DAYS + [d.DayUsage(date="2026-08-31", cost=99.0)]
         assert all(x.date.startswith("2026-09") for x in d.month_days(days, date(2026, 9, 15)))
 
+    def test_previous_month_days_are_the_month_before(self):
+        days = self.DAYS + [d.DayUsage(date="2026-08-31", cost=99.0),
+                            d.DayUsage(date="2026-07-31", cost=55.0)]
+        previous = d.previous_month_days(days, date(2026, 9, 15))
+        assert [x.date for x in previous] == ["2026-08-31"]
+        assert previous[0].cost == 99.0
+
+    def test_previous_month_rolls_back_across_a_year(self):
+        days = [d.DayUsage(date="2025-12-31", cost=1.0), d.DayUsage(date="2026-01-01", cost=2.0)]
+        previous = d.previous_month_days(days, date(2026, 1, 1))
+        assert [x.date for x in previous] == ["2025-12-31"]
+
     def test_month_boundary_window_reaches_back(self):
         days = [d.DayUsage(date="2026-08-31", cost=3.0), d.DayUsage(date="2026-09-01", cost=1.0)]
         window = d.last_n_days(days, date(2026, 9, 1), 7)
@@ -149,24 +161,48 @@ class TestFetchUsage:
     def test_no_token_short_circuits(self):
         assert d.fetch_usage("").error == "No platform token"
 
-    def test_two_months_are_fetched_near_a_month_boundary(self, monkeypatch):
-        calls = []
-
-        def fake_get(url, headers):
-            calls.append(url)
-            return {"code": 0, "data": {"biz_data": {}}}, None
-
-        monkeypatch.setattr(d, "_get", fake_get)
-        d.fetch_usage("token", today=date(2026, 9, 3))
-        assert any("month=9" in url for url in calls)
-        assert any("month=8" in url for url in calls)
-
-    def test_one_month_is_enough_mid_month(self, monkeypatch):
+    def test_both_months_are_always_fetched(self, monkeypatch):
+        """The panel reports the previous month, so it is fetched every time,
+        not only while the 7-day window can still reach into it."""
         calls = []
         monkeypatch.setattr(d, "_get", lambda url, headers: (calls.append(url) or
-                                                             {"code": 0, "data": {"biz_data": {}}}, None))
+                                                            {"code": 0, "data": {"biz_data": {}}}, None))
         d.fetch_usage("token", today=date(2026, 9, 20))
-        assert len(calls) == 2  # amount + cost for the current month only
+        assert sorted(calls) == sorted([
+            f"{d.USAGE_AMOUNT_URL}?month={m}&year=2026" for m in (9, 8)
+        ] + [
+            f"{d.USAGE_COST_URL}?month={m}&year=2026" for m in (9, 8)
+        ])
+
+    def test_january_reaches_back_into_december(self, monkeypatch):
+        calls = []
+        monkeypatch.setattr(d, "_get", lambda url, headers: (calls.append(url) or
+                                                            {"code": 0, "data": {"biz_data": {}}}, None))
+        d.fetch_usage("token", today=date(2026, 1, 3))
+        assert any("month=1&year=2026" in url for url in calls)
+        assert any("month=12&year=2025" in url for url in calls)
+
+    def test_models_come_from_the_current_month_only(self, monkeypatch):
+        """The top-model row is a share of this month's spend, so folding the
+        previous month in would let a model report more than 100%."""
+        amount = amount_payload([("20260831", DAY_ROWS)], total=[{"model": "old-model", "usage": DAY_ROWS}])
+        cost = cost_payload([("20260831", DAY_COST)], total=[{"model": "old-model", "usage": DAY_COST}])
+        current_amount = amount_payload([("20260902", DAY_ROWS)],
+                                        total=[{"model": "deepseek-flash", "usage": DAY_ROWS}])
+        current_cost = cost_payload([("20260902", DAY_COST)],
+                                    total=[{"model": "deepseek-flash", "usage": DAY_COST}])
+
+        def fake_get(url, headers):
+            month = 8 if "month=8" in url else 9
+            payload = (amount if month == 8 else current_amount) if "amount" in url \
+                else (cost if month == 8 else current_cost)
+            return payload, None
+
+        monkeypatch.setattr(d, "_get", fake_get)
+        merged = d.fetch_usage("token", today=date(2026, 9, 2))
+        assert [m.model for m in merged.models] == ["deepseek-flash"]
+        # ...while both months still contribute their days.
+        assert any(day.date.startswith("2026-08") for day in merged.days)
 
     def test_an_expired_token_surfaces_as_unavailable(self, monkeypatch):
         monkeypatch.setattr(d, "_get", lambda url, headers: ({"code": 40003, "data": None}, None))

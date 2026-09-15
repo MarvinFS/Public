@@ -154,14 +154,21 @@ class PaceBar(tk.Canvas):
     def __init__(self, parent, width=348, height=6, accent="#F59E0B", **kwargs):
         super().__init__(parent, width=width, height=height + 2, highlightthickness=0, **kwargs)
         self.w, self.h, self.accent = width, height, accent
-        self.create_rectangle(0, 1, width, height + 1, fill="#262626", outline="")
+        self._value = (0.0, None)
+        self._draw()
+        # The panel is only as wide as its content needs, so take the width we
+        # are actually given rather than the one guessed at construction.
+        self.bind("<Configure>", self._on_resize)
 
-    def set_accent(self, accent: str):
-        """Recolour without a repaint; the next set_value uses it."""
-        self.accent = accent
+    def _on_resize(self, event):
+        if event.width != self.w:
+            self.w = event.width
+            self._draw()
 
-    def set_value(self, percent, expected=None):
-        self.delete("v")
+    def _draw(self):
+        self.delete("all")
+        self.create_rectangle(0, 1, self.w, self.h + 1, fill="#262626", outline="")
+        percent, expected = self._value
         pct = max(0.0, min(100.0, percent))
         if pct > 0:
             self.create_rectangle(0, 1, self.w * pct / 100, self.h + 1,
@@ -169,6 +176,14 @@ class PaceBar(tk.Canvas):
         if expected is not None:
             x = self.w * max(0.0, min(100.0, expected)) / 100
             self.create_rectangle(x - 1, 0, x + 1, self.h + 2, fill="#f3f4f6", outline="", tags="v")
+
+    def set_accent(self, accent: str):
+        """Recolour without a repaint; the next set_value uses it."""
+        self.accent = accent
+
+    def set_value(self, percent, expected=None):
+        self._value = (percent, expected)
+        self._draw()
 
 
 class BarChart(tk.Canvas):
@@ -179,19 +194,30 @@ class BarChart(tk.Canvas):
     topmost, borderless geometry out of the picture entirely.
     """
 
-    def __init__(self, parent, width=348, height=44, accent="#F59E0B", font=None, **kwargs):
+    def __init__(self, parent, width=348, height=44, accent="#F59E0B", font=None,
+                 label_fg="#7f8899", **kwargs):
         # Label band from the font metrics, so a DPI-scaled font does not overlap the bars.
         self.label_h = tkfont.Font(root=parent, font=font).metrics("linespace") + 2 if font else 14
         super().__init__(parent, width=width, height=height + self.label_h, highlightthickness=0, **kwargs)
         self.w, self.h, self.accent, self.font = width, height, accent, font
+        self.label_fg = label_fg
         # The flyout is read at a glance while the pointer moves, so it runs a
         # couple of points larger and bolder than the weekday labels under it.
         self.tip_font = (font[0], (font[1] if len(font) > 1 else 8) + 2, "bold") if font else None
         self._tooltips: list = []
         self._n = 0
         self._tip_index: Optional[int] = None
+        self._values: list = []
+        self._labels: tuple = ()
         self.bind("<Motion>", self._on_motion)
         self.bind("<Leave>", lambda e: self._show_tip(None))
+        # Same reason as PaceBar: redraw at the width the panel ends up with.
+        self.bind("<Configure>", self._on_resize)
+
+    def _on_resize(self, event):
+        if event.width != self.w:
+            self.w = event.width
+            self.set_values(self._values, self._labels)
 
     def set_accent(self, accent: str):
         self.accent = accent
@@ -200,6 +226,8 @@ class BarChart(tk.Canvas):
         self.delete("v")
         self._show_tip(None)
         self._tooltips = list(tooltips)
+        self._values = list(values)
+        self._labels = tuple(labels)
         self._n = len(values)
         if not values:
             return
@@ -215,7 +243,7 @@ class BarChart(tk.Canvas):
                                   fill=self.accent if today else _dim(self.accent), outline="", tags="v")
             if i < len(labels):
                 self.create_text(x0 + bw / 2, self.h + self.label_h / 2, text=labels[i], font=self.font,
-                                 fill=self.accent if today else "#6b7280", tags="v")
+                                 fill=self.accent if today else self.label_fg, tags="v")
 
     def _on_motion(self, event):
         self._show_tip(bar_index_at(event.x, self._n, self.w))
@@ -755,7 +783,9 @@ class ClaudeBarWindow:
         self.text_primary = "#ffffff"
         self.text_secondary = "#d1d5db"
         self.text_tertiary = "#9ca3af"
-        self.text_muted = "#6b7280"
+        # Lifted from #6b7280: the lines under each figure were a strain to read
+        # on a 4K panel at 100% scaling.
+        self.text_muted = "#7f8899"
         self.separator_color = "#2a2a2a"
         self.accent_color = "#F59E0B"  # Claude orange
         self.active_engine_bg = "#2a2a2a"  # Active engine button background
@@ -911,6 +941,13 @@ class ClaudeBarWindow:
 
         window_height = required_height + 4  # +4 for border
 
+        # Width follows the content too. It only ever grows, so switching engine
+        # tabs does not make the panel jump, and a larger system font widens the
+        # panel instead of running the footer into the buttons.
+        self._window_width = min(
+            max(self._window_width, self._main_frame.winfo_reqwidth() + 4),
+            self._window.winfo_screenwidth() - 40)
+
         # Keep wherever the user dragged it to; otherwise sit near the tray.
         if self._user_position:
             x, y = self._user_position
@@ -970,8 +1007,12 @@ class ClaudeBarWindow:
         return [engine for engine in _ENGINE_META
                 if getattr(self.config, _ENABLED_FLAG[engine], True)]
 
+    # Every label in the panel goes through here, so the size bump that keeps
+    # the panel legible on a 4K monitor lives in exactly one place.
+    FONT_BUMP = 2
+
     def _font(self, size, weight="normal", mono=False):
-        return (self.mono if mono else self.sans, size, weight)
+        return (self.mono if mono else self.sans, size + self.FONT_BUMP, weight)
 
     def _hairline(self, parent, pady=(10, 10)):
         tk.Frame(parent, bg=self.separator_color, height=1).pack(fill=tk.X, pady=pady)
@@ -1070,9 +1111,12 @@ class ClaudeBarWindow:
         status.pack_forget()
         self._status_text = status
         self._status_text.pack(side=tk.RIGHT)
-        self._status_indicator = tk.Label(status.master, text="\u25cf", font=self._font(8),
+        # The dot carries the whole connection state at a glance, so it runs
+        # well ahead of the text beside it and sits on its own line box.
+        self._status_indicator = tk.Label(status.master, text="\u25cf",
+                                          font=self._font(13, "bold"),
                                           fg=self.text_muted, bg=self.bg_color)
-        self._status_indicator.pack(side=tk.RIGHT, padx=(0, 4))
+        self._status_indicator.pack(side=tk.RIGHT, padx=(0, 6))
 
         r, self._updated_label, self._rates_label = self._row(
             parent, "Updated just now", "", self._font(8), self._font(8), self.text_muted, self.text_muted)
@@ -1114,12 +1158,17 @@ class ClaudeBarWindow:
         self._balance_value = tk.Label(self._balance_frame, text="", font=self._font(16, "bold", mono=True),
                                        fg=self.text_primary, bg=self.bg_color)
         self._balance_value.pack(anchor=tk.W, pady=(2, 0))
-        _, self._balance_state, self._balance_currency = self._row(
-            self._balance_frame, "", "", self._font(8), self._font(8), self.ok_color, self.text_muted)
+        # The state line used to carry a currency code on the right. The figure
+        # above already shows its symbol, so that only repeated itself, and the
+        # footer notes the case where the platform bills in something else.
+        self._balance_state = tk.Label(self._balance_frame, text="", font=self._font(8),
+                                       fg=self.ok_color, bg=self.bg_color)
+        self._balance_state.pack(anchor=tk.W)
 
-    def _create_stat(self, parent, key, title):
+    def _create_stat(self, parent, key, title, row, column):
         f = tk.Frame(parent, bg=self.bg_color)
-        f.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        # The gap between the two rows rides on the upper one.
+        f.grid(row=row, column=column, sticky="ew", pady=(0, 8) if row == 0 else 0)
         heading = tk.Label(f, text=title, font=self._font(8), fg=self.text_muted, bg=self.bg_color)
         heading.pack(anchor=tk.W)
         value = tk.Label(f, text="", font=self._font(12, "bold", mono=True), fg=self.text_primary, bg=self.bg_color)
@@ -1129,23 +1178,30 @@ class ClaudeBarWindow:
         self._stats[key] = (heading, value, sub)
 
     def _create_stats(self, parent):
-        """2x2 grid: today / last 31 days, this month / output today."""
-        top = tk.Frame(parent, bg=self.bg_color)
-        top.pack(fill=tk.X)
-        self._create_stat(top, "today", "Today")
-        self._create_stat(top, "last31", f"Last {DAILY_HISTORY_DAYS} days")
-        tk.Frame(parent, bg=self.bg_color, height=8).pack()
-        bottom = tk.Frame(parent, bg=self.bg_color)
-        bottom.pack(fill=tk.X)
-        self._create_stat(bottom, "month", "This month")
-        self._create_stat(bottom, "output", "Output today")
+        """2x2 grid of stat cells. Titles and figures are set per engine; the
+        slots only fix the positions."""
+        grid = tk.Frame(parent, bg=self.bg_color)
+        grid.pack(fill=tk.X)
+        # Both columns share one uniform width. Laying each row out on its own
+        # let the split fall at a different x per row, so the right-hand cells
+        # did not line up whenever one row's text measured wider than the
+        # other's ("377.9M tokens" against "2.73B tokens").
+        grid.columnconfigure(0, weight=1, uniform="stat")
+        grid.columnconfigure(1, weight=1, uniform="stat")
+        cells = (("today", "Today"),
+                 ("last31", f"Last {DAILY_HISTORY_DAYS} days"),
+                 ("month", "This month"),
+                 ("output", "Output today"))
+        for index, (key, title) in enumerate(cells):
+            self._create_stat(grid, key, title, row=index // 2, column=index % 2)
 
     def _create_chart(self, parent):
         _, self._chart_title, self._chart_note = self._row(
             parent, "Daily API-equivalent cost", "", self._font(8),
             self._font(8), self.text_muted, self.text_muted)
         tk.Frame(parent, bg=self.bg_color, height=4).pack()
-        self._chart = BarChart(parent, width=348, bg=self.bg_color, font=self._font(7))
+        self._chart = BarChart(parent, width=348, bg=self.bg_color, font=self._font(7),
+                               label_fg=self.text_muted)
         self._chart.pack(fill=tk.X)
         tk.Frame(parent, bg=self.bg_color, height=6).pack()
         _, self._top_model, self._top_share = self._row(
@@ -1196,7 +1252,7 @@ class ClaudeBarWindow:
             if valid_snapshot:
                 with self._lock:
                     self._oauth_error = None
-                self._status_indicator.config(fg="#10B981")
+                self._status_indicator.config(fg=self.ok_color)
                 text = "Connected"
                 plan = self._claude_status.plan if self._claude_status else None
                 if not plan and valid_snapshot.extra_enabled:
@@ -1209,7 +1265,7 @@ class ClaudeBarWindow:
             # No usage data - check CLI auth status (primary status source)
             if self._claude_status and self._claude_status.authenticated:
                 # CLI says we're logged in, even though usage API may be blocked
-                self._status_indicator.config(fg="#10B981")
+                self._status_indicator.config(fg=self.ok_color)
                 text = "Connected"
                 plan = self._claude_status.plan
                 if plan:
@@ -1219,13 +1275,13 @@ class ClaudeBarWindow:
 
             # Not authenticated via CLI - show specific error
             if oauth_error:
-                self._status_indicator.config(fg="#EF4444")
+                self._status_indicator.config(fg=self.warn_color)
                 if "refresh failed" in oauth_error.lower() or "token expired" in oauth_error.lower():
                     self._status_text.config(text="Session expired")
                 elif "not found" in oauth_error.lower() or "no oauth" in oauth_error.lower():
                     self._status_text.config(text="Not logged in")
                 elif "429" in oauth_error or "restricted" in oauth_error.lower() or "rate limit" in oauth_error.lower():
-                    self._status_indicator.config(fg="#F59E0B")
+                    self._status_indicator.config(fg=self.accent_color)
                     self._status_text.config(text="API restricted")
                 else:
                     self._status_text.config(text="Connection error")
@@ -1234,20 +1290,20 @@ class ClaudeBarWindow:
             # Fall back to claude_status check for non-authenticated states
             if self._claude_status:
                 if self._claude_status.installed:
-                    self._status_indicator.config(fg="#F59E0B")
+                    self._status_indicator.config(fg=self.accent_color)
                     text = "Not logged in"
                 else:
-                    self._status_indicator.config(fg="#EF4444")
+                    self._status_indicator.config(fg=self.warn_color)
                     text = "Claude CLI not found"
                 self._status_text.config(text=text)
             else:
-                self._status_indicator.config(fg="#6b7280")
+                self._status_indicator.config(fg=self.text_muted)
                 self._status_text.config(text="Checking...")
         elif self._active_engine == Engine.CODEX:
             # Show Codex connection status
             if self._openai_snapshot:
                 if self._openai_snapshot.available:
-                    self._status_indicator.config(fg="#10B981")
+                    self._status_indicator.config(fg=self.ok_color)
                     text = "Connected"
                     # Show plan type if available
                     if self._openai_snapshot.plan_type:
@@ -1256,7 +1312,7 @@ class ClaudeBarWindow:
                         text += f" · ${self._openai_snapshot.credits_remaining:.2f} credits"
                     self._status_text.config(text=text)
                 elif self._openai_snapshot.error_message:
-                    self._status_indicator.config(fg="#EF4444")
+                    self._status_indicator.config(fg=self.warn_color)
                     # Show shorter error message
                     err = self._openai_snapshot.error_message
                     if "Run 'codex login'" in err:
@@ -1267,33 +1323,35 @@ class ClaudeBarWindow:
                         text = "Connection error"
                     self._status_text.config(text=text)
                 else:
-                    self._status_indicator.config(fg="#F59E0B")
+                    self._status_indicator.config(fg=self.accent_color)
                     self._status_text.config(text="Not configured")
             else:
-                self._status_indicator.config(fg="#6b7280")
+                self._status_indicator.config(fg=self.text_muted)
                 self._status_text.config(text="Checking...")
         elif self._active_engine == Engine.DEEPSEEK:
-            # DeepSeek has no quota to report, so the balance is the status
+            # The status row reports the connection only. The balance has its own
+            # block below, with the top-up, grant and spend breakdown, so naming
+            # it here just said the same figure twice on one screen.
             snap = self._deepseek_snapshot
             if snap is None:
-                self._status_indicator.config(fg="#6b7280")
+                self._status_indicator.config(fg=self.text_muted)
                 self._status_text.config(text="Checking...")
             elif snap.balance_available:
                 if snap.usage_available:
-                    self._status_indicator.config(fg="#10B981")
+                    self._status_indicator.config(fg=self.ok_color)
                     text = "Connected"
                 else:
-                    self._status_indicator.config(fg="#F59E0B")
+                    self._status_indicator.config(fg=self.accent_color)
                     text = "Connected \u00b7 balance only"
-                self._status_text.config(text=f"{text} \u00b7 {self._money_fixed(snap.balance_total)}")
+                self._status_text.config(text=text)
             elif snap.error_message == "Not signed in":
-                self._status_indicator.config(fg="#6b7280")
+                self._status_indicator.config(fg=self.text_muted)
                 self._status_text.config(text="Not signed in")
             elif snap.usage_error == "Session expired":
-                self._status_indicator.config(fg="#EF4444")
+                self._status_indicator.config(fg=self.warn_color)
                 self._status_text.config(text="Session expired")
             else:
-                self._status_indicator.config(fg="#EF4444")
+                self._status_indicator.config(fg=self.warn_color)
                 self._status_text.config(text=snap.balance_message)
 
     def _on_refresh_click(self):
@@ -1531,26 +1589,25 @@ class ClaudeBarWindow:
             self._balance_note.config(text=note)
             self._balance_state.config(text=snap.balance_message,
                                        fg=self.ok_color if snap.balance_usable else self.warn_color)
-            self._balance_currency.config(text=self.config.currency)
         else:
             self._balance_note.config(text="")
             self._balance_state.config(text=snap.balance_message, fg=self.warn_color)
-            self._balance_currency.config(text="")
 
+        # Four windows, read left to right and top to bottom: each cell is a
+        # cost with the token count for the same window underneath it. The slot
+        # keys are positions in the shared grid, not the windows they show here.
+        windows = (
+            ("today", "Today", snap.today_cost_usd, snap.today_tokens),
+            ("last31", "This month", snap.month_cost_usd, snap.month_tokens),
+            ("month", "Last 7 days", snap.last7_cost_usd, snap.last7_tokens),
+            ("output", "Prev month", snap.prev_month_cost_usd, snap.prev_month_tokens),
+        )
         if snap.usage_available:
-            self._set_stat("today", money(snap.today_cost_usd),
-                           self._usage_sub(snap.today_tokens, snap.today_requests), "Today")
-            self._set_stat("last31", money(snap.month_cost_usd),
-                           self._usage_sub(snap.month_tokens, snap.month_requests), "This month")
-            self._set_stat("month", money(snap.last7_cost_usd),
-                           self._usage_sub(snap.last7_tokens, snap.last7_requests), "Last 7 days")
-            self._set_stat("output", format_tokens(snap.week_tokens),
-                           f"{format_tokens(snap.week_cache_hit)} in \u00b7 "
-                           f"{format_tokens(snap.week_output)} out", "Tokens this week")
+            for key, title, cost, tokens in windows:
+                self._set_stat(key, money(cost), f"{format_tokens(tokens)} tokens", title)
         else:
             hint = "Sign in to see usage" if snap.usage_error else "No usage reported"
-            for key, title in (("today", "Today"), ("last31", "This month"),
-                               ("month", "Last 7 days"), ("output", "Tokens this week")):
+            for key, title, _, _ in windows:
                 self._set_stat(key, "\u2014", hint, title)
 
         week, labels = self._week_series(snap.daily_costs, snap.timestamp.date(),
@@ -1580,10 +1637,6 @@ class ClaudeBarWindow:
             source = "Sign in to DeepSeek in Settings"
         self._fill_meta(snap, source, rates)
         self._apply_layout(("deepseek", snap.usage_available))
-
-    @staticmethod
-    def _usage_sub(tokens: int, requests: int) -> str:
-        return f"{format_tokens(tokens)} tokens \u00b7 {requests:,} req"
 
     @staticmethod
     def _week_series(values, today, dates=()) -> tuple[list, list]:

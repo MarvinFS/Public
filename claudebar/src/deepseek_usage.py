@@ -334,20 +334,18 @@ def fetch_month(user_token: str, year: int, month: int) -> tuple[Optional[dict],
 
 
 def fetch_usage(user_token: str, today: Optional[date] = None) -> UsageData:
-    """Usage covering today, the current month and the trailing 7 days.
+    """Usage covering today, the current month, the trailing 7 days and the
+    previous calendar month.
 
-    The previous month is fetched as well while the 7-day window can still
-    reach into it, so the chart does not lose its oldest bars at a month
-    boundary.
+    The previous month is always fetched: the 7-day window can reach back into
+    it at a month boundary, and the panel reports that month's own totals.
     """
     if not user_token:
         return UsageData(error="No platform token")
 
     today = today or date.today()
-    months = [(today.year, today.month)]
-    if today.day <= 7:
-        previous = today.replace(day=1) - timedelta(days=1)
-        months.append((previous.year, previous.month))
+    previous = today.replace(day=1) - timedelta(days=1)
+    months = [(today.year, today.month), (previous.year, previous.month)]
 
     merged = UsageData(available=True)
     errors: list[str] = []
@@ -365,6 +363,11 @@ def fetch_usage(user_token: str, today: Optional[date] = None) -> UsageData:
             continue
         merged.days.extend(parsed.days)
         merged.currency = parsed.currency or merged.currency
+        # Models drive the month-to-date row, so only the current month counts.
+        # Merging the previous month in would let one of its models report more
+        # than 100% of this month's spend.
+        if (year, month) != (today.year, today.month):
+            continue
         for model in parsed.models:
             existing = seen_models.get(model.model)
             if existing:
@@ -394,4 +397,10 @@ def last_n_days(days: list[DayUsage], today: date, count: int) -> list[DayUsage]
 def month_days(days: list[DayUsage], today: date) -> list[DayUsage]:
     """Day buckets falling in today's calendar month."""
     prefix = today.strftime("%Y-%m")
+    return [d for d in days if d.date.startswith(prefix)]
+
+
+def previous_month_days(days: list[DayUsage], today: date) -> list[DayUsage]:
+    """Day buckets falling in the calendar month before today's."""
+    prefix = (today.replace(day=1) - timedelta(days=1)).strftime("%Y-%m")
     return [d for d in days if d.date.startswith(prefix)]

@@ -1,6 +1,6 @@
 """How the collector assembles a DeepSeek snapshot from the platform session."""
 
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 import currency
 import data_collector as dc
@@ -101,7 +101,6 @@ class TestAssembly:
 
         assert snap.today_cost_usd == 1.0
         assert snap.today_tokens == 100
-        assert snap.today_requests == 5
         assert len(snap.daily_costs) == 7          # a full week, zero-filled
         assert snap.daily_costs[-1] == 1.0
         assert snap.last7_cost_usd == 1.0 + (2.0 if today.day == 1 else 0.0)
@@ -122,6 +121,30 @@ class TestAssembly:
         isolate(monkeypatch, usage=usage)
         snap = dc.DataCollector().collect_deepseek()
         assert snap.models_used[0].model == "deepseek-flash"
+
+    def test_previous_month_is_totalled_separately(self, monkeypatch):
+        fixed_rates(monkeypatch)
+        today = date.today()
+        previous = today.replace(day=1) - timedelta(days=1)
+        days = [day(today.isoformat(), cost=1.0, tokens=100),
+                day(previous.isoformat(), cost=4.0, tokens=400)]
+        isolate(monkeypatch, usage=du.UsageData(available=True, days=days))
+        snap = dc.DataCollector().collect_deepseek()
+
+        assert snap.month_cost_usd == 1.0
+        assert snap.month_tokens == 100
+        assert snap.prev_month_cost_usd == 4.0
+        assert snap.prev_month_tokens == 400
+
+    def test_previous_month_costs_are_converted_too(self, monkeypatch):
+        fixed_rates(monkeypatch)
+        previous = date.today().replace(day=1) - timedelta(days=1)
+        isolate(monkeypatch, usage=du.UsageData(available=True, currency="CNY",
+                                                days=[day(previous.isoformat(), cost=7.10,
+                                                          tokens=70)]))
+        snap = dc.DataCollector().collect_deepseek()
+        assert round(snap.prev_month_cost_usd, 4) == 1.0
+        assert snap.prev_month_tokens == 70
 
 
 class TestSessionSummary:
@@ -195,3 +218,45 @@ class TestCacheFallback:
         assert snap.usage_available
         assert snap.month_cost_usd == 50.0
         assert snap.is_stale
+
+    def test_the_cached_previous_month_comes_back_too(self, monkeypatch):
+        from models import DeepSeekSnapshot
+        fixed_rates(monkeypatch)
+        cached = DeepSeekSnapshot(usage_available=True, prev_month_cost_usd=12.5,
+                                  prev_month_tokens=1250)
+        isolate(monkeypatch, cached=cached)
+        snap = dc.DataCollector().collect_deepseek()
+        assert snap.prev_month_cost_usd == 12.5
+        assert snap.prev_month_tokens == 1250
+        assert snap.is_stale
+
+
+class TestCacheRoundTrip:
+    """The previous month has to survive a save and a load, and a cache written
+    by an older build has no such key at all."""
+
+    def test_previous_month_survives_a_round_trip(self, monkeypatch, tmp_path):
+        import snapshot_cache
+        from models import DeepSeekSnapshot
+        monkeypatch.setattr(snapshot_cache, "get_cache_path",
+                            lambda: tmp_path / "snapshot_cache.json")
+        snapshot_cache.save_cache(deepseek=DeepSeekSnapshot(
+            usage_available=True, prev_month_cost_usd=12.5, prev_month_tokens=1250))
+
+        loaded, _ = snapshot_cache.load_deepseek_cache()
+        assert loaded.prev_month_cost_usd == 12.5
+        assert loaded.prev_month_tokens == 1250
+
+    def test_a_cache_without_the_key_still_loads(self, monkeypatch, tmp_path):
+        import json
+        import snapshot_cache
+        path = tmp_path / "snapshot_cache.json"
+        monkeypatch.setattr(snapshot_cache, "get_cache_path", lambda: path)
+        path.write_text(json.dumps({"deepseek": {"usage_available": True, "month_cost_usd": 3.0},
+                                    "deepseek_cached_at": "2026-09-15T10:00:00"}),
+                        encoding="utf-8")
+
+        loaded, _ = snapshot_cache.load_deepseek_cache()
+        assert loaded.month_cost_usd == 3.0
+        assert loaded.prev_month_cost_usd == 0.0
+        assert loaded.prev_month_tokens == 0

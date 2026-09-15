@@ -227,22 +227,20 @@ class DeepSeekSnapshot:
     usage_available: bool = False
     usage_currency: str = "USD"      # currency the platform reported, before conversion
 
+    # Windows the panel reports: a cost and a token count each. Request counts
+    # are only kept per day, for the chart flyout.
     today_cost_usd: float = 0.0
     today_tokens: int = 0
-    today_requests: int = 0
 
     month_cost_usd: float = 0.0
     month_tokens: int = 0
-    month_requests: int = 0
 
     last7_cost_usd: float = 0.0
     last7_tokens: int = 0
-    last7_requests: int = 0
 
-    # Token split across the trailing 7 days
-    week_cache_hit: int = 0
-    week_cache_miss: int = 0
-    week_output: int = 0
+    # Previous calendar month, reported as the same cost + tokens pair
+    prev_month_cost_usd: float = 0.0
+    prev_month_tokens: int = 0
 
     # Trailing 7 days, oldest first, ending today (zero-filled for quiet days)
     daily_costs: list[float] = field(default_factory=list)

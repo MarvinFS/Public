@@ -24,7 +24,7 @@ Claude Code CLI: session and weekly limits, tokens per model, and costs from the
 
 Codex CLI: session and weekly limits, tokens, and costs from the local logs. Requires Codex CLI with `codex login` completed.
 
-DeepSeek: balance, lifetime spend, and cost, tokens and request counts for today, this month and the last 7 days. DeepSeek is API-only, so there are no session or weekly limits to show.
+DeepSeek: balance, lifetime spend, and cost and token counts for today, this month, the last 7 days and the previous month. DeepSeek is API-only, so there are no session or weekly limits to show.
 
 Sign in once from Settings and that is the whole setup. The button opens a browser window you sign into yourself; your password stays with DeepSeek, and ClaudeBar reads only the session token that comes back. Everything shown afterwards comes from that session, through the same private endpoints the platform's own usage page calls: the balance and lifetime total from the account summary, and the daily cost, token and request counts from the usage endpoints.
 

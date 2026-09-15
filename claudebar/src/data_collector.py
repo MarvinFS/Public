@@ -15,7 +15,7 @@ from codex_log_parser import CodexTokenUsage, get_codex_daily_usage
 from config import get_claude_projects_dir
 import model_catalog
 import deepseek_auth
-from deepseek_usage import fetch_usage, fetch_summary, last_n_days, month_days
+from deepseek_usage import fetch_usage, fetch_summary, last_n_days, month_days, previous_month_days
 from currency import to_usd
 from snapshot_cache import save_cache, load_cache, load_deepseek_cache
 
@@ -299,10 +299,9 @@ class DataCollector:
                     carried = True
                 if not usage_fresh and cached.usage_available:
                     for name in ("usage_available", "usage_currency", "today_cost_usd",
-                                 "today_tokens", "today_requests", "month_cost_usd",
-                                 "month_tokens", "month_requests", "last7_cost_usd",
-                                 "last7_tokens", "last7_requests", "week_cache_hit",
-                                 "week_cache_miss", "week_output", "daily_costs",
+                                 "today_tokens", "month_cost_usd", "month_tokens",
+                                 "last7_cost_usd", "last7_tokens", "daily_costs",
+                                 "prev_month_cost_usd", "prev_month_tokens",
                                  "total_cost_usd", "total_cost_available",
                                  "daily_tokens", "daily_requests", "daily_dates",
                                  "models_used"):
@@ -334,6 +333,7 @@ class DataCollector:
 
         week = last_n_days(usage.days, today, 7)
         month = month_days(usage.days, today)
+        previous = previous_month_days(usage.days, today)
 
         snapshot.usage_available = True
         snapshot.usage_currency = currency
@@ -345,19 +345,15 @@ class DataCollector:
 
         snapshot.last7_cost_usd = sum(snapshot.daily_costs)
         snapshot.last7_tokens = sum(snapshot.daily_tokens)
-        snapshot.last7_requests = sum(snapshot.daily_requests)
-
-        snapshot.week_cache_hit = sum(d.cache_hit for d in week)
-        snapshot.week_cache_miss = sum(d.cache_miss for d in week)
-        snapshot.week_output = sum(d.output for d in week)
 
         snapshot.today_cost_usd = week[-1].cost * factor
         snapshot.today_tokens = week[-1].tokens
-        snapshot.today_requests = week[-1].requests
 
         snapshot.month_cost_usd = sum(d.cost for d in month) * factor
         snapshot.month_tokens = sum(d.tokens for d in month)
-        snapshot.month_requests = sum(d.requests for d in month)
+
+        snapshot.prev_month_cost_usd = sum(d.cost for d in previous) * factor
+        snapshot.prev_month_tokens = sum(d.tokens for d in previous)
 
         snapshot.models_used = [
             ModelUsage(model=m.model, cost_usd=m.cost * factor, message_count=0)

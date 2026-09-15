@@ -24,16 +24,13 @@ Claude Code CLI: session and weekly limits, tokens per model, and costs from the
 
 Codex CLI: session and weekly limits, tokens, and costs from the local logs. Requires Codex CLI with `codex login` completed.
 
-DeepSeek: balance, and cost, tokens and request counts for today, this month and the last 7 days. DeepSeek is API-only, so there are no session or weekly limits to show. It uses two credentials, and they unlock different things:
+DeepSeek: balance, lifetime spend, and cost, tokens and request counts for today, this month and the last 7 days. DeepSeek is API-only, so there are no session or weekly limits to show.
 
-| Credential | What it unlocks | Where ClaudeBar finds it |
-|---|---|---|
-| API key | Account balance | Settings, `DEEPSEEK_API_KEY`, or the DeepSeek Harness credential store |
-| Platform token | Cost, tokens and request counts | Settings, or `DEEPSEEK_USER_TOKEN` |
+Sign in once from Settings and that is the whole setup. The button opens a browser window you sign into yourself; your password stays with DeepSeek, and ClaudeBar reads only the session token that comes back. Everything shown afterwards comes from that session, through the same private endpoints the platform's own usage page calls: the balance and lifetime total from the account summary, and the daily cost, token and request counts from the usage endpoints.
 
-The API key alone is enough for the balance. The usage figures come from the same private endpoints the DeepSeek platform's own usage page calls, and those need the signed-in platform token: sign in at `platform.deepseek.com`, run `localStorage.getItem("userToken")` in the browser console, and paste the result into Settings once. They are undocumented, so they can change without notice; if they do, the balance keeps working and only the usage figures go quiet.
+The platform sits behind a JavaScript challenge, which is why signing in needs a real browser window rather than a plain HTTP request, and why the endpoints are undocumented and can change without notice. If they do, the DeepSeek view goes quiet and says so; nothing else in the app is affected.
 
-Both credentials are optional and independent. With neither, the DeepSeek view opens and tells you what is missing rather than failing.
+You can also paste the session token directly, from `localStorage.getItem("userToken")` at `platform.deepseek.com`, or supply it as `DEEPSEEK_USER_TOKEN`. With no session at all the DeepSeek view opens, shows nothing, and tells you to sign in rather than displaying stale figures.
 
 Not supported: the Claude Desktop app and the ChatGPT web interface, which authenticate with browser cookies that the usage APIs do not accept, and GitHub Copilot, whose metrics API serves organisation and enterprise accounts only.
 
@@ -65,11 +62,8 @@ Settings live in `%LOCALAPPDATA%\ClaudeBar\config.json`:
 ```json
 {
   "refresh_interval": 300,
-  "cli_timeout": 30,
   "warning_threshold": 80,
   "critical_threshold": 95,
-  "show_notifications": true,
-  "start_minimized": true,
   "currency": "USD",
   "claude_enabled": true,
   "codex_enabled": true,
@@ -81,7 +75,7 @@ Settings live in `%LOCALAPPDATA%\ClaudeBar\config.json`:
 
 `refresh_interval` is in seconds. Past the two thresholds the tray icon gets an amber, then a red, corner badge. `currency` accepts USD, EUR, GBP, RUB, or RON. The engine toggles hide an engine you do not use. `window_x` and `window_y` hold the last dragged panel position.
 
-DeepSeek credentials are never written to `config.json`. The API key and the platform token you paste into Settings are encrypted with Windows DPAPI, which ties them to your Windows account, and stored in `%LOCALAPPDATA%\ClaudeBar\secrets\`. Copying that folder to another machine or user profile yields nothing. If DPAPI is unavailable the token is kept in memory for that session only.
+DeepSeek credentials are never written to `config.json`. The session token is encrypted with Windows DPAPI, which ties it to your Windows account, and stored in `%LOCALAPPDATA%\ClaudeBar\secrets\`. Copying that folder to another machine or user profile yields nothing. If DPAPI is unavailable the token is kept in memory for that session only.
 
 ## Where the numbers come from
 

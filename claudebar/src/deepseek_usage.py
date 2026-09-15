@@ -1,12 +1,10 @@
 """DeepSeek usage data.
 
-Two surfaces, two credentials:
-
-* ``fetch_balance`` hits the documented public API with an API key.
-* ``fetch_usage`` hits the platform's private dashboard endpoints, which need
-  the signed-in platform ``userToken``. An API key is rejected there with
-  HTTP 200 and a body-level error code, so auth failures are detected from the
-  envelope, never from the status line alone.
+Everything here needs the signed-in platform ``userToken``, from the browser
+sign-in in Settings. The public API exposes a balance and nothing else, and an
+API key is rejected by the usage endpoints with HTTP 200 and a body-level error
+code, so auth failures are detected from the envelope, never from the status
+line alone.
 
 The private endpoints are undocumented and may change, so every parser here is
 tolerant: unknown shapes degrade to "usage unavailable" rather than raising.
@@ -20,9 +18,11 @@ from dataclasses import dataclass, field
 from datetime import date, timedelta
 from typing import Optional
 
-BALANCE_URL = "https://api.deepseek.com/user/balance"
+from currency import to_usd
+
 USAGE_AMOUNT_URL = "https://platform.deepseek.com/api/v0/usage/amount"
 USAGE_COST_URL = "https://platform.deepseek.com/api/v0/usage/cost"
+SUMMARY_URL = "https://platform.deepseek.com/api/v0/users/get_user_summary"
 
 # The platform endpoints answer a browser session, not a bare client
 BROWSER_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -34,22 +34,31 @@ AUTH_ERROR_CODES = (40002, 40003)
 
 TIMEOUT = 15.0
 
-# Usage row types
+# Usage row types. PROMPT_TOKEN (uncached input) is also seen in the wild
+# and simply counts towards the token total.
 REQUEST = "REQUEST"
-TOKEN_TYPES = ("PROMPT_CACHE_HIT_TOKEN", "PROMPT_CACHE_MISS_TOKEN", "RESPONSE_TOKEN")
 
 DAILY_HISTORY_DAYS = 31
 
 
 @dataclass
-class BalanceInfo:
-    """Balance from the public API. `available` is the API's is_available flag."""
+class AccountSummary:
+    """Balance and lifetime spend from the platform session endpoint.
+
+    This is the only source of the balance, which is why signing in supplies
+    everything the DeepSeek view shows. Amounts are USD.
+    """
     available: bool = False
     currency: str = "USD"
-    total: float = 0.0
-    granted: float = 0.0
     topped_up: float = 0.0
+    granted: float = 0.0
+    total_cost: float = 0.0
+    total_cost_available: bool = False
     error: Optional[str] = None
+
+    @property
+    def total(self) -> float:
+        return self.topped_up + self.granted
 
 
 @dataclass
@@ -144,35 +153,56 @@ def _get(url: str, headers: dict) -> tuple[Optional[dict], Optional[str]]:
         return None, str(e)
 
 
-def fetch_balance(api_key: str) -> BalanceInfo:
-    """Balance for an API key. USD is preferred when several are reported."""
-    if not api_key:
-        return BalanceInfo(error="No API key")
+def fetch_summary(user_token: str) -> AccountSummary:
+    """Balance and lifetime spend for a platform session token.
 
-    headers = {"Authorization": f"Bearer {api_key}", "Accept": "application/json"}
-    payload, error = _get(BALANCE_URL, headers)
+    Undocumented like the other platform endpoints, but worth reading: it is
+    the only source that gives both a balance and the all-time total, so a
+    signed-in session stands on its own.
+    """
+    if not user_token:
+        return AccountSummary(error="No platform token")
+
+    payload, error = _get(SUMMARY_URL, _usage_headers(user_token))
     if error:
-        return BalanceInfo(error=error)
-    if not isinstance(payload, dict):
-        return BalanceInfo(error="Unexpected balance response")
+        return AccountSummary(error=error)
+    if envelope_auth_error(payload):
+        return AccountSummary(error="Session expired")
 
-    infos = payload.get("balance_infos")
-    if not isinstance(infos, list) or not infos:
-        return BalanceInfo(error="No balance reported")
+    biz = _biz_data(payload)
+    if not biz:
+        return AccountSummary(error="No account summary reported")
 
-    chosen = next((i for i in infos if isinstance(i, dict) and
-                   str(i.get("currency", "")).upper() == "USD"), None)
-    if chosen is None:
-        chosen = next((i for i in infos if isinstance(i, dict)), None)
-    if chosen is None:
-        return BalanceInfo(error="No balance reported")
+    def wallet(entries) -> tuple[float, str]:
+        if not isinstance(entries, list):
+            return 0.0, "USD"
+        for entry in entries:
+            if isinstance(entry, dict):
+                return _to_float(entry.get("balance")), str(entry.get("currency") or "USD").upper()
+        return 0.0, "USD"
 
-    return BalanceInfo(
-        available=bool(payload.get("is_available")),
-        currency=str(chosen.get("currency") or "USD").upper(),
-        total=_to_float(chosen.get("total_balance")),
-        granted=_to_float(chosen.get("granted_balance")),
-        topped_up=_to_float(chosen.get("topped_up_balance")),
+    topped_up, currency = wallet(biz.get("normal_wallets"))
+    granted, granted_currency = wallet(biz.get("bonus_wallets"))
+    if granted and granted_currency:
+        currency = granted_currency
+
+    total_cost = 0.0
+    cost_known = False
+    costs = biz.get("total_costs")
+    if isinstance(costs, list):
+        for entry in costs:
+            if isinstance(entry, dict):
+                total_cost += _to_float(entry.get("amount"))
+                currency = str(entry.get("currency") or currency).upper()
+                cost_known = True
+
+    return AccountSummary(
+        available=True,
+        currency=currency,
+        topped_up=to_usd(topped_up, currency),
+        granted=to_usd(granted, currency),
+        total_cost=to_usd(total_cost, currency),
+        total_cost_available=cost_known,
     )
 
 

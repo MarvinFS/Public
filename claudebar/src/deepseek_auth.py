@@ -1,18 +1,13 @@
-"""Resolve DeepSeek credentials for ClaudeBar.
+"""Resolve the DeepSeek platform session for ClaudeBar.
 
-Two different credentials unlock two different surfaces, so both are resolved
-here and the caller decides what it can do:
+One credential, one surface. The signed-in platform ``userToken`` unlocks the
+account summary (balance and lifetime spend) and the usage endpoints (today,
+this month and the last 7 days of cost, tokens and requests). ClaudeBar never
+holds an account password: the user signs in on DeepSeek's own page and only
+the resulting session token is kept, encrypted by secret_store.
 
-* API key    -> the public balance endpoint only. Auto-detected from the
-                DeepSeek Harness credential store, which is how this machine
-                already has one.
-* userToken  -> the platform's private usage endpoints (today/month cost,
-                tokens and requests). Never auto-detected: the user pastes it
-                once, and it is kept encrypted by secret_store.
-
-Precedence is the same for both: an explicitly saved secret wins over the
-environment, which wins over auto-detection, so a deliberate user choice is
-never silently overridden.
+A saved secret wins over the environment, so an explicit choice is never
+silently overridden.
 """
 
 import json
@@ -25,24 +20,19 @@ from typing import Optional
 import secret_store
 
 # secret_store names
+# Legacy: the Settings field is gone, but a stored key from an older
+# build is still cleared so it cannot linger on disk.
 API_KEY_SECRET = "deepseek_api_key"
 USER_TOKEN_SECRET = "deepseek_user_token"
 
 # Environment overrides, in priority order
-API_KEY_ENV = ("DEEPSEEK_API_KEY", "DEEPSEEK_KEY")
 USER_TOKEN_ENV = ("DEEPSEEK_USER_TOKEN", "DEEPSEEK_PLATFORM_TOKEN")
-
-# Harness credential store (read-only; the same passive-reader pattern used for
-# ~/.claude/.credentials.json and ~/.codex/auth.json)
-HARNESS_CREDENTIALS = Path.home() / ".dsh" / ".credentials.yaml"
-HARNESS_API_KEY_REF = "DEEPSEEK_API_KEY"
-
 
 @dataclass(frozen=True)
 class Credential:
     """A resolved secret plus where it came from, for the Settings hint."""
     value: str
-    source: str  # "saved" | "env" | "harness"
+    source: str  # "saved" | "env"
 
 
 def normalize_user_token(value: str) -> Optional[str]:
@@ -78,67 +68,11 @@ def _clean(raw: str) -> Optional[str]:
     return value or None
 
 
-def read_harness_ref(name: str, path: Optional[Path] = None) -> Optional[str]:
-    """Read one scalar under the top-level `refs:` mapping of the harness store.
-
-    Deliberately dependency-free and fail-closed: the file is a plain nested
-    mapping, and if the harness ever changes its shape this returns None. The
-    caller then reports "no API key", which is a better failure than a crash
-    or a malformed request. The value is never logged.
-    """
-    path = path or HARNESS_CREDENTIALS
-    try:
-        text = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError):
-        return None
-
-    # Primary: a block mapping introduced by a top-level `refs:` line.
-    lines = text.splitlines()
-    for i, line in enumerate(lines):
-        if not re.match(r"^refs\s*:\s*$", line):
-            continue
-        for following in lines[i + 1:]:
-            if following.strip() and not following[:1].isspace():
-                break  # next top-level key: refs block ended
-            m = re.match(r"^\s+([A-Za-z0-9_.\-]+)\s*:\s*(.*)$", following)
-            if m and m.group(1) == name:
-                return _clean(m.group(2))
-        break
-
-    # Secondary: a flow mapping on the `refs` line itself, e.g.
-    # refs: {DEEPSEEK_API_KEY: sk-x}. Scoped to that line, so a stray key
-    # elsewhere in the file is not mistaken for the credential store.
-    for line in lines:
-        if not re.match(r"^refs\s*:\s*\{", line):
-            continue
-        m = re.search(rf"\b{re.escape(name)}\s*:\s*([^,}}\s]+)", line)
-        if m:
-            return _clean(m.group(1))
-    return None
-
-
 def _from_env(names: tuple[str, ...]) -> Optional[str]:
     for name in names:
         value = _clean(os.environ.get(name, ""))
         if value:
             return value
-    return None
-
-
-def discover_api_key() -> Optional[Credential]:
-    """Saved secret, then environment, then the DeepSeek Harness store."""
-    saved = _clean(secret_store.load_secret(API_KEY_SECRET) or "")
-    if saved:
-        return Credential(saved, "saved")
-
-    from_env = _from_env(API_KEY_ENV)
-    if from_env:
-        return Credential(from_env, "env")
-
-    from_harness = read_harness_ref(HARNESS_API_KEY_REF)
-    if from_harness:
-        return Credential(from_harness, "harness")
-
     return None
 
 
@@ -155,14 +89,6 @@ def discover_user_token() -> Optional[Credential]:
     return None
 
 
-def save_api_key(value: str) -> bool:
-    """Persist an API key. False when DPAPI could not store it."""
-    value = (value or "").strip()
-    if not value:
-        return False
-    return secret_store.save_secret(API_KEY_SECRET, value)
-
-
 def save_user_token(value: str) -> bool:
     """Persist a platform userToken, unwrapping the localStorage JSON if that
     is what was pasted. False when DPAPI could not store it."""
@@ -173,6 +99,6 @@ def save_user_token(value: str) -> bool:
 
 
 def clear_credentials() -> None:
-    """Forget both stored secrets. Environment and harness values still apply."""
+    """Forget both stored secrets. An environment value still applies."""
     secret_store.delete_secret(API_KEY_SECRET)
     secret_store.delete_secret(USER_TOKEN_SECRET)

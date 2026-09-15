@@ -1,7 +1,9 @@
 """DeepSeek usage parsing: envelope shapes, windows and auth failures."""
 
-from datetime import date
+import json
+from datetime import date, datetime
 
+import currency
 import deepseek_usage as d
 
 
@@ -143,35 +145,6 @@ class TestWindows:
         assert sum(w.cost for w in window) == 4.0
 
 
-class TestBalance:
-    def test_usd_is_preferred_over_other_currencies(self, monkeypatch):
-        monkeypatch.setattr(d, "_get", lambda url, headers: ({
-            "is_available": True,
-            "balance_infos": [
-                {"currency": "CNY", "total_balance": "100.00", "granted_balance": "0", "topped_up_balance": "100"},
-                {"currency": "USD", "total_balance": "15.21", "granted_balance": "0", "topped_up_balance": "15.21"},
-            ],
-        }, None))
-        info = d.fetch_balance("sk-test")
-        assert info.currency == "USD"
-        assert info.total == 15.21
-        assert info.available is True
-
-    def test_missing_key_never_calls_the_api(self, monkeypatch):
-        def explode(url, headers):
-            raise AssertionError("should not fetch without a key")
-        monkeypatch.setattr(d, "_get", explode)
-        assert d.fetch_balance("").error == "No API key"
-
-    def test_http_401_reads_as_an_expired_session(self, monkeypatch):
-        monkeypatch.setattr(d, "_get", lambda url, headers: (None, "Session expired"))
-        assert d.fetch_balance("sk-test").error == "Session expired"
-
-    def test_empty_balance_list_is_an_error(self, monkeypatch):
-        monkeypatch.setattr(d, "_get", lambda url, headers: ({"is_available": True, "balance_infos": []}, None))
-        assert d.fetch_balance("sk-test").error
-
-
 class TestFetchUsage:
     def test_no_token_short_circuits(self):
         assert d.fetch_usage("").error == "No platform token"
@@ -198,3 +171,62 @@ class TestFetchUsage:
     def test_an_expired_token_surfaces_as_unavailable(self, monkeypatch):
         monkeypatch.setattr(d, "_get", lambda url, headers: ({"code": 40003, "data": None}, None))
         assert not d.fetch_usage("token", today=date(2026, 9, 20)).available
+
+
+SUMMARY = {"code": 0, "msg": "", "data": {"biz_code": 0, "biz_data": {
+    "normal_wallets": [{"currency": "USD", "balance": "14.5807473736000000", "token_estimation": "0"}],
+    "bonus_wallets": [{"currency": "USD", "balance": "0", "token_estimation": "0"}],
+    "total_costs": [{"currency": "USD", "amount": "15.4192526264000000"}],
+}}}
+
+
+class TestAccountSummary:
+    """The session summary is the only source of the lifetime total, and the
+    only way a platform token alone can show a balance."""
+
+    def test_reads_balance_and_lifetime_spend(self, monkeypatch):
+        monkeypatch.setattr(d, "_get", lambda url, headers: (SUMMARY, None))
+        s = d.fetch_summary("token")
+        assert s.available
+        assert round(s.topped_up, 4) == 14.5807
+        assert s.granted == 0.0
+        assert round(s.total, 4) == 14.5807
+        assert round(s.total_cost, 4) == 15.4193
+        assert s.total_cost_available
+
+    def test_no_token_never_calls_the_api(self, monkeypatch):
+        monkeypatch.setattr(d, "_get", lambda url, headers: (_ for _ in ()).throw(AssertionError()))
+        assert d.fetch_summary("").error == "No platform token"
+
+    def test_expired_session_is_reported(self, monkeypatch):
+        monkeypatch.setattr(d, "_get", lambda url, headers: ({"code": 40003, "data": None}, None))
+        assert d.fetch_summary("token").error == "Session expired"
+
+    def test_a_summary_without_costs_still_gives_the_balance(self, monkeypatch):
+        payload = json.loads(json.dumps(SUMMARY))
+        del payload["data"]["biz_data"]["total_costs"]
+        monkeypatch.setattr(d, "_get", lambda url, headers: (payload, None))
+        s = d.fetch_summary("token")
+        assert s.available and not s.total_cost_available
+        assert round(s.total, 4) == 14.5807
+
+    def test_granted_balance_adds_to_the_total(self, monkeypatch):
+        payload = json.loads(json.dumps(SUMMARY))
+        payload["data"]["biz_data"]["bonus_wallets"] = [{"currency": "USD", "balance": "10.00"}]
+        monkeypatch.setattr(d, "_get", lambda url, headers: (payload, None))
+        s = d.fetch_summary("token")
+        assert round(s.total, 4) == 24.5807
+
+    def test_a_cny_summary_is_converted(self, monkeypatch):
+        # Pin the rates: the live table would make the expected value drift.
+        monkeypatch.setattr(currency, "get_exchange_rates",
+                            lambda: currency.ExchangeRates(rates=dict(currency.FALLBACK_RATES),
+                                                           timestamp=datetime.now(), source="test"))
+        payload = json.loads(json.dumps(SUMMARY))
+        payload["data"]["biz_data"]["normal_wallets"] = [{"currency": "CNY", "balance": "71.0"}]
+        payload["data"]["biz_data"]["bonus_wallets"] = []
+        payload["data"]["biz_data"]["total_costs"] = [{"currency": "CNY", "amount": "71.0"}]
+        monkeypatch.setattr(d, "_get", lambda url, headers: (payload, None))
+        s = d.fetch_summary("token")
+        assert round(s.topped_up, 3) == 10.0      # 71 / 7.10
+        assert round(s.total_cost, 3) == 10.0

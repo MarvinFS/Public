@@ -23,10 +23,18 @@ from currency import (
 from claude_check import check_claude_status, ClaudeStatus
 from snapshot_cache import get_staleness_text
 from pricing import format_tokens
+import logging
+
+import browser_signin
 import deepseek_auth
+import deepseek_usage
 
 # GitHub repository URL
 GITHUB_URL = "https://github.com/MarvinFS/Public/tree/main/claudebar"
+
+# The sign-in path is otherwise silent, which makes a slow capture
+# indistinguishable from a dead button.
+logger = logging.getLogger("claudebar")
 
 
 # OpenAI /usage plan_type enum -> friendly label. Without a map, a raw or new
@@ -176,6 +184,9 @@ class BarChart(tk.Canvas):
         self.label_h = tkfont.Font(root=parent, font=font).metrics("linespace") + 2 if font else 14
         super().__init__(parent, width=width, height=height + self.label_h, highlightthickness=0, **kwargs)
         self.w, self.h, self.accent, self.font = width, height, accent, font
+        # The flyout is read at a glance while the pointer moves, so it runs a
+        # couple of points larger and bolder than the weekday labels under it.
+        self.tip_font = (font[0], (font[1] if len(font) > 1 else 8) + 2, "bold") if font else None
         self._tooltips: list = []
         self._n = 0
         self._tip_index: Optional[int] = None
@@ -223,15 +234,15 @@ class BarChart(tk.Canvas):
         if not text:
             return
 
-        font = tkfont.Font(root=self, font=self.font)
-        pad = 5
+        font = tkfont.Font(root=self, font=self.tip_font or self.font)
+        pad = 7
         box_w = font.measure(text) + pad * 2
         box_h = font.metrics("linespace") + pad
         slot = (self.w + 4) / max(self._n, 1)
         centre = index * slot + slot / 2
         x0 = max(0, min(self.w - box_w, centre - box_w / 2))
-        self.create_rectangle(x0, 0, x0 + box_w, box_h, fill="#000000", outline="#3a3a3a", tags="tip")
-        self.create_text(x0 + box_w / 2, box_h / 2, text=text, font=self.font,
+        self.create_rectangle(x0, 0, x0 + box_w, box_h, fill="#000000", outline="#5a5a5a", tags="tip")
+        self.create_text(x0 + box_w / 2, box_h / 2, text=text, font=self.tip_font or self.font,
                          fill="#ffffff", tags="tip")
 
 
@@ -257,12 +268,32 @@ def _fmt_hours(h: float) -> str:
 
 
 class SettingsDialog:
-    """Settings dialog for ClaudeBar."""
+    """Settings dialog for ClaudeBar.
 
-    def __init__(self, parent, config: Config, on_save: Callable, on_close: Callable = None):
+    A Toplevel, not a ClaudeBarWindow, so it carries its own palette rather
+    than reaching for the main window's colours.
+    """
+
+    # Kept identical to ClaudeBarWindow's palette so the two surfaces agree,
+    # except for the hints: a settings panel is read, not skimmed, and
+    # #6b7280 on #0f0f0f is barely legible.
+    warn_color = "#ef4444"
+    ok_color = "#22c55e"
+    text_primary = "#ffffff"
+    hint_color = "#d1d5db"      # a little dimmer than white
+    label_color = "#e5e7eb"
+
+    def __init__(self, parent, config: Config, on_save: Callable, on_close: Callable = None,
+                 on_refresh: Callable = None):
         self.config = config
         self.on_save = on_save
         self.on_close = on_close
+        # Fired after a credential change so the panel can refetch immediately
+        # rather than waiting for the next scheduled refresh.
+        self.on_refresh = on_refresh
+        self._signin_thread = None
+        self._signin_cancel = False
+        self._signin_result = None
         self.parent = parent
 
         # Temporarily lower parent's topmost so dialog can appear on top
@@ -274,17 +305,23 @@ class SettingsDialog:
         self.dialog = tk.Toplevel(parent)
         self.dialog.title("Settings")
         self.dialog.configure(bg="#0f0f0f")
-        self.dialog.geometry("360x600")
         self.dialog.resizable(False, False)
         self.dialog.transient(parent)
         self.dialog.grab_set()
         self.dialog.attributes('-topmost', True)
 
-        # Center on the parent, then keep it on the monitor: the panel sits near
+        # Build first, then size to fit: the credential section carries
+        # explanatory text whose height depends on the font, so a fixed height
+        # either clips it or leaves dead space.
+        self._create_ui()
+        self.dialog.update_idletasks()
+        width = 360
+        height = min(self._frame.winfo_reqheight() + 40,
+                     self.dialog.winfo_screenheight() - 120)
+
+        # Centre on the parent, then keep it on the monitor: the panel sits near
         # the tray, so a tall dialog would otherwise hang off the bottom edge
         # and hide its own Save button.
-        self.dialog.update_idletasks()
-        width, height = 360, 600
         x = parent.winfo_x() + (parent.winfo_width() - width) // 2
         y = parent.winfo_y() + (parent.winfo_height() - height) // 2
         x = max(0, min(x, self.dialog.winfo_screenwidth() - width))
@@ -299,11 +336,10 @@ class SettingsDialog:
         # Handle dialog close (restore parent topmost)
         self.dialog.protocol("WM_DELETE_WINDOW", self._on_dialog_close)
 
-        self._create_ui()
-
     def _create_ui(self):
         """Create the settings UI."""
-        frame = tk.Frame(self.dialog, bg="#0f0f0f")
+        self._frame = tk.Frame(self.dialog, bg="#0f0f0f")
+        frame = self._frame
         frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
 
         # Title
@@ -315,7 +351,7 @@ class SettingsDialog:
         # Engines section
         engines_label = tk.Label(frame, text="Enabled Engines",
                                 font=("Segoe UI", 10),
-                                fg="#9ca3af", bg="#0f0f0f")
+                                fg=self.label_color, bg="#0f0f0f")
         engines_label.pack(anchor=tk.W)
 
         engines_frame = tk.Frame(frame, bg="#0f0f0f")
@@ -359,7 +395,7 @@ class SettingsDialog:
 
         currency_label = tk.Label(currency_frame, text="Currency",
                                  font=("Segoe UI", 10),
-                                 fg="#9ca3af", bg="#0f0f0f")
+                                 fg=self.label_color, bg="#0f0f0f")
         currency_label.pack(anchor=tk.W)
 
         self.currency_var = tk.StringVar(value=self.config.currency)
@@ -373,8 +409,8 @@ class SettingsDialog:
         # Currency info
         currency_info = tk.Label(currency_frame,
                                 text="Costs will be displayed in selected currency",
-                                font=("Segoe UI", 9),
-                                fg="#6b7280", bg="#0f0f0f")
+                                font=("Segoe UI", 8),
+                                fg=self.hint_color, bg="#0f0f0f")
         currency_info.pack(anchor=tk.W, pady=(5, 0))
 
         # Refresh interval
@@ -383,7 +419,7 @@ class SettingsDialog:
 
         refresh_label = tk.Label(refresh_frame, text="Refresh Interval (seconds)",
                                 font=("Segoe UI", 10),
-                                fg="#9ca3af", bg="#0f0f0f")
+                                fg=self.label_color, bg="#0f0f0f")
         refresh_label.pack(anchor=tk.W)
 
         self.refresh_var = tk.StringVar(value=str(self.config.refresh_interval))
@@ -419,58 +455,191 @@ class SettingsDialog:
                               relief=tk.FLAT, padx=20, pady=8)
         cancel_btn.pack(side=tk.RIGHT, padx=(0, 10))
 
-    def _credential_entry(self, parent, label, hint, show):
-        """One masked credential field with its explanatory line."""
-        tk.Label(parent, text=label, font=("Segoe UI", 9),
-                 fg="#9ca3af", bg="#0f0f0f").pack(anchor=tk.W)
-        var = tk.StringVar()
-        tk.Entry(parent, textvariable=var, show=show, width=34,
-                 bg="#1a1a1a", fg="#ffffff", insertbackground="#ffffff",
-                 relief=tk.FLAT).pack(anchor=tk.W, pady=(2, 0))
-        if hint:
-            tk.Label(parent, text=hint, font=("Segoe UI", 8), wraplength=320,
-                     justify=tk.LEFT, fg="#6b7280", bg="#0f0f0f").pack(anchor=tk.W)
-        return var
+    def _hint(self, parent, text, colour=None):
+        """A wrapped explanatory line under a field."""
+        tk.Label(parent, text=text, font=("Segoe UI", 8), wraplength=320,
+                 justify=tk.LEFT, fg=colour or self.hint_color,
+                 bg="#0f0f0f").pack(anchor=tk.W)
 
     def _create_deepseek_credentials(self, frame):
-        """DeepSeek has two credentials, and they unlock different things."""
+        """DeepSeek needs two credentials, and they buy different things.
+
+        Kept deliberately short. This is a settings panel, not a manual; a wall
+        of small grey text is harder to read than saying less.
+        """
         section = tk.Frame(frame, bg="#0f0f0f")
         section.pack(fill=tk.X, pady=(0, 15))
 
-        discovered = deepseek_auth.discover_api_key()
-        if discovered and discovered.source == "harness":
-            key_hint = "Blank: using the API key found in the DeepSeek Harness."
-        elif discovered:
-            key_hint = f"Blank: using the API key from {discovered.source}."
-        else:
-            key_hint = "From platform.deepseek.com. Balance only, no usage."
-        self.deepseek_key_var = self._credential_entry(
-            section, "DeepSeek API key", key_hint, show="\u2022")
+        self._hint(section, "Signing in gives the balance and the usage figures.")
 
-        self.deepseek_token_var = self._credential_entry(
-            section, "DeepSeek platform token",
-            "Sign in at platform.deepseek.com, then run "
-            "localStorage.getItem(\"userToken\") in the browser console and "
-            "paste the result here. Either the bare token or the whole "
-            "{\"value\":...} object is accepted. Needed for the cost and "
-            "token figures.",
-            show="\u2022")
+        tk.Label(section, text="DeepSeek account", font=("Segoe UI", 9),
+                 fg=self.label_color, bg="#0f0f0f").pack(anchor=tk.W, pady=(10, 0))
+        signin_row = tk.Frame(section, bg="#0f0f0f")
+        signin_row.pack(fill=tk.X, pady=(4, 0))
+        self._signin_btn = tk.Button(
+            signin_row, text="Sign in to DeepSeek…", command=self._start_deepseek_signin,
+            font=("Segoe UI", 9), bg="#2a2a2a", fg="#ffffff",
+            activebackground="#3a3a3a", activeforeground="#ffffff",
+            relief=tk.FLAT, padx=12, pady=4, cursor="hand2")
+        self._signin_btn.pack(side=tk.LEFT)
+        self._hint(section, "Opens a browser you sign into. Your password stays with DeepSeek.")
 
+        # Its own full-width line, wrapping. Sharing the row with the button
+        # clipped anything longer than a short status, and an error rarely is.
+        self._signin_status = tk.Label(section, text="", font=("Segoe UI", 8),
+                                       fg=self.hint_color, bg="#0f0f0f",
+                                       wraplength=320, justify=tk.LEFT, anchor=tk.W)
+        self._signin_status.pack(fill=tk.X, pady=(4, 0))
+
+        tk.Label(section, text="or paste a session token", font=("Segoe UI", 9),
+                 fg=self.label_color, bg="#0f0f0f").pack(anchor=tk.W, pady=(8, 0))
+        self.deepseek_token_var = tk.StringVar()
+        tk.Entry(section, textvariable=self.deepseek_token_var, show="•", width=34,
+                 bg="#1a1a1a", fg="#ffffff", insertbackground="#ffffff",
+                 relief=tk.FLAT).pack(anchor=tk.W, pady=(2, 0))
+
+        # One action, not two. It clears what ClaudeBar stores and the browser
+        # profile ClaudeBar created; the user's own browser is never touched.
         actions = tk.Frame(section, bg="#0f0f0f")
-        actions.pack(fill=tk.X, pady=(4, 0))
-        tk.Button(actions, text="Clear saved credentials", command=self._clear_credentials,
-                  font=("Segoe UI", 8), bg="#2a2a2a", fg="#d1d5db",
+        actions.pack(fill=tk.X, pady=(10, 0))
+        tk.Button(actions, text="Forget sign-in", command=self._forget_signin,
+                  font=("Segoe UI", 9), bg="#2a2a2a", fg="#ffffff",
                   activebackground="#3a3a3a", activeforeground="#ffffff",
-                  relief=tk.FLAT, padx=10, pady=3).pack(side=tk.LEFT)
+                  relief=tk.FLAT, padx=12, pady=4, cursor="hand2").pack(side=tk.LEFT)
         self._credential_note = tk.Label(actions, text="", font=("Segoe UI", 8),
-                                         fg="#6b7280", bg="#0f0f0f")
+                                         fg=self.hint_color, bg="#0f0f0f")
         self._credential_note.pack(side=tk.LEFT, padx=(8, 0))
+        self._hint(section, "Kept encrypted with Windows DPAPI. Only ClaudeBar's own "
+                            "browser profile is cleared, never your browser.")
 
-    def _clear_credentials(self):
+    # ---- DeepSeek sign-in -------------------------------------------------
+
+    def _start_deepseek_signin(self):
+        """Start sign-in, surfacing any failure in the status line.
+
+        Tkinter reports a callback exception to stderr, which a windowed build
+        has nowhere to show, so a dead button would be the only symptom.
+        """
+        try:
+            self._begin_signin()
+        except Exception as exc:                      # noqa: BLE001 - reported, not swallowed
+            logger.exception("DeepSeek sign-in could not start")
+            self._signin_failed(f"{type(exc).__name__}: {exc}")
+
+    def _begin_signin(self):
+        if self._signin_thread and self._signin_thread.is_alive():
+            return
+        if not browser_signin.find_browser():
+            self._signin_status.config(
+                text="No Chromium browser found · paste a token below",
+                fg=self.warn_color)
+            return
+
+        process = browser_signin.launch()
+        if process is None:
+            self._signin_status.config(text="Could not open the browser", fg=self.warn_color)
+            return
+
+        logger.info("DeepSeek sign-in: opened %s against our own profile",
+                    browser_signin.find_browser())
+        self._signin_cancel = False
+        self._signin_result = None
+        self._signin_btn.config(state=tk.DISABLED)
+        self._signin_status.config(text="Waiting for sign-in…", fg=self.hint_color)
+        self._signin_thread = threading.Thread(target=self._signin_worker,
+                                               args=(process,), daemon=True)
+        self._signin_thread.start()
+        # Tk is not thread-safe, so the main thread drives the UI and the
+        # worker only leaves a result behind.
+        self._poll_signin()
+
+    def _poll_signin(self):
+        """Main-thread poll for the worker's result."""
+        result = self._signin_result
+        if result is None:
+            try:
+                if self.dialog.winfo_exists():
+                    self.dialog.after(250, self._poll_signin)
+            except tk.TclError:
+                pass
+            return
+        status, payload = result
+        if status == "ok":
+            self._signin_succeeded(payload)
+        else:
+            self._signin_failed(payload)
+
+    def _signin_worker(self, process):
+        """Background: wait for the browser to yield a session, then keep it.
+
+        Touches no widgets; it only sets `_signin_result` for the main thread.
+        """
+        try:
+            token = browser_signin.wait_for_token(
+                timeout=600, interval=2.0, should_stop=lambda: self._signin_cancel)
+
+            if not token:
+                logger.info("DeepSeek sign-in: gave up waiting after %.0fs", 600)
+                # Leave the window up: the user may still be typing, and
+                # closing it under them would be worse than a stale window.
+                self._signin_result = (
+                    "fail", "Cancelled" if self._signin_cancel
+                    else "Timed out; the browser is still open")
+                return
+
+            logger.info("DeepSeek sign-in: session token captured, validating")
+            # Close every window on our profile, not just the one we spawned:
+            # a repeat launch delegates to the running instance and exits, so
+            # the process we hold is usually already gone.
+            browser_signin.close()
+
+            # Prove the token works before storing it, so a stale profile
+            # cannot masquerade as a completed sign-in.
+            summary = deepseek_usage.fetch_summary(token)
+            if summary.error:
+                logger.warning("DeepSeek sign-in: token rejected: %s", summary.error)
+                self._signin_result = ("fail", summary.error)
+                return
+
+            if not deepseek_auth.save_user_token(token):
+                self._signin_result = ("fail", "Could not store the token securely")
+                return
+
+            logger.info("DeepSeek sign-in: signed in, balance %.2f %s",
+                        summary.total, summary.currency)
+            self._signin_result = ("ok", summary)
+        except Exception as exc:                      # noqa: BLE001 - reported, not swallowed
+            logger.exception("DeepSeek sign-in failed")
+            self._signin_result = ("fail", f"{type(exc).__name__}: {exc}")
+
+    def _signin_failed(self, message: str):
+        self._signin_btn.config(state=tk.NORMAL)
+        self._signin_status.config(text=message, fg=self.warn_color)
+
+    def _signin_succeeded(self, summary):
+        self._signin_btn.config(state=tk.NORMAL)
+        self._signin_status.config(
+            text=f"Signed in · balance {summary.currency} {summary.total:.2f}",
+            fg=self.ok_color)
+        self._credential_note.config(text="Session stored")
+        if self.on_refresh:
+            self.on_refresh()
+
+    def _forget_signin(self):
+        """Drop every DeepSeek credential ClaudeBar holds, and its browser profile.
+
+        One action on purpose: two buttons that differ only in how much they
+        forget invite the wrong click. The profile is ClaudeBar's own, under
+        its config directory; `forget` proves that before deleting anything, so
+        the user's real browser is never a target.
+        """
         deepseek_auth.clear_credentials()
-        self.deepseek_key_var.set("")
+        cleared = browser_signin.forget()
         self.deepseek_token_var.set("")
-        self._credential_note.config(text="Saved credentials removed")
+        self._credential_note.config(
+            text="Signed out" if cleared else "Credentials cleared")
+        if self.on_refresh:
+            self.on_refresh()
 
     def _restore_parent(self):
         """Restore parent window's topmost state."""
@@ -510,9 +679,6 @@ class SettingsDialog:
 
         # Credentials never touch config.json; a blank field keeps whatever is
         # already stored (or auto-detected) rather than clearing it.
-        entered_key = self.deepseek_key_var.get().strip()
-        if entered_key and not deepseek_auth.save_api_key(entered_key):
-            self.error_label.config(text="Could not save the API key securely")
         entered_token = self.deepseek_token_var.get().strip()
         if entered_token and not deepseek_auth.save_user_token(entered_token):
             self.error_label.config(text="Could not save the platform token securely")
@@ -1120,9 +1286,9 @@ class ClaudeBarWindow:
                     self._status_indicator.config(fg="#F59E0B")
                     text = "Connected \u00b7 balance only"
                 self._status_text.config(text=f"{text} \u00b7 {self._money_fixed(snap.balance_total)}")
-            elif snap.error_message == "No API key":
+            elif snap.error_message == "Not signed in":
                 self._status_indicator.config(fg="#6b7280")
-                self._status_text.config(text="No API key")
+                self._status_text.config(text="Not signed in")
             elif snap.usage_error == "Session expired":
                 self._status_indicator.config(fg="#EF4444")
                 self._status_text.config(text="Session expired")
@@ -1138,7 +1304,8 @@ class ClaudeBarWindow:
     def _on_settings_click(self):
         """Handle settings button."""
         if self._window:
-            SettingsDialog(self._window, self.config, self._on_settings_saved)
+            SettingsDialog(self._window, self.config, self._on_settings_saved,
+                           on_refresh=self.on_refresh)
 
     def _on_settings_saved(self):
         """Handle settings save with smooth transition."""
@@ -1355,9 +1522,13 @@ class ClaudeBarWindow:
 
         self._balance_value.config(text=self._money_fixed(snap.balance_total) if snap.balance_available else "\u2014")
         if snap.balance_available:
-            self._balance_note.config(
-                text=f"Topped up {self._money_fixed(snap.balance_topped_up)} \u00b7 "
-                     f"Granted {self._money_fixed(snap.balance_granted)}")
+            # Balance is what is left; the lifetime total is what was spent.
+            # They come from different endpoints, so either can be missing.
+            note = (f"Topped up {self._money_fixed(snap.balance_topped_up)} \u00b7 "
+                    f"Granted {self._money_fixed(snap.balance_granted)}")
+            if snap.total_cost_available:
+                note += f" \u00b7 Spent {self._money_fixed(snap.total_cost_usd)}"
+            self._balance_note.config(text=note)
             self._balance_state.config(text=snap.balance_message,
                                        fg=self.ok_color if snap.balance_usable else self.warn_color)
             self._balance_currency.config(text=self.config.currency)
@@ -1377,7 +1548,7 @@ class ClaudeBarWindow:
                            f"{format_tokens(snap.week_cache_hit)} in \u00b7 "
                            f"{format_tokens(snap.week_output)} out", "Tokens this week")
         else:
-            hint = "Add a platform token" if snap.usage_error else "No usage reported"
+            hint = "Sign in to see usage" if snap.usage_error else "No usage reported"
             for key, title in (("today", "Today"), ("last31", "This month"),
                                ("month", "Last 7 days"), ("output", "Tokens this week")):
                 self._set_stat(key, "\u2014", hint, title)
@@ -1404,9 +1575,9 @@ class ClaudeBarWindow:
         if snap.usage_available:
             source = "Official DeepSeek platform usage"
         elif snap.balance_available:
-            source = "Balance only \u00b7 add a platform token in Settings"
+            source = "Balance only · sign in for usage"
         else:
-            source = "Add a DeepSeek API key in Settings"
+            source = "Sign in to DeepSeek in Settings"
         self._fill_meta(snap, source, rates)
         self._apply_layout(("deepseek", snap.usage_available))
 

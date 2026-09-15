@@ -15,7 +15,7 @@ from codex_log_parser import CodexTokenUsage, get_codex_daily_usage
 from config import get_claude_projects_dir
 import model_catalog
 import deepseek_auth
-from deepseek_usage import fetch_balance, fetch_usage, last_n_days, month_days
+from deepseek_usage import fetch_usage, fetch_summary, last_n_days, month_days
 from currency import to_usd
 from snapshot_cache import save_cache, load_cache, load_deepseek_cache
 
@@ -238,44 +238,49 @@ class DataCollector:
         return self._last_openai_snapshot
 
     def collect_deepseek(self) -> DeepSeekSnapshot:
-        """Collect DeepSeek balance and spend.
+        """Collect DeepSeek balance and spend from the signed-in session.
 
-        The two halves have different credentials and fail independently: a
-        missing platform token still leaves a perfectly good balance.
+        The two calls fail independently, so a summary that times out still
+        leaves the usage figures standing and vice versa.
         """
         snapshot = DeepSeekSnapshot(timestamp=datetime.now())
         today = snapshot.timestamp.date()
         balance_fresh = False
         usage_fresh = False
 
-        api_key = deepseek_auth.discover_api_key()
-        if api_key:
-            balance = fetch_balance(api_key.value)
-            if balance.error:
-                snapshot.error_message = balance.error
-            else:
-                snapshot.balance_available = True
-                snapshot.balance_usable = balance.available
-                # Amounts normalise to USD like every other cost field; the
-                # reported currency is kept so the panel can say it converted.
-                snapshot.balance_total = to_usd(balance.total, balance.currency)
-                snapshot.balance_topped_up = to_usd(balance.topped_up, balance.currency)
-                snapshot.balance_granted = to_usd(balance.granted, balance.currency)
-                snapshot.balance_currency = balance.currency
-                balance_fresh = True
-        else:
-            snapshot.error_message = "No API key"
-
         token = deepseek_auth.discover_user_token()
-        if token:
-            usage = fetch_usage(token.value, today)
-            if usage.available:
-                self._apply_usage(snapshot, usage, today)
-                usage_fresh = True
-            else:
-                snapshot.usage_error = usage.error or "Usage unavailable"
+
+        if not token:
+            # Nothing signed in. Return an empty snapshot rather than replaying
+            # the cache: stale values here would look like live data, which is
+            # exactly what someone sees after signing out.
+            snapshot.error_message = "Not signed in"
+            snapshot.usage_error = "Not signed in"
+            self._last_deepseek_snapshot = snapshot
+            return snapshot
+
+        usage = fetch_usage(token.value, today)
+        if usage.available:
+            self._apply_usage(snapshot, usage, today)
+            usage_fresh = True
         else:
-            snapshot.usage_error = "No platform token"
+            snapshot.usage_error = usage.error or "Usage unavailable"
+
+        # The session summary is the only source of the balance and the
+        # lifetime total, so a signed-in session supplies everything.
+        summary = fetch_summary(token.value)
+        if summary.available:
+            snapshot.balance_available = True
+            snapshot.balance_usable = summary.total > 0
+            snapshot.balance_total = summary.total
+            snapshot.balance_topped_up = summary.topped_up
+            snapshot.balance_granted = summary.granted
+            snapshot.balance_currency = summary.currency
+            snapshot.error_message = None
+            balance_fresh = True
+            if summary.total_cost_available:
+                snapshot.total_cost_usd = summary.total_cost
+                snapshot.total_cost_available = True
 
         # Carry over whatever the last good fetch had, so a transient failure
         # does not blank the panel or evict a good cache entry.
@@ -298,6 +303,7 @@ class DataCollector:
                                  "month_tokens", "month_requests", "last7_cost_usd",
                                  "last7_tokens", "last7_requests", "week_cache_hit",
                                  "week_cache_miss", "week_output", "daily_costs",
+                                 "total_cost_usd", "total_cost_available",
                                  "daily_tokens", "daily_requests", "daily_dates",
                                  "models_used"):
                         setattr(snapshot, name, getattr(cached, name))

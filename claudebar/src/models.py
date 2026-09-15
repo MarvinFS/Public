@@ -202,20 +202,26 @@ class DeepSeekSnapshot:
     carries no percentages and deliberately does not inherit _UsageStatus.
     Money is the primary figure, with token counts alongside it.
 
-    Balance comes from the public API (an API key is enough). Usage comes from
-    the platform's private dashboard endpoints and needs a signed-in platform
-    token, so `usage_available` is False while `balance_available` can be True.
+    Balance and usage both come from the signed-in platform session, so with no
+    session nothing here is populated and the panel says so rather than showing
+    stale figures.
     """
     timestamp: datetime = field(default_factory=datetime.now)
 
-    # Balance (public API, API key). Amounts are USD; `balance_currency` is the
-    # currency the platform reported, kept so the panel can note a conversion.
+    # Balance, from the session summary. Amounts are USD; `balance_currency` is
+    # the currency the platform reported, kept so the panel can note a conversion.
+    # Balance is remaining credit, NOT spend: it says nothing about what was
+    # used today or this month, which is why the usage half exists.
     balance_available: bool = False    # we have a reading
     balance_usable: bool = False       # the API reports it can still serve calls
     balance_total: float = 0.0
     balance_topped_up: float = 0.0
     balance_granted: float = 0.0
     balance_currency: str = "USD"
+
+    # Lifetime spend, only known from the platform session summary
+    total_cost_usd: float = 0.0
+    total_cost_available: bool = False
 
     # Usage (platform endpoints, userToken). All cost fields are USD.
     usage_available: bool = False

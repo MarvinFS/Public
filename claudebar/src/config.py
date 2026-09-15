@@ -12,11 +12,8 @@ from typing import Optional
 class Config:
     """ClaudeBar configuration."""
     refresh_interval: int = 300  # seconds
-    cli_timeout: int = 30  # seconds
     warning_threshold: int = 80  # percent
     critical_threshold: int = 95  # percent
-    show_notifications: bool = True
-    start_minimized: bool = True
     currency: str = "USD"  # USD, EUR, RUB, RON
     # Engine toggles
     claude_enabled: bool = True

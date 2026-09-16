@@ -1,6 +1,6 @@
 # ClaudeBar
 
-Windows system tray app that tracks Claude Code, OpenAI Codex and DeepSeek usage. Inspired by [CodexBar](https://github.com/steipete/CodexBar), which runs only on macOS.
+Windows and Linux system tray app that tracks Claude Code, OpenAI Codex and DeepSeek usage. Inspired by [CodexBar](https://github.com/steipete/CodexBar), which runs only on macOS.
 
 ![ClaudeBar Main Window](mainwindow.jpg)
 
@@ -36,11 +36,18 @@ Not supported: the Claude Desktop app and the ChatGPT web interface, which authe
 
 ## Install and run
 
-Requires Windows 10 or 11 and Python 3.11 or newer. The [Releases](https://github.com/MarvinFS/Public/releases) page has a signed installer if you would rather skip Python.
+**Windows** needs Windows 10 or 11 and Python 3.11 or newer. The [Releases](https://github.com/MarvinFS/Public/releases) page has a signed installer if you would rather skip Python.
 
 ```powershell
 pip install -r requirements.txt
 python src/main.py
+```
+
+**Linux** needs nothing installed. Every release carries a single self-contained executable, plus `.deb`, `.rpm` and AppImage packages, built for Ubuntu 24.04, Rocky 10 and anything newer. All of them are signed, and `SHA256SUMS` with its detached signature is attached to the same release.
+
+```bash
+chmod +x ClaudeBar          # if your downloader dropped the bit
+./ClaudeBar
 ```
 
 The app starts in the tray. Left-click the icon to open the panel, right-click for the menu. Escape closes the panel.
@@ -56,6 +63,8 @@ The app starts in the tray. Left-click the icon to open the panel, right-click f
 To use your own icon, put `app_icon.png` (tray and header) and `app_icon.ico` (the exe) in `resources/icons/`.
 
 ## Configuration
+
+The paths in this section and the next are the Windows ones. On Linux they follow the XDG directories instead: `~/.config/claudebar/config.json`, `~/.local/state/claudebar/claudebar.log`, `~/.cache/claudebar/` for the caches, and `~/.local/share/claudebar/secrets/` for the DeepSeek token, which is held in the desktop keyring rather than DPAPI.
 
 Settings live in `%LOCALAPPDATA%\ClaudeBar\config.json`:
 

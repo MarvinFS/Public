@@ -312,10 +312,15 @@ class SettingsDialog:
     label_color = "#e5e7eb"
 
     def __init__(self, parent, config: Config, on_save: Callable, on_close: Callable = None,
-                 on_refresh: Callable = None):
+                 on_refresh: Callable = None, session_state: Callable = None):
         self.config = config
         self.on_save = on_save
         self.on_close = on_close
+        # Returns the panel's current DeepSeek snapshot, or None. Asked rather
+        # than passed so the answer is current when the dialog reads it, and so
+        # there is one judgement of whether the session works - the panel's -
+        # instead of a second one here that could disagree with it.
+        self._session_state = session_state
         # Fired after a credential change so the panel can refetch immediately
         # rather than waiting for the next scheduled refresh.
         self.on_refresh = on_refresh
@@ -540,6 +545,13 @@ class SettingsDialog:
         self._hint(section, "Kept encrypted with Windows DPAPI. Only ClaudeBar's own "
                             "browser profile is cleared, never your browser.")
 
+        # Last in the section, deliberately: it reads and writes both widgets
+        # above, and calling it before the status label existed raised an
+        # AttributeError partway through building the dialog - which Tk reports
+        # to stderr, where the application log never sees it, and whose only
+        # symptom is a dialog that stops drawing at that point.
+        self._sync_signin_button()
+
     # ---- DeepSeek sign-in -------------------------------------------------
 
     def _start_deepseek_signin(self):
@@ -557,9 +569,12 @@ class SettingsDialog:
     def _begin_signin(self):
         if self._signin_thread and self._signin_thread.is_alive():
             return
-        if not browser_signin.find_browser():
+        # Either engine will do: Firefox is the fallback when no Chromium browser
+        # is installed, and the token is read the same way once it is. Asking for
+        # a Chromium browser here refused a machine that had a sign-in path.
+        if not (browser_signin.find_browser() or browser_signin.find_firefox()):
             self._signin_status.config(
-                text="No Chromium browser found · paste a token below",
+                text="No Chromium or Firefox browser found · paste a token below",
                 fg=self.warn_color)
             return
 
@@ -569,7 +584,7 @@ class SettingsDialog:
             return
 
         logger.info("DeepSeek sign-in: opened %s against our own profile",
-                    browser_signin.find_browser())
+                    browser_signin.find_browser() or browser_signin.find_firefox())
         self._signin_cancel = False
         self._signin_result = None
         self._signin_btn.config(state=tk.DISABLED)
@@ -640,12 +655,48 @@ class SettingsDialog:
             logger.exception("DeepSeek sign-in failed")
             self._signin_result = ("fail", f"{type(exc).__name__}: {exc}")
 
+    def _sync_signin_button(self):
+        """Enable the button only when there is no working session.
+
+        A button that stays live after signing in invites a second sign-in that
+        cannot help, and it hides the fact that the first one worked. A stored
+        token is not the same as a working one either: it expires, and the panel
+        already knows when it has, so the button comes back when it does.
+        """
+        if not hasattr(self, "_signin_btn"):
+            return
+        snapshot = self._session_state() if self._session_state else None
+        expired = snapshot is not None and (
+            snapshot.error_message == "Not signed in"
+            or snapshot.usage_error == "Session expired")
+
+        if snapshot is not None and snapshot.balance_available:
+            self._signin_btn.config(state=tk.DISABLED)
+            self._signin_status.config(
+                text=f"Signed in · balance {snapshot.balance_currency} "
+                     f"{snapshot.balance_total:,.2f}",
+                fg=self.ok_color)
+            return
+
+        if expired:
+            self._signin_btn.config(state=tk.NORMAL)
+            self._signin_status.config(text="Session expired · sign in again",
+                                       fg=self.warn_color)
+            return
+
+        stored = deepseek_auth.discover_user_token() is not None
+        self._signin_btn.config(state=tk.NORMAL if not stored else tk.DISABLED)
+        if stored:
+            self._signin_status.config(text="Signed in", fg=self.ok_color)
+
     def _signin_failed(self, message: str):
         self._signin_btn.config(state=tk.NORMAL)
         self._signin_status.config(text=message, fg=self.warn_color)
 
     def _signin_succeeded(self, summary):
-        self._signin_btn.config(state=tk.NORMAL)
+        # Stays disabled: the session works now, and the button is for when it
+        # does not. _sync_signin_button decides that, so there is one rule.
+        self._signin_btn.config(state=tk.DISABLED)
         self._signin_status.config(
             text=f"Signed in · balance {summary.currency} {summary.total:.2f}",
             fg=self.ok_color)
@@ -666,6 +717,10 @@ class SettingsDialog:
         self.deepseek_token_var.set("")
         self._credential_note.config(
             text="Signed out" if cleared else "Credentials cleared")
+        # Only the user knows they have signed out of the platform, so this is
+        # what brings the button back by hand.
+        self._signin_btn.config(state=tk.NORMAL)
+        self._signin_status.config(text="")
         if self.on_refresh:
             self.on_refresh()
 
@@ -748,7 +803,8 @@ class ClaudeBarWindow:
         self._openai_available: bool = False
 
         # UI elements (built in _create_window)
-        self._status_indicator: Optional[tk.Label] = None
+        self._status_indicator: Optional[tk.Canvas] = None
+        self._status_dot: Optional[int] = None
         self._status_text: Optional[tk.Label] = None
         self._engine_name: Optional[tk.Label] = None
         self._updated_label: Optional[tk.Label] = None
@@ -1113,9 +1169,17 @@ class ClaudeBarWindow:
         self._status_text.pack(side=tk.RIGHT)
         # The dot carries the whole connection state at a glance, so it runs
         # well ahead of the text beside it and sits on its own line box.
-        self._status_indicator = tk.Label(status.master, text="\u25cf",
-                                          font=self._font(13, "bold"),
-                                          fg=self.text_muted, bg=self.bg_color)
+        # Drawn, not typed. As a bullet glyph the dot's box is the font's line
+        # box, so its ink sat low against the word beside it and the space
+        # between them was the glyph's advance width rather than a chosen
+        # number - both visible the moment the row is looked at closely. A
+        # circle in a canvas of the dot's own size is centred on the row like
+        # any other widget, and the gap is the padding and nothing else.
+        self._status_indicator = tk.Canvas(status.master, width=9, height=9,
+                                           bg=self.bg_color, highlightthickness=0,
+                                           bd=0)
+        self._status_dot = self._status_indicator.create_oval(
+            0, 0, 8, 8, fill=self.text_muted, outline="")
         self._status_indicator.pack(side=tk.RIGHT, padx=(0, 6))
 
         r, self._updated_label, self._rates_label = self._row(
@@ -1252,7 +1316,7 @@ class ClaudeBarWindow:
             if valid_snapshot:
                 with self._lock:
                     self._oauth_error = None
-                self._status_indicator.config(fg=self.ok_color)
+                self._status_colour(self.ok_color)
                 text = "Connected"
                 plan = self._claude_status.plan if self._claude_status else None
                 if not plan and valid_snapshot.extra_enabled:
@@ -1265,7 +1329,7 @@ class ClaudeBarWindow:
             # No usage data - check CLI auth status (primary status source)
             if self._claude_status and self._claude_status.authenticated:
                 # CLI says we're logged in, even though usage API may be blocked
-                self._status_indicator.config(fg=self.ok_color)
+                self._status_colour(self.ok_color)
                 text = "Connected"
                 plan = self._claude_status.plan
                 if plan:
@@ -1275,13 +1339,13 @@ class ClaudeBarWindow:
 
             # Not authenticated via CLI - show specific error
             if oauth_error:
-                self._status_indicator.config(fg=self.warn_color)
+                self._status_colour(self.warn_color)
                 if "refresh failed" in oauth_error.lower() or "token expired" in oauth_error.lower():
                     self._status_text.config(text="Session expired")
                 elif "not found" in oauth_error.lower() or "no oauth" in oauth_error.lower():
                     self._status_text.config(text="Not logged in")
                 elif "429" in oauth_error or "restricted" in oauth_error.lower() or "rate limit" in oauth_error.lower():
-                    self._status_indicator.config(fg=self.accent_color)
+                    self._status_colour(self.accent_color)
                     self._status_text.config(text="API restricted")
                 else:
                     self._status_text.config(text="Connection error")
@@ -1290,20 +1354,20 @@ class ClaudeBarWindow:
             # Fall back to claude_status check for non-authenticated states
             if self._claude_status:
                 if self._claude_status.installed:
-                    self._status_indicator.config(fg=self.accent_color)
+                    self._status_colour(self.accent_color)
                     text = "Not logged in"
                 else:
-                    self._status_indicator.config(fg=self.warn_color)
+                    self._status_colour(self.warn_color)
                     text = "Claude CLI not found"
                 self._status_text.config(text=text)
             else:
-                self._status_indicator.config(fg=self.text_muted)
+                self._status_colour(self.text_muted)
                 self._status_text.config(text="Checking...")
         elif self._active_engine == Engine.CODEX:
             # Show Codex connection status
             if self._openai_snapshot:
                 if self._openai_snapshot.available:
-                    self._status_indicator.config(fg=self.ok_color)
+                    self._status_colour(self.ok_color)
                     text = "Connected"
                     # Show plan type if available
                     if self._openai_snapshot.plan_type:
@@ -1312,7 +1376,7 @@ class ClaudeBarWindow:
                         text += f" · ${self._openai_snapshot.credits_remaining:.2f} credits"
                     self._status_text.config(text=text)
                 elif self._openai_snapshot.error_message:
-                    self._status_indicator.config(fg=self.warn_color)
+                    self._status_colour(self.warn_color)
                     # Show shorter error message
                     err = self._openai_snapshot.error_message
                     if "Run 'codex login'" in err:
@@ -1323,10 +1387,10 @@ class ClaudeBarWindow:
                         text = "Connection error"
                     self._status_text.config(text=text)
                 else:
-                    self._status_indicator.config(fg=self.accent_color)
+                    self._status_colour(self.accent_color)
                     self._status_text.config(text="Not configured")
             else:
-                self._status_indicator.config(fg=self.text_muted)
+                self._status_colour(self.text_muted)
                 self._status_text.config(text="Checking...")
         elif self._active_engine == Engine.DEEPSEEK:
             # The status row reports the connection only. The balance has its own
@@ -1334,25 +1398,30 @@ class ClaudeBarWindow:
             # it here just said the same figure twice on one screen.
             snap = self._deepseek_snapshot
             if snap is None:
-                self._status_indicator.config(fg=self.text_muted)
+                self._status_colour(self.text_muted)
                 self._status_text.config(text="Checking...")
             elif snap.balance_available:
                 if snap.usage_available:
-                    self._status_indicator.config(fg=self.ok_color)
+                    self._status_colour(self.ok_color)
                     text = "Connected"
                 else:
-                    self._status_indicator.config(fg=self.accent_color)
+                    self._status_colour(self.accent_color)
                     text = "Connected \u00b7 balance only"
                 self._status_text.config(text=text)
             elif snap.error_message == "Not signed in":
-                self._status_indicator.config(fg=self.text_muted)
+                self._status_colour(self.text_muted)
                 self._status_text.config(text="Not signed in")
             elif snap.usage_error == "Session expired":
-                self._status_indicator.config(fg=self.warn_color)
+                self._status_colour(self.warn_color)
                 self._status_text.config(text="Session expired")
             else:
-                self._status_indicator.config(fg=self.warn_color)
+                self._status_colour(self.warn_color)
                 self._status_text.config(text=snap.balance_message)
+
+    def _status_colour(self, colour):
+        """Colour the status dot. It is a canvas item, not a label's foreground."""
+        if self._status_indicator and self._status_dot is not None:
+            self._status_indicator.itemconfig(self._status_dot, fill=colour)
 
     def _on_refresh_click(self):
         """Handle refresh button."""
@@ -1363,7 +1432,8 @@ class ClaudeBarWindow:
         """Handle settings button."""
         if self._window:
             SettingsDialog(self._window, self.config, self._on_settings_saved,
-                           on_refresh=self.on_refresh)
+                           on_refresh=self.on_refresh,
+                           session_state=lambda: self._deepseek_snapshot)
 
     def _on_settings_saved(self):
         """Handle settings save with smooth transition."""
@@ -1452,6 +1522,11 @@ class ClaudeBarWindow:
             return
 
         self._refresh_display_immediate()
+        # The status row is part of this display, not a separate one. Without
+        # this a new snapshot filled the balance block while the row above it
+        # still described the previous one - a panel reading "Not signed in"
+        # directly above a live balance, which is what a sign-in looked like.
+        self._update_status_display()
 
     def _refresh_display_immediate(self):
         """Fill every widget from the active engine's snapshot."""
@@ -1580,13 +1655,13 @@ class ClaudeBarWindow:
 
         self._balance_value.config(text=self._money_fixed(snap.balance_total) if snap.balance_available else "\u2014")
         if snap.balance_available:
-            # Balance is what is left; the lifetime total is what was spent.
-            # They come from different endpoints, so either can be missing.
-            note = (f"Topped up {self._money_fixed(snap.balance_topped_up)} \u00b7 "
-                    f"Granted {self._money_fixed(snap.balance_granted)}")
-            if snap.total_cost_available:
-                note += f" \u00b7 Spent {self._money_fixed(snap.total_cost_usd)}"
-            self._balance_note.config(text=note)
+            # "Topped up" alone. The line used to carry the grant and the
+            # lifetime spend as well - "Topped up 22.00 · Granted 0.00 · Spent
+            # 21.34" - which is three figures where one is being read, and on
+            # most accounts two of them are zero or are already on the screen
+            # elsewhere.
+            self._balance_note.config(
+                text=f"Topped up {self._money_fixed(snap.balance_topped_up)}")
             self._balance_state.config(text=snap.balance_message,
                                        fg=self.ok_color if snap.balance_usable else self.warn_color)
         else:

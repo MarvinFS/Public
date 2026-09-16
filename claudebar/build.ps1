@@ -45,12 +45,23 @@ $SpecFile = Join-Path $BuildDir "claudebar.spec"
 Push-Location $ProjectRoot
 try {
     & $VenvPython -m PyInstaller --clean --noconfirm $SpecFile
+    $PyInstallerExit = $LASTEXITCODE
 } finally {
     Pop-Location
 }
 
-# Check result
+# Check result. PyInstaller's exit code first: without it a failed build reports
+# success whenever the previous exe is still on disk, which is exactly what
+# happens when ClaudeBar is running - the exe cannot be replaced, PyInstaller
+# fails with a PermissionError, and this script used to print "Build successful"
+# and the OLD file's size over the top of it.
 $ExePath = Join-Path $DistDir "ClaudeBar.exe"
+if ($PyInstallerExit -ne 0) {
+    Write-Host "`nBuild FAILED (PyInstaller exit $PyInstallerExit)." -ForegroundColor Red
+    Write-Host "If ClaudeBar is running, its exe cannot be replaced - close it and retry." -ForegroundColor Yellow
+    Write-Host "Any exe at $ExePath is the PREVIOUS build, not this one." -ForegroundColor Yellow
+    exit $PyInstallerExit
+}
 if (Test-Path $ExePath) {
     $Size = (Get-Item $ExePath).Length / 1MB
     Write-Host "`nBuild successful!" -ForegroundColor Green

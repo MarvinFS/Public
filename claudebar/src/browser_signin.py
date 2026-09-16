@@ -14,9 +14,11 @@ The browser keeps its own profile under the ClaudeBar config directory, so the
 session survives restarts and the user's everyday browser is never touched.
 """
 
+import json
 import os
 import re
 import shutil
+import sqlite3
 import subprocess
 import sys
 import time
@@ -116,28 +118,53 @@ def profile_dir() -> Path:
 # that started it and never inherits our console.
 _DETACHED = 0x00000008 | 0x00000200
 
+#: Which browser the current sign-in is running in: "chromium" or "firefox".
+_engine: Optional[str] = None
+
+
+def engine() -> Optional[str]:
+    """Which browser this sign-in is using, or None before one is launched."""
+    return _engine
+
 
 def launch(url: str = SIGNIN_URL) -> Optional[subprocess.Popen]:
     """Open the sign-in page in a browser running against our own profile.
 
-    Debugging is switched on so the token can be read from the live page.
-    Waiting for it to reach disk instead means waiting for Chromium to flush
-    its storage, which measured about a minute after the user had visibly
-    finished signing in. The port is chosen by the browser, bound to
-    127.0.0.1, and lives no longer than the window.
+    Chromium first, because that is what Windows has and the live page can be
+    read through it. Firefox second: a machine with only Firefox installed used
+    to have no way to sign in at all, and there is no reason for that - Firefox
+    writes the same session to disk in plain SQLite, readable while it is open.
+
+    Which engine actually started is recorded in `_engine`, because reading the
+    token back depends on it.
     """
+    global _engine
+
     browser = find_browser()
-    if not browser:
-        return None
-    profile = profile_dir()
-    profile.mkdir(parents=True, exist_ok=True)
-    args = [browser, f"--app={url}", f"--user-data-dir={profile}",
-            "--remote-debugging-port=0",
-            "--no-first-run", "--no-default-browser-check", "--new-window"]
-    kwargs = {"close_fds": True}
-    if sys.platform == "win32":
-        kwargs["creationflags"] = _DETACHED
-    return subprocess.Popen(args, **kwargs)
+    if browser:
+        _engine = "chromium"
+        profile = profile_dir()
+        profile.mkdir(parents=True, exist_ok=True)
+        # Debugging is switched on so the token can be read from the live page.
+        # Waiting for it to reach disk instead means waiting for Chromium to
+        # flush its storage, which measured about a minute after the user had
+        # visibly finished signing in. The port is chosen by the browser, bound
+        # to 127.0.0.1, and lives no longer than the window.
+        args = [browser, f"--app={url}", f"--user-data-dir={profile}",
+                "--remote-debugging-port=0",
+                "--no-first-run", "--no-default-browser-check", "--new-window"]
+        kwargs = {"close_fds": True}
+        if sys.platform == "win32":
+            kwargs["creationflags"] = _DETACHED
+        return subprocess.Popen(args, **kwargs)
+
+    firefox = find_firefox()
+    if firefox:
+        _engine = "firefox"
+        return _launch_firefox(firefox, url)
+
+    _engine = None
+    return None
 
 
 def extract_token(data: bytes) -> Optional[str]:
@@ -166,7 +193,16 @@ def _storage_roots(profile: Path) -> list:
 
 
 def read_token(profile: Optional[Path] = None) -> Optional[str]:
-    """Read the session token from the browser profile, if it is there yet."""
+    """Read the session token from the browser profile, if it is there yet.
+
+    Both engines are checked, because which profile holds it depends on which
+    browser ran. The Firefox profile is read first when Firefox is the engine
+    that started, since that is the one that will have it.
+    """
+    firefox_token = read_firefox_token()
+    if _engine == "firefox":
+        return firefox_token
+
     profile = profile or profile_dir()
     for root in _storage_roots(profile):
         for suffix in STORAGE_SUFFIXES:
@@ -178,6 +214,253 @@ def read_token(profile: Optional[Path] = None) -> Optional[str]:
                 token = extract_token(data)
                 if token:
                     return token
+    return firefox_token
+
+
+# --- Firefox, when no Chromium browser is installed -------------------------
+#
+# Windows always has Edge, so this is a fallback rather than the usual path -
+# but "always" is doing more work than it can carry: Edge is absent on Server
+# and LTSC images, can be removed by policy, and a machine with only Firefox
+# installed had no way to sign in at all before this existed.
+#
+# The reader below is the same one the Linux build uses, because Firefox's
+# storage layout is Firefox's own and does not vary by platform. What differs is
+# only where the browser is and how it is closed.
+
+#: Executables to look for, and the keys that identify them as ours.
+FIREFOX_EXE_NAMES = ("firefox.exe", "librewolf.exe", "waterfox.exe")
+
+#: The key DeepSeek's own page writes its session token under.
+FIREFOX_KEY = "userToken"
+
+#: Where Firefox keeps its record of which profile was last used, so a profile
+#: we created can be recognised as ours rather than guessed at.
+_FIREFOX_INSTALL_ROOTS = ("ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA")
+_FIREFOX_RELATIVE = (
+    "Mozilla Firefox/firefox.exe",
+    "Firefox Developer Edition/firefox.exe",
+    "LibreWolf/LibreWolf.exe",
+    "Waterfox/Waterfox.exe",
+)
+
+
+def find_firefox() -> Optional[str]:
+    """Path to an installed Firefox-family browser, or None.
+
+    The registry first, because that is what Firefox itself records and it
+    survives being installed anywhere. The usual directories second, for a copy
+    that was unpacked rather than installed.
+    """
+    if sys.platform != "win32":
+        return None
+
+    try:
+        import winreg
+    except ImportError:
+        winreg = None
+
+    if winreg is not None:
+        for hive in (winreg.HKEY_LOCAL_MACHINE, winreg.HKEY_CURRENT_USER):
+            try:
+                with winreg.OpenKey(hive, r"SOFTWARE\Mozilla\Mozilla Firefox") as key:
+                    version = winreg.QueryValueEx(key, "CurrentVersion")[0]
+                with winreg.OpenKey(
+                        hive,
+                        rf"SOFTWARE\Mozilla\Mozilla Firefox\{version}\Main") as key:
+                    path = winreg.QueryValueEx(key, "PathToExe")[0]
+            except (OSError, IndexError, TypeError):
+                continue
+            if path and Path(path).is_file():
+                return path
+
+    for root in _FIREFOX_INSTALL_ROOTS:
+        base = os.environ.get(root)
+        if not base:
+            continue
+        for relative in _FIREFOX_RELATIVE:
+            candidate = Path(base) / relative
+            if candidate.is_file():
+                return str(candidate)
+    return None
+
+
+def firefox_profile_dir() -> Path:
+    """ClaudeBar's own Firefox profile. The user's browser is never touched."""
+    return get_config_dir() / "firefox"
+
+
+def _launch_firefox(browser: str, url: str) -> Optional[subprocess.Popen]:
+    """Open the sign-in page in Firefox, with no automation switched on.
+
+    ``--no-remote`` keeps this from handing the URL to an instance the user
+    already has open, which would put the page in their profile instead of ours
+    and leave nothing for us to read. ``--profile`` is what guarantees the
+    storage we read afterwards is one we created.
+
+    Deliberately not driven: no WebDriver, no Marionette, nothing that sets
+    navigator.webdriver. Driven Firefox is served a human-verification page
+    instead of the sign-in form, so the ordinary browser is the one that works.
+    """
+    profile = firefox_profile_dir()
+    profile.mkdir(parents=True, exist_ok=True)
+    (profile / "user.js").write_text(
+        'user_pref("browser.shell.checkDefaultBrowser", false);\n'
+        'user_pref("browser.startup.homepage_override.mstone", "ignore");\n'
+        'user_pref("toolkit.telemetry.enabled", false);\n'
+        'user_pref("datareporting.policy.dataSubmissionEnabled", false);\n'
+        'user_pref("browser.aboutwelcome.enabled", false);\n',
+        encoding="utf-8")
+
+    args = [browser, "--no-remote", "--profile", str(profile), url]
+    kwargs = {"close_fds": True,
+              "stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
+    if sys.platform == "win32":
+        kwargs["creationflags"] = _DETACHED
+    return subprocess.Popen(args, **kwargs)
+
+
+def _firefox_storage_files(profile: Path) -> list:
+    """Every SQLite file those versions of Firefox might have put the token in.
+
+    Two layouts exist and both are cheap to check. Older versions keep one
+    directory per origin (``storage/default/<origin>/ls/data.sqlite``); newer
+    ones also consolidate into ``storage/ls-archive.sqlite``.
+    """
+    found = []
+    storage = profile / "storage"
+    if not storage.is_dir():
+        return found
+
+    archive = storage / "ls-archive.sqlite"
+    if archive.is_file():
+        found.append(archive)
+
+    for pattern in ("default/*deepseek*/ls/data.sqlite",
+                    "permanent/*deepseek*/ls/data.sqlite",
+                    "default/https+++*/ls/data.sqlite"):
+        for match in sorted(storage.glob(pattern)):
+            if match not in found:
+                found.append(match)
+    return found
+
+
+def unwrap_firefox_value(raw: str) -> Optional[str]:
+    """The token inside what the page stores.
+
+    DeepSeek wraps it: ``{"value":"<token>","__version":"0"}``. A bare string is
+    accepted too rather than assumed away, because that is what a simpler page
+    would store and the cost of checking is one startswith.
+    """
+    text = (raw or "").strip()
+    if not text:
+        return None
+    if text.startswith("{"):
+        try:
+            data = json.loads(text)
+        except (json.JSONDecodeError, TypeError):
+            return None
+        inner = data.get("value") if isinstance(data, dict) else None
+        return inner.strip() if isinstance(inner, str) and inner.strip() else None
+    return text
+
+
+def _firefox_value_text(value) -> list:
+    """Plausible strings for one stored value, best guess first.
+
+    Order matters. ASCII written as UTF-16 is half NUL bytes, and those decode
+    perfectly well as UTF-8 into a string that is not the value, so UTF-16 is
+    tried first when the bytes look like it. Anything that decodes with
+    replacement characters is dropped rather than offered as a candidate.
+    """
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value]
+
+    raw = bytes(value)
+    candidates = []
+    if b"\x00" in raw[:64]:
+        try:
+            candidates.append(raw.decode("utf-16-le"))
+        except UnicodeDecodeError:
+            pass
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        text = None
+    if text is not None and "\ufffd" not in text:
+        candidates.append(text)
+    return candidates
+
+
+def _looks_like_a_firefox_token(text: str) -> bool:
+    """Whether a decoded value could be a session token at all.
+
+    A sanity check, not a format check: the point is to keep binary that happened
+    to decode from being stored as a credential. Length is deliberately not part
+    of it - whether a token is real is settled by the API call that validates it
+    before anything is stored.
+    """
+    if not text or len(text) > 4096:
+        return False
+    return all(character.isprintable() and character != "\ufffd"
+               for character in text)
+
+
+def _firefox_read_from(path: Path) -> Optional[str]:
+    """Look for the token key in one SQLite file, whatever its table is called."""
+    try:
+        # Read-only and immutable: Firefox may be holding the file, and this must
+        # never be able to change anything in a browser profile.
+        connection = sqlite3.connect(f"file:{path}?mode=ro&immutable=1", uri=True)
+    except sqlite3.Error:
+        return None
+
+    try:
+        tables = [row[0] for row in connection.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'")]
+        for table in tables:
+            columns = [row[1] for row in connection.execute(
+                f"PRAGMA table_info({table})")]
+            if "key" not in columns or "value" not in columns:
+                continue
+            for row in connection.execute(
+                    f"SELECT * FROM {table} WHERE key = ?", (FIREFOX_KEY,)):
+                record = dict(zip(columns, row))
+                if record.get("compression_type"):
+                    # Snappy. No decoder is shipped, and decompressing binary
+                    # noise into a string would hand a garbage credential to the
+                    # rest of the application, so this refuses rather than
+                    # guesses. Measured on the value that matters - DeepSeek's
+                    # token is 92 bytes, stored compression_type=0 - so this
+                    # guards against a different Firefox, not a limitation today.
+                    continue
+                for candidate in _firefox_value_text(record.get("value")):
+                    token = unwrap_firefox_value(candidate)
+                    if token and _looks_like_a_firefox_token(token):
+                        return token
+    except sqlite3.Error:
+        pass
+    finally:
+        connection.close()
+    return None
+
+
+def read_firefox_token(profile: Optional[Path] = None) -> Optional[str]:
+    """The token Firefox has written for us, or None.
+
+    Safe to call while Firefox is running, which is the point: it writes the row
+    within about twenty seconds of the page loading and updates it on sign-in, so
+    polling this is how the sign-in is detected at all.
+
+    Returns None while the row holds null, which is the state before anyone has
+    signed in, and None if the value is compressed rather than guessed at.
+    """
+    for candidate in _firefox_storage_files(profile or firefox_profile_dir()):
+        token = _firefox_read_from(candidate)
+        if token:
+            return token
     return None
 
 
@@ -192,15 +475,21 @@ def wait_for_token(timeout: float = 300.0, interval: float = 2.0,
     if the page has already gone.
     """
     target = profile or profile_dir()
+    # The live page is asked first for Chromium, because it knows the token the
+    # moment the user is signed in. Firefox has no such channel - it is
+    # deliberately not driven - so its profile on disk is the only source, and
+    # it is written within about twenty seconds.
+    live = (lambda: None) if _engine == "firefox" else (
+        lambda: browser_cdp.token_from_page(target))
     deadline = time.time() + timeout
     while time.time() < deadline:
         if should_stop and should_stop():
             return None
-        token = browser_cdp.token_from_page(target) or read_token(target)
+        token = live() or read_token(target)
         if token:
             return token
         time.sleep(interval)
-    return browser_cdp.token_from_page(target) or read_token(target)
+    return live() or read_token(target)
 
 
 def _iter_processes():
@@ -299,10 +588,13 @@ def pids_using_profile(profile: Optional[Path] = None) -> list:
     """
     if sys.platform != "win32":
         return []
-    target = str(profile or profile_dir()).lower()
-    exes = tuple(name.lower() for name in BROWSER_EXE_NAMES)
-    return [pid for pid, exe in _iter_processes()
-            if exe in exes and target in _command_line(pid).lower()]
+    names = tuple(name.lower() for name in BROWSER_EXE_NAMES + FIREFOX_EXE_NAMES)
+    found = set()
+    for target in (str(profile or profile_dir()).lower(),
+                   str(firefox_profile_dir()).lower()):
+        found.update(pid for pid, exe in _iter_processes()
+                     if exe in names and target in _command_line(pid).lower())
+    return sorted(found)
 
 
 def close(process: Optional[subprocess.Popen] = None) -> int:
@@ -354,16 +646,18 @@ def is_our_profile(path: Optional[Path] = None) -> bool:
     This guard makes the difference explicit rather than assumed, so a future
     bug in profile_dir() cannot turn into deleted user data.
     """
-    candidate = path or profile_dir()
     try:
-        resolved = candidate.resolve()
-        expected = (get_config_dir() / "browser").resolve()
+        resolved = (path or profile_dir()).resolve()
+        allowed = {(get_config_dir() / "browser").resolve(),
+                   firefox_profile_dir().resolve()}
+        config = get_config_dir().resolve()
     except OSError:
         return False
 
-    if resolved != expected:
+    # One of exactly two directories, each directly under the config dir.
+    if resolved not in allowed:
         return False
-    if expected.parent != get_config_dir().resolve():
+    if any(candidate.parent != config for candidate in allowed):
         return False
     lowered = str(resolved).lower().replace(chr(92), '/')
     return not any(marker in lowered for marker in _REAL_BROWSER_MARKERS)
@@ -379,4 +673,9 @@ def forget() -> bool:
     if not is_our_profile(profile):
         return False
     shutil.rmtree(profile, ignore_errors=True)
-    return not profile.exists()
+    # Both, because either could hold the session. The guard is checked for each
+    # separately rather than assumed from the first.
+    firefox = firefox_profile_dir()
+    if is_our_profile(firefox):
+        shutil.rmtree(firefox, ignore_errors=True)
+    return not profile.exists() and not firefox.exists()

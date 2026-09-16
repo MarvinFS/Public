@@ -21,6 +21,27 @@ from snapshot_cache import save_cache, load_cache, load_deepseek_cache
 
 logger = logging.getLogger("claudebar")
 
+#: While the OAuth fetch stays broken, repeat the warning no more often than
+#: this. A five-minute refresh would otherwise write 288 identical lines a day.
+OAUTH_REMINDER_INTERVAL = timedelta(hours=1)
+
+
+def format_duration(since: Optional[datetime]) -> str:
+    """Elapsed time as a short human string for a log line."""
+    if since is None:
+        return "unknown"
+    seconds = int((datetime.now() - since).total_seconds())
+    if seconds < 60:
+        return f"{seconds}s"
+    minutes = seconds // 60
+    if minutes < 60:
+        return f"{minutes}m"
+    hours, minutes = divmod(minutes, 60)
+    if hours < 24:
+        return f"{hours}h {minutes}m"
+    days, hours = divmod(hours, 24)
+    return f"{days}d {hours}h"
+
 
 class DataCollector:
     """Collects and aggregates usage data from all sources."""
@@ -37,6 +58,14 @@ class DataCollector:
         self._on_oauth_failure = on_oauth_failure
         self._on_oauth_success = on_oauth_success
         self._pricing_source = "bundled"
+
+        # Bookkeeping for edge-triggered OAuth logging: the last outcome (None
+        # until the first attempt), the failure run, and when it was last
+        # mentioned. Success repeats every refresh, so only changes get a line.
+        self._oauth_ok: Optional[bool] = None
+        self._oauth_failures = 0
+        self._oauth_failed_since: Optional[datetime] = None
+        self._oauth_last_reminder: Optional[datetime] = None
 
     def set_oauth_callbacks(self, on_failure: Optional[callable] = None,
                             on_success: Optional[callable] = None) -> None:
@@ -140,15 +169,46 @@ class DataCollector:
         try:
             data = fetch_oauth_usage()
             if data.is_valid:
-                logger.info("Usage from OAuth API")
+                self._note_oauth_success()
                 return data
-            logger.info("OAuth API failed: %s", data.error)
+            self._note_oauth_failure(data.error or "unknown error")
             errors.append(f"OAuth: {data.error}")
         except Exception as e:
-            logger.info("OAuth API exception: %s", e)
+            self._note_oauth_failure(str(e))
             errors.append(f"OAuth: {e}")
 
         return OAuthUsageData(error=errors[-1] if errors else "OAuth usage unavailable")
+
+    def _note_oauth_success(self) -> None:
+        """Log the end of a failure run, then say nothing until it breaks again."""
+        if self._oauth_ok is False:
+            logger.info("OAuth usage recovered after %d failed attempt(s) over %s",
+                        self._oauth_failures, format_duration(self._oauth_failed_since))
+        else:
+            logger.debug("Usage from OAuth API")
+        self._oauth_ok = True
+        self._oauth_failures = 0
+        self._oauth_failed_since = None
+        self._oauth_last_reminder = None
+
+    def _note_oauth_failure(self, reason: str) -> None:
+        """Warn when the fetch breaks, then at most hourly while it stays broken."""
+        now = datetime.now()
+        if self._oauth_ok is not False:
+            self._oauth_ok = False
+            self._oauth_failures = 1
+            self._oauth_failed_since = now
+            self._oauth_last_reminder = now
+            logger.warning("OAuth usage unavailable, showing cached data: %s", reason)
+            return
+
+        self._oauth_failures += 1
+        if now - self._oauth_last_reminder >= OAUTH_REMINDER_INTERVAL:
+            self._oauth_last_reminder = now
+            logger.warning("OAuth usage still unavailable after %d attempt(s) over %s: %s",
+                           self._oauth_failures,
+                           format_duration(self._oauth_failed_since),
+                           reason)
 
     @property
     def last_snapshot(self) -> Optional[UsageSnapshot]:

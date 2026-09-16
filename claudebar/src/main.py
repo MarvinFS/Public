@@ -43,6 +43,28 @@ from data_collector import DataCollector
 from tray import TrayManager
 from models import Engine
 from logging_config import setup_logging, get_logger
+from version import __version__
+
+
+def describe_engines(config: Config) -> str:
+    """Names of the enabled engines, for the start line."""
+    enabled = [
+        name for name, on in (
+            ("claude", config.claude_enabled),
+            ("codex", config.codex_enabled),
+            ("deepseek", config.deepseek_enabled),
+        ) if on
+    ]
+    return ", ".join(enabled) if enabled else "none"
+
+
+def parse_args(argv: list) -> bool:
+    """Read the command line. Returns whether debug logging was requested.
+
+    A windowed build has nowhere to print, so --debug is about the log file:
+    it keeps the routine per-refresh lines that INFO drops.
+    """
+    return "--debug" in argv[1:]
 
 
 class ClaudeBar:
@@ -165,20 +187,26 @@ class ClaudeBar:
             self._running = False
             if self.tray:
                 self.tray.stop()
+            get_logger().info("ClaudeBar exiting")
 
 
 def main():
     """Entry point."""
-    logger = setup_logging()
-    logger.info("ClaudeBar starting")
+    logger = setup_logging(debug=parse_args(sys.argv))
     try:
         app = ClaudeBar()
+        logger.info("ClaudeBar %s starting (refresh %ds, engines: %s)",
+                    __version__, app.config.refresh_interval,
+                    describe_engines(app.config))
         app.run()
     except KeyboardInterrupt:
         pass
     except Exception as e:
         import traceback
         error_msg = f"ClaudeBar crashed: {e}\n{traceback.format_exc()}"
+        # The log is the only place this survives: a windowed build has no
+        # stderr, so the print below writes nowhere.
+        logger.error(error_msg)
         print(error_msg, file=sys.stderr)
         if sys.platform == "win32":
             try:

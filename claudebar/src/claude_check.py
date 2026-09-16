@@ -59,7 +59,9 @@ def check_claude_status_via_cli(cli_path: Optional[str] = None) -> Optional[Clau
             organization=data.get("orgName"),
             plan=data.get("subscriptionType"),
         )
-        logger.info("CLI auth status: authenticated=%s, plan=%s", status.authenticated, status.plan)
+        # Debug, not info: the panel probes this on every open, and a successful
+        # probe is the norm. Failures below still speak at warning level.
+        logger.debug("CLI auth status: authenticated=%s, plan=%s", status.authenticated, status.plan)
         return status
 
     except subprocess.TimeoutExpired:

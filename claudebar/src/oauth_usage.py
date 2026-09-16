@@ -125,6 +125,43 @@ def load_credentials() -> tuple[Optional[str], Optional[float]]:
 SKEW_MS = 30_000
 
 
+def access_token_or_reason() -> tuple[Optional[str], Optional[str]]:
+    """Return the access token, or None plus the reason it is unusable.
+
+    ClaudeBar only reads the credentials file Claude Code owns, so "no token"
+    covers four situations that need different fixes: no file at all, a file
+    without the claudeAiOauth block, a block without an accessToken, and a
+    token past its expiry. Each gets its own sentence so the log says which.
+    """
+    creds_path = get_credentials_path()
+
+    if not creds_path.exists():
+        return None, f"no credentials file at {creds_path}"
+
+    try:
+        with open(creds_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (json.JSONDecodeError, OSError, TypeError):
+        return None, f"credentials file at {creds_path} could not be read"
+
+    oauth = data.get("claudeAiOauth") if isinstance(data, dict) else None
+    if not isinstance(oauth, dict) or not oauth.get("accessToken"):
+        return None, "credentials file holds no Claude OAuth token"
+
+    # A JSON bool is an int subclass, so a non-numeric expiresAt means "no
+    # expiry" rather than a bogus date - the same rule load_credentials uses.
+    expires_at_ms = oauth.get("expiresAt")
+    if isinstance(expires_at_ms, bool) or not isinstance(expires_at_ms, (int, float)):
+        expires_at_ms = None
+
+    if expires_at_ms is not None and time.time() * 1000 >= (expires_at_ms - SKEW_MS):
+        expired = datetime.fromtimestamp(expires_at_ms / 1000)
+        return None, (f"OAuth token expired at {expired:%Y-%m-%d %H:%M}, "
+                      "run Claude Code once to refresh it")
+
+    return oauth["accessToken"], None
+
+
 def load_access_token() -> Optional[str]:
     """Return the current OAuth access token, or None if absent/expired.
 
@@ -132,14 +169,7 @@ def load_access_token() -> Optional[str]:
     credentials file. We re-read fresh each call and skip a token within SKEW_MS
     of expiry; on a token gap the caller falls back to cached usage data.
     """
-    access_token, expires_at_ms = load_credentials()
-
-    if not access_token:
-        return None
-
-    if expires_at_ms is not None and time.time() * 1000 >= (expires_at_ms - SKEW_MS):
-        return None
-
+    access_token, _ = access_token_or_reason()
     return access_token
 
 
@@ -161,10 +191,9 @@ def parse_reset_time(resets_at_str: Optional[str]) -> Optional[datetime]:
 def fetch_oauth_usage(access_token: Optional[str] = None, debug: bool = False) -> OAuthUsageData:
     """Fetch usage data from Anthropic OAuth API."""
     if access_token is None:
-        access_token = load_access_token()
-
-    if not access_token:
-        return OAuthUsageData(error="No OAuth token available")
+        access_token, reason = access_token_or_reason()
+        if not access_token:
+            return OAuthUsageData(error=reason or "No OAuth token available")
 
     url = "https://api.anthropic.com/api/oauth/usage"
 

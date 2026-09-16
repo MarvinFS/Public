@@ -1,5 +1,7 @@
 """System tray icon and menu management."""
 
+import logging
+import os
 import threading
 from typing import Callable, Optional
 
@@ -9,7 +11,10 @@ import pystray
 from models import UsageSnapshot, CombinedSnapshot, Engine
 from config import Config, get_resources_path
 from icons import create_premium_icon, STATUS_COLORS
+from logging_config import get_log_path
 from pricing import format_tokens
+
+logger = logging.getLogger("claudebar")
 
 try:
     from ui_window import ClaudeBarWindow
@@ -164,10 +169,22 @@ class TrayManager:
         if self.on_settings:
             items.append(pystray.MenuItem("Settings", self._on_settings_click))
 
+        items.append(pystray.MenuItem("Open log file", self._on_open_log))
+
         items.append(pystray.Menu.SEPARATOR)
         items.append(pystray.MenuItem("Exit", self._on_exit_click))
 
         return pystray.Menu(*items)
+
+    def _on_open_log(self, icon=None, item=None):
+        """Open the log file in whatever handles .log files."""
+        try:
+            path = get_log_path()
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.touch(exist_ok=True)
+            os.startfile(str(path))
+        except Exception as e:
+            logger.warning("Could not open the log file: %s", e)
 
     def _on_show_details(self, icon=None, item=None):
         """Show the premium details window."""

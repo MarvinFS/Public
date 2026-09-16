@@ -77,6 +77,18 @@ Settings live in `%LOCALAPPDATA%\ClaudeBar\config.json`:
 
 DeepSeek credentials are never written to `config.json`. The session token is encrypted with Windows DPAPI, which ties it to your Windows account, and stored in `%LOCALAPPDATA%\ClaudeBar\secrets\`. Copying that folder to another machine or user profile yields nothing. If DPAPI is unavailable the token is kept in memory for that session only.
 
+## Logs
+
+The log is `%LOCALAPPDATA%\ClaudeBar\claudebar.log`, and "Open log file" in the tray menu opens it directly.
+
+It records changes of state, not every refresh: the app starting and exiting, a source that stopped working and what it said, the recovery when it returns, and how long it was down. Routine successes stay out, so a quiet file is a healthy one. When you want the per-refresh detail back for a session, start the exe with `--debug`:
+
+```powershell
+ClaudeBar.exe --debug
+```
+
+The file is UTF-8. It rotates at midnight into `claudebar.log.YYYY-MM-DD` and files older than 14 days are deleted. A single day is capped at 1 MB, and a day that reaches the cap rolls into a numbered file rather than growing without bound.
+
 ## Where the numbers come from
 
 Rate limits come from the Anthropic OAuth API, with the token from `~/.claude/.credentials.json`, and from the ChatGPT backend API, with the token from `~/.codex/auth.json`. Tokens and costs come from the JSONL logs in `~/.claude/projects/` and `~/.codex/`.
@@ -100,6 +112,8 @@ If no Claude data appears, use Claude Code once so that `~/.claude/projects/` ex
 If the Codex view shows an error, install Codex CLI and run `codex login`.
 
 If the DeepSeek view shows a balance but no usage, the platform token is missing or has expired: sign in at `platform.deepseek.com` again and paste a fresh `userToken` into Settings. Platform sessions expire on their own schedule, and the panel reports it as "Session expired".
+
+If something else looks wrong, open the log from the tray menu. It says which failure it hit, such as an OAuth token that expired at a given time or a credentials file that is missing, instead of leaving you to guess from a stale panel.
 
 The panel opens near the tray on the primary monitor. Drag it anywhere and it stays there across restarts. If that spot is no longer on any monitor when the app starts, the panel returns to the default position. "Reset window position" in the tray menu does the same on demand.
 

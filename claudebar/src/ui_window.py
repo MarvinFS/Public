@@ -1719,19 +1719,24 @@ class ClaudeBarWindow:
 
         DeepSeek supplies its own dates (the platform buckets by its own day),
         so those win when present; otherwise the labels count back from today.
+        Both inputs are oldest first, and so is the chart, so the dates are read
+        forwards: indexing them by days-ago paired every bar with the wrong
+        weekday and read the whole row back to front.
         """
         week = list(values)[-7:]
+        # Trimmed exactly like the values, so a longer parallel series still
+        # lines its labels up with the bars those values are drawn as.
+        window = list(dates)[-len(week):] if week and dates else []
         labels = []
         for i in range(len(week)):
-            index = len(week) - 1 - i
-            iso = dates[index] if index < len(dates) else None
+            iso = window[i] if i < len(window) else None
             stamp = None
             if iso:
                 try:
                     stamp = datetime.strptime(iso, "%Y-%m-%d")
                 except ValueError:
                     stamp = None
-            labels.append((stamp or (today - timedelta(days=index))).strftime("%a"))
+            labels.append((stamp or (today - timedelta(days=len(week) - 1 - i))).strftime("%a"))
         return week, labels
 
     def _fill_chart(self, values, labels, tooltips, title, money):

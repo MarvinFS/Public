@@ -182,6 +182,16 @@ class TestFetchUsage:
         assert any("month=1&year=2026" in url for url in calls)
         assert any("month=12&year=2025" in url for url in calls)
 
+    def test_early_in_a_month_the_chart_reaches_two_months_back(self, monkeypatch):
+        """1 March: the 31-day chart starts on 30 January, so January is
+        fetched too instead of drawing those days as empty."""
+        calls = []
+        monkeypatch.setattr(d, "_get", lambda url, headers: (calls.append(url) or
+                                                            {"code": 0, "data": {"biz_data": {}}}, None))
+        d.fetch_usage("token", today=date(2026, 3, 1))
+        months = {url.split("?")[1] for url in calls}
+        assert months == {f"month={m}&year=2026" for m in (3, 2, 1)}
+
     def test_models_come_from_the_current_month_only(self, monkeypatch):
         """The top-model row is a share of this month's spend, so folding the
         previous month in would let a model report more than 100%."""

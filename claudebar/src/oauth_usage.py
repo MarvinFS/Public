@@ -8,7 +8,6 @@ from datetime import datetime
 from typing import Optional
 from pathlib import Path
 
-from retry import with_retry
 from validation import safe_get_float
 
 
@@ -187,7 +186,6 @@ def parse_reset_time(resets_at_str: Optional[str]) -> Optional[datetime]:
         return None
 
 
-@with_retry(max_attempts=3, base_delay=1.0)
 def fetch_oauth_usage(access_token: Optional[str] = None, debug: bool = False) -> OAuthUsageData:
     """Fetch usage data from Anthropic OAuth API."""
     if access_token is None:

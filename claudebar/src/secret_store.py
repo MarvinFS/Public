@@ -16,7 +16,7 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-from config import get_config_dir
+from config import atomic_write_bytes, get_config_dir
 
 # Win32 flags
 CRYPTPROTECT_UI_FORBIDDEN = 0x01
@@ -105,10 +105,8 @@ def save_secret(name: str, value: str) -> bool:
     if blob is None:
         return False
     try:
-        path = secret_path(name)
-        path.parent.mkdir(parents=True, exist_ok=True)
         # base64 so the file survives an editor or a sync client touching it
-        path.write_bytes(base64.b64encode(blob))
+        atomic_write_bytes(secret_path(name), base64.b64encode(blob))
         return True
     except OSError:
         return False

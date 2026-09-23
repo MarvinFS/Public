@@ -575,23 +575,25 @@ class TestTheStatusDot:
 
 
 class TestTheDeepSeekBalanceLine:
-    """One figure, not three.
+    """One figure, nothing around it.
 
-    It read "Topped up 22.00 · Granted 0.00 · Spent 21.34": three numbers where
-    one is being read, and on most accounts two of them are zero or are already
-    on the screen elsewhere.
+    It read "Topped up 22.00 · Granted 0.00 · Spent 21.34", then "Topped up"
+    alone over "Available for API calls". Now the balance stands by itself and
+    a caption appears only when the balance cannot pay for calls.
     """
 
     @staticmethod
     def _panel():
         import tkinter as tk
         import pytest
-        try:
-            probe = tk.Tk()
-            probe.withdraw()
-            probe.destroy()
-        except tk.TclError:
-            pytest.skip("no display for a Tk window")
+        # One Tk root for every panel test. A second interpreter in the same
+        # process intermittently failed to load Tcl's own init scripts, which
+        # skipped the test instead of running it.
+        if tk._default_root is None:
+            try:
+                tk.Tk().withdraw()
+            except tk.TclError:
+                pytest.skip("no display for a Tk window")
 
         from config import Config
         import ui_window
@@ -606,7 +608,7 @@ class TestTheDeepSeekBalanceLine:
         panel._create_window()
         return panel
 
-    def test_it_shows_only_what_was_topped_up(self):
+    def test_a_usable_balance_has_no_caption(self):
         from models import DeepSeekSnapshot, Engine
         panel = self._panel()
         try:
@@ -616,10 +618,14 @@ class TestTheDeepSeekBalanceLine:
                 balance_topped_up=25.37, balance_granted=0.0,
                 total_cost_available=True, total_cost_usd=24.63))
             panel._apply_snapshot_update()
-            note = panel._balance_note.cget("text")
-            assert "Granted" not in note
-            assert "Spent" not in note
-            assert note.startswith("Topped up")
+            assert "25.37" in panel._balance_value.cget("text")
+            assert not panel._balance_state.winfo_manager()
+
+            panel.update_deepseek(DeepSeekSnapshot(
+                balance_available=True, balance_usable=False, balance_total=0.0))
+            panel._apply_snapshot_update()
+            assert panel._balance_state.winfo_manager()
+            assert panel._balance_state.cget("text") == "Add credits"
         finally:
             panel.destroy()
 
@@ -633,6 +639,38 @@ class TestTheDeepSeekBalanceLine:
                 balance_available=True, balance_usable=True, balance_total=25.37,
                 usage_available=True, today_cost_usd=1.0, month_cost_usd=2.0))
             panel._apply_snapshot_update()
-            assert panel._status_text.cget("text") == "Connected"
+            # Connected is the green dot alone; the lag showed as "Not signed in".
+            assert panel._status_text.cget("text") == ""
+            assert panel._status_indicator.itemcget(panel._status_dot, "fill") == panel.ok_color
         finally:
             panel.destroy()
+
+
+class TestTheWorkerStopsWhenTold:
+    """Forget, Save or closing the dialog while the worker validates a token
+    must leave nothing stored: the worker checks the flag before it saves."""
+
+    def test_forget_during_validation_stores_nothing(self, monkeypatch):
+        import deepseek_auth
+        import deepseek_usage
+        from ui_window import SettingsDialog
+
+        dialog = SettingsDialog.__new__(SettingsDialog)
+        dialog._signin_cancel = False
+        dialog._signin_result = None
+        dialog._signin_thread = None
+        saved = []
+
+        def summary_while_forget_is_pressed(token):
+            dialog._stop_signin()
+            return deepseek_usage.AccountSummary(available=True, topped_up=1.0)
+
+        monkeypatch.setattr(bs, "wait_for_token", lambda **kw: "tok")
+        monkeypatch.setattr(bs, "close", lambda *a: 0)
+        monkeypatch.setattr(deepseek_usage, "fetch_summary", summary_while_forget_is_pressed)
+        monkeypatch.setattr(deepseek_auth, "save_user_token", lambda t: saved.append(t) or True)
+
+        dialog._signin_worker(None)
+        assert saved == []
+        assert dialog._signin_result == ("fail", "Cancelled")
+

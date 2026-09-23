@@ -58,6 +58,24 @@ def describe_engines(config: Config) -> str:
     return ", ".join(enabled) if enabled else "none"
 
 
+_instance_mutex = None  # held for the life of the process
+
+
+def another_instance_running() -> bool:
+    """Take the app's named mutex; True when another ClaudeBar already holds it.
+
+    Two instances would each write the same config, cache and log files and
+    put two icons in the tray.
+    """
+    global _instance_mutex
+    if sys.platform != "win32":
+        return False
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CreateMutexW.restype = ctypes.c_void_p
+    _instance_mutex = kernel32.CreateMutexW(None, False, "Local\\ClaudeBar")
+    return bool(_instance_mutex) and ctypes.get_last_error() == 183  # ERROR_ALREADY_EXISTS
+
+
 def parse_args(argv: list) -> bool:
     """Read the command line. Returns whether debug logging was requested.
 
@@ -77,6 +95,7 @@ class ClaudeBar:
         self._running = False
         self._refresh_thread: Optional[threading.Thread] = None
         self._refresh_lock = threading.Lock()
+        self._refresh_again = False
 
     def _load_cached_initial(self) -> None:
         """Load cached data for immediate display on startup."""
@@ -101,18 +120,26 @@ class ClaudeBar:
 
     def _refresh(self) -> None:
         """Refresh usage data and update tray."""
-        # Single-flight: refresh loop, manual button and engine-change all call this
-        # on separate threads; skip overlapping calls instead of stacking collects.
-        if not self._refresh_lock.acquire(blocking=False):
-            return
-        try:
-            combined = self.collector.collect_combined()
-            if self.tray:
-                self.tray.update_combined(combined)
-        except Exception as e:
-            get_logger().error(f"Refresh error: {e}")
-        finally:
-            self._refresh_lock.release()
+        # Single-flight: refresh loop, manual button, sign-in and engine change all
+        # call this on separate threads. A call that finds a collect running leaves
+        # the flag set and returns; the holder then collects once more, so a
+        # request made mid-collect is served by a collect that starts after it.
+        # The outer check runs again after release, for a request that set the
+        # flag between the holder's last check and its release
+        # (verification/PanelThreads.tla, seed-norecheck).
+        self._refresh_again = True
+        while self._refresh_again and self._refresh_lock.acquire(blocking=False):
+            try:
+                while self._refresh_again:
+                    self._refresh_again = False
+                    try:
+                        combined = self.collector.collect_combined()
+                        if self.tray:
+                            self.tray.update_combined(combined)
+                    except Exception as e:
+                        get_logger().error(f"Refresh error: {e}")
+            finally:
+                self._refresh_lock.release()
 
     def _on_engine_change(self, engine: Engine) -> None:
         """Handle engine change from UI."""
@@ -174,6 +201,9 @@ class ClaudeBar:
             root.withdraw()
 
             def check_running():
+                # Tray menu and icon clicks arrive on pystray's thread and are
+                # run here, because Tk belongs to this thread.
+                self.tray.run_pending()
                 if self._running:
                     root.after(100, check_running)
                 else:
@@ -193,6 +223,9 @@ class ClaudeBar:
 def main():
     """Entry point."""
     logger = setup_logging(debug=parse_args(sys.argv))
+    if another_instance_running():
+        logger.info("ClaudeBar is already running; this instance exits")
+        return
     try:
         app = ClaudeBar()
         logger.info("ClaudeBar %s starting (refresh %ds, engines: %s)",

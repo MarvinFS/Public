@@ -10,9 +10,9 @@ One engine at a time, switched with the provider logos in the header.
 
 For each rate-limit window (5-hour session and weekly): a bar with a tick at the point an even spend would have reached, how much is left, when it resets, and whether the remaining allowance lasts until the reset or runs out first at the pace spent so far.
 
-Below the bars: API-equivalent cost and token counts for today, this month, and the last 31 days, today's output tokens and cache reads, a 7-day daily cost chart, and the model that dominates the month's cost. Hover any bar in the chart to see that day's exact figure.
+Below the bars: API-equivalent cost and token counts for today, the last 7 days, this month and the last 31 days, a chart of daily cost over the last 31 days, and the model that dominates the month's cost. Hover any bar in the chart to see that day's date and exact figure.
 
-DeepSeek has no rate limits, so its view swaps the bars for the account balance and reports today, this month and last 7 days spend with tokens, plus a weekly token total.
+DeepSeek has no rate limits, so its view swaps the bars for the account balance and reports spend with tokens for today, the last 7 days, this month and the previous month, with the same 31-day chart.
 
 The right-click tray menu shows a short summary of every engine without opening the panel.
 
@@ -82,7 +82,7 @@ Settings live in `%LOCALAPPDATA%\ClaudeBar\config.json`:
 }
 ```
 
-`refresh_interval` is in seconds. Past the two thresholds the tray icon gets an amber, then a red, corner badge. `currency` accepts USD, EUR, GBP, RUB, or RON. The engine toggles hide an engine you do not use. `window_x` and `window_y` hold the last dragged panel position.
+`refresh_interval` is in seconds, and never less than 30. Past the two thresholds the tray icon gets an amber, then a red, corner badge. `currency` accepts USD, EUR, GBP, RUB, or RON. The engine toggles hide an engine you do not use. `window_x` and `window_y` hold the last dragged panel position.
 
 DeepSeek credentials are never written to `config.json`. The session token is encrypted with Windows DPAPI, which ties it to your Windows account, and stored in `%LOCALAPPDATA%\ClaudeBar\secrets\`. Copying that folder to another machine or user profile yields nothing. If DPAPI is unavailable the token is kept in memory for that session only.
 
@@ -102,7 +102,7 @@ The file is UTF-8. It rotates at midnight into `claudebar.log.YYYY-MM-DD` and fi
 
 Rate limits come from the Anthropic OAuth API, with the token from `~/.claude/.credentials.json`, and from the ChatGPT backend API, with the token from `~/.codex/auth.json`. Tokens and costs come from the JSONL logs in `~/.claude/projects/` and `~/.codex/`.
 
-Costs are API-equivalent estimates, not subscription charges: every token is priced at what the same call would cost on the public API. Rates come from models.dev, downloaded at most once a day and cached at `%LOCALAPPDATA%\ClaudeBar\models_dev.json`. Until a download has succeeded the bundled tables apply and the footer says "bundled rates". Claude 1-hour cache writes cost 2x the input rate and 5-minute writes 1.25x. OpenAI requests with more than 272K input tokens use the long-context tier. Models from other providers, such as a local model through Codex, count towards tokens but not cost.
+Costs are API-equivalent estimates, not subscription charges: every token is priced at what the same call would cost on the public API. Rates come from models.dev, downloaded at most once a day and cached at `%LOCALAPPDATA%\ClaudeBar\models_dev.json`. Until a download has succeeded the bundled tables apply. Claude 1-hour cache writes cost 2x the input rate and 5-minute writes 1.25x. OpenAI requests with more than 272K input tokens use the long-context tier. Models from other providers, such as a local model through Codex, count towards tokens but not cost.
 
 DeepSeek is the exception to estimating. Its balance comes from `api.deepseek.com/user/balance`, and its cost, tokens and request counts come from the platform's own usage endpoints, so those figures are the billed ones rather than an estimate. The panel says which of the two it is showing.
 

@@ -19,6 +19,7 @@ from datetime import date, timedelta
 from typing import Optional
 
 from currency import to_usd
+from models import DAILY_HISTORY_DAYS
 
 USAGE_AMOUNT_URL = "https://platform.deepseek.com/api/v0/usage/amount"
 USAGE_COST_URL = "https://platform.deepseek.com/api/v0/usage/cost"
@@ -37,8 +38,6 @@ TIMEOUT = 15.0
 # Usage row types. PROMPT_TOKEN (uncached input) is also seen in the wild
 # and simply counts towards the token total.
 REQUEST = "REQUEST"
-
-DAILY_HISTORY_DAYS = 31
 
 
 @dataclass
@@ -334,18 +333,24 @@ def fetch_month(user_token: str, year: int, month: int) -> tuple[Optional[dict],
 
 
 def fetch_usage(user_token: str, today: Optional[date] = None) -> UsageData:
-    """Usage covering today, the current month, the trailing 7 days and the
-    previous calendar month.
+    """Usage covering today, the current month, the trailing 31 days (the
+    chart) and the previous calendar month.
 
-    The previous month is always fetched: the 7-day window can reach back into
-    it at a month boundary, and the panel reports that month's own totals.
+    The previous month is always fetched, because the panel reports its own
+    totals. Early in a month the 31-day window reaches one month further back,
+    and that month is fetched too rather than drawn as empty days.
     """
     if not user_token:
         return UsageData(error="No platform token")
 
     today = today or date.today()
     previous = today.replace(day=1) - timedelta(days=1)
-    months = [(today.year, today.month), (previous.year, previous.month)]
+    first = min(today - timedelta(days=DAILY_HISTORY_DAYS - 1), previous)
+    months = []
+    cursor = today
+    while (cursor.year, cursor.month) >= (first.year, first.month):
+        months.append((cursor.year, cursor.month))
+        cursor = cursor.replace(day=1) - timedelta(days=1)
 
     merged = UsageData(available=True)
     errors: list[str] = []

@@ -106,3 +106,14 @@ def test_valid_oauth_authenticated(monkeypatch, tmp_path):
                  {"claudeAiOauth": {"accessToken": "tok", "expiresAt": _future_ms()}})
     ok, _creds, err = claude_check.check_credentials()
     assert ok is True and err is None
+
+
+def test_status_and_reader_agree_near_expiry(monkeypatch, tmp_path):
+    """Two minutes left: the reader still hands the token out, so the status
+    must not call it expired (it used a 5-minute skew against the reader's 30 s)."""
+    _patch_creds(monkeypatch, tmp_path,
+                 {"claudeAiOauth": {"accessToken": "tok",
+                                    "expiresAt": time.time() * 1000 + 120_000}})
+    ok, _creds, err = claude_check.check_credentials()
+    assert oauth_usage.load_access_token() == "tok"
+    assert ok is True and err is None

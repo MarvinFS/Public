@@ -322,6 +322,7 @@ class DataCollector:
         usage = fetch_usage(token.value, today)
         if usage.available:
             self._apply_usage(snapshot, usage, today)
+            snapshot.usage_fetched_at = snapshot.timestamp
             usage_fresh = True
         else:
             snapshot.usage_error = usage.error or "Usage unavailable"
@@ -337,6 +338,7 @@ class DataCollector:
             snapshot.balance_granted = summary.granted
             snapshot.balance_currency = summary.currency
             snapshot.error_message = None
+            snapshot.balance_fetched_at = snapshot.timestamp
             balance_fresh = True
             if summary.total_cost_available:
                 snapshot.total_cost_usd = summary.total_cost
@@ -345,8 +347,8 @@ class DataCollector:
         # Carry over whatever the last good fetch had, so a transient failure
         # does not blank the panel or evict a good cache entry.
         if not (balance_fresh and usage_fresh):
-            cached, cached_at = load_deepseek_cache()
-            carried = False
+            cached, _ = load_deepseek_cache()
+            carried = []
             if cached:
                 if not balance_fresh and cached.balance_available:
                     snapshot.balance_available = True
@@ -355,8 +357,9 @@ class DataCollector:
                     snapshot.balance_topped_up = cached.balance_topped_up
                     snapshot.balance_granted = cached.balance_granted
                     snapshot.balance_currency = cached.balance_currency
+                    snapshot.balance_fetched_at = cached.balance_fetched_at
                     snapshot.error_message = None
-                    carried = True
+                    carried.append(cached.balance_fetched_at)
                 if not usage_fresh and cached.usage_available:
                     for name in ("usage_available", "usage_currency", "today_cost_usd",
                                  "today_tokens", "month_cost_usd", "month_tokens",
@@ -364,15 +367,15 @@ class DataCollector:
                                  "prev_month_cost_usd", "prev_month_tokens",
                                  "total_cost_usd", "total_cost_available",
                                  "daily_tokens", "daily_requests", "daily_dates",
-                                 "models_used"):
+                                 "models_used", "usage_fetched_at"):
                         setattr(snapshot, name, getattr(cached, name))
                     snapshot.usage_error = None
-                    carried = True
+                    carried.append(cached.usage_fetched_at)
             # Anything shown from the cache is stale, whether or not the other
-            # half refreshed in this pass.
+            # half refreshed in this pass, and as old as the oldest half carried.
             if carried:
                 snapshot.is_stale = True
-                snapshot.stale_since = cached_at
+                snapshot.stale_since = min((at for at in carried if at), default=None)
 
         self._last_deepseek_snapshot = snapshot
 
@@ -391,20 +394,22 @@ class DataCollector:
         currency = (usage.currency or "USD").upper()
         factor = to_usd(1.0, currency) if currency != "USD" else 1.0
 
-        week = last_n_days(usage.days, today, 7)
+        days = last_n_days(usage.days, today, DAILY_HISTORY_DAYS)
+        week = days[-7:]
         month = month_days(usage.days, today)
         previous = previous_month_days(usage.days, today)
 
         snapshot.usage_available = True
         snapshot.usage_currency = currency
 
-        snapshot.daily_costs = [d.cost * factor for d in week]
-        snapshot.daily_tokens = [d.tokens for d in week]
-        snapshot.daily_requests = [d.requests for d in week]
-        snapshot.daily_dates = [d.date for d in week]
+        # The chart runs the same 31 days as the other engines' charts.
+        snapshot.daily_costs = [d.cost * factor for d in days]
+        snapshot.daily_tokens = [d.tokens for d in days]
+        snapshot.daily_requests = [d.requests for d in days]
+        snapshot.daily_dates = [d.date for d in days]
 
-        snapshot.last7_cost_usd = sum(snapshot.daily_costs)
-        snapshot.last7_tokens = sum(snapshot.daily_tokens)
+        snapshot.last7_cost_usd = sum(d.cost for d in week) * factor
+        snapshot.last7_tokens = sum(d.tokens for d in week)
 
         snapshot.today_cost_usd = week[-1].cost * factor
         snapshot.today_tokens = week[-1].tokens

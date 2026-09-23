@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 from config import find_claude_cli, get_claude_dir
+from oauth_usage import SKEW_MS
 
 logger = logging.getLogger("claudebar")
 
@@ -101,10 +102,11 @@ def check_credentials() -> tuple[bool, Optional[dict], Optional[str]]:
             return False, creds, "No access token"
 
         # Only treat expiresAt as expiry when it is a real number (a JSON bool is
-        # an int subclass, so exclude it). 5-minute skew matches the OAuth reader.
+        # an int subclass, so exclude it). The skew is the OAuth reader's own, so
+        # the status never says "Token expired" while the reader still uses it.
         expires_at = oauth_data.get("expiresAt")
         if not isinstance(expires_at, bool) and isinstance(expires_at, (int, float)):
-            if time.time() * 1000 >= (expires_at - 300_000):
+            if time.time() * 1000 >= (expires_at - SKEW_MS):
                 return False, creds, "Token expired"
 
         return True, creds, None

@@ -2,6 +2,7 @@
 
 import logging
 import os
+import queue
 import threading
 from typing import Callable, Optional
 
@@ -77,6 +78,12 @@ class TrayManager:
         self._combined: Optional[CombinedSnapshot] = None
         self._running = False
         self._ui_window: Optional[ClaudeBarWindow] = None
+        # pystray runs its callbacks on its own thread. Tk belongs to the main
+        # thread, and a Tk call made from here waits for it - while the main
+        # thread may be waiting for a lock this thread holds. So the callbacks
+        # that touch the panel are queued, and main.py's check_running tick
+        # runs them (verification/PanelThreads.tla, P1).
+        self._pending: queue.Queue = queue.Queue()
 
         # Initialize premium UI if enabled
         if self._use_premium_ui:
@@ -186,17 +193,29 @@ class TrayManager:
         except Exception as e:
             logger.warning("Could not open the log file: %s", e)
 
-    def _on_show_details(self, icon=None, item=None):
-        """Show the premium details window."""
+    def _on_main(self, fn, *args) -> None:
+        """Run `fn` on the main thread, at its next check_running tick."""
+        self._pending.put((fn, args))
+
+    def run_pending(self) -> None:
+        """Run the queued tray callbacks. Main thread only."""
+        while True:
+            try:
+                fn, args = self._pending.get_nowait()
+            except queue.Empty:
+                return
+            try:
+                fn(*args)
+            except Exception:
+                logger.exception("Tray action failed")
+
+    def _show(self):
         if self._ui_window:
             self._ui_window.show(self._snapshot)
 
-    def _on_tray_click(self, icon, item=None):
-        """Handle tray icon click."""
-        if self._use_premium_ui and self._ui_window:
-            # Show premium popup window
-            self._ui_window.toggle(self._snapshot)
-        # If no premium UI, default right-click menu will show
+    def _on_show_details(self, icon=None, item=None):
+        """Show the premium details window."""
+        self._on_main(self._show)
 
     def _on_refresh_click(self, icon, item):
         """Handle refresh menu click."""
@@ -204,17 +223,16 @@ class TrayManager:
 
     def _on_reset_position(self, icon, item):
         """Put the details window back at its default spot near the tray."""
-        self._ui_window.reset_position()
+        self._on_main(lambda: self._ui_window and self._ui_window.reset_position())
 
     def _on_settings_click(self, icon, item):
         """Handle settings menu click."""
         if self.on_settings:
-            self.on_settings()
+            self._on_main(self.on_settings)
 
     def _on_exit_click(self, icon, item):
         """Handle exit menu click."""
-        self.stop()
-        self.on_exit()
+        self._on_main(self._on_ui_exit)
 
     def _on_ui_refresh(self):
         """Handle refresh from UI window."""
@@ -281,9 +299,6 @@ class TrayManager:
 
     def update(self, snapshot: UsageSnapshot) -> None:
         """Update the tray with new data (thread-safe)."""
-        if not self._running:
-            return
-
         with _tray_lock:
             self._snapshot = snapshot
 
@@ -300,10 +315,11 @@ class TrayManager:
                 self._ui_window.update(snapshot)
 
     def update_combined(self, combined: CombinedSnapshot) -> None:
-        """Update the tray with combined data (thread-safe)."""
-        if not self._running:
-            return
+        """Update the tray with combined data (thread-safe).
 
+        Accepted before start(), so the cached snapshot main.py loads first is
+        on screen from the start; stop() clears the icon and the window.
+        """
         with _tray_lock:
             self._combined = combined
             # Use Claude snapshot for tray icon (always available)
@@ -334,9 +350,8 @@ class TrayManager:
             menu=self._create_menu(),
         )
 
-        # Add left-click handler for premium UI
-        if self._use_premium_ui:
-            self._icon.on_activate = self._on_tray_click
+        # A left click runs the menu's default item, Show Details. pystray has
+        # no separate activate hook; an on_activate attribute was never called.
 
         self._running = True
         self._icon.run()

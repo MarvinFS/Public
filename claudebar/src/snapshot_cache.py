@@ -10,7 +10,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from config import get_config_dir
+from config import atomic_write_text, get_config_dir
 from models import UsageSnapshot, OpenAISnapshot, DeepSeekSnapshot, TokenUsage, ModelUsage
 
 
@@ -182,6 +182,8 @@ def _dict_to_deepseek_snapshot(data: dict, is_stale: bool = False,
         models_used=models_used,
         error_message=data.get("error_message"),
         usage_error=data.get("usage_error"),
+        balance_fetched_at=_parse_iso(data.get("balance_fetched_at")),
+        usage_fetched_at=_parse_iso(data.get("usage_fetched_at")),
         is_stale=is_stale,
         stale_since=stale_since,
     )
@@ -221,9 +223,10 @@ def save_cache(claude: Optional[UsageSnapshot] = None, openai: Optional[OpenAISn
     )
 
     try:
-        with open(cache_path, "w", encoding="utf-8") as f:
-            json.dump(asdict(cached), f, indent=2, default=_json_default)
-    except (OSError, IOError):
+        # Replaced whole: written in place, a crash mid-write left a truncated
+        # file, and the next save read it as empty and dropped every engine.
+        atomic_write_text(cache_path, json.dumps(asdict(cached), indent=2, default=_json_default))
+    except OSError:
         pass  # Silently fail on cache write errors
 
 
@@ -296,7 +299,20 @@ def load_deepseek_cache() -> tuple[Optional[DeepSeekSnapshot], Optional[datetime
 
         cached_at = (_parse_iso(data.get("deepseek_cached_at", ""))
                      or _parse_iso(data.get("cached_at", "")))
-        return _dict_to_deepseek_snapshot(data["deepseek"], is_stale=True, stale_since=cached_at), cached_at
+        snapshot = _dict_to_deepseek_snapshot(data["deepseek"], is_stale=True)
+        # The entry is written whenever either half is fresh, so its own time can
+        # be newer than a half carried in it. Each half keeps its own fetch time
+        # (a cache from before that falls back to the entry's), and the entry is
+        # as old as its oldest half.
+        snapshot.balance_fetched_at = snapshot.balance_fetched_at or cached_at
+        snapshot.usage_fetched_at = snapshot.usage_fetched_at or cached_at
+        halves = [at for at, on in ((snapshot.balance_fetched_at, snapshot.balance_available),
+                                    (snapshot.usage_fetched_at, snapshot.usage_available))
+                  if on and at]
+        if halves:
+            cached_at = min(halves)
+        snapshot.stale_since = cached_at
+        return snapshot, cached_at
     except (json.JSONDecodeError, KeyError, TypeError, ValueError):
         return None, None
 

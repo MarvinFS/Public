@@ -3,9 +3,14 @@
 import json
 import os
 import sys
+import threading
 from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Optional
+
+
+# Every refresh calls the usage APIs; faster than this only invites rate limits.
+MIN_REFRESH_INTERVAL = 30  # seconds
 
 
 @dataclass
@@ -77,7 +82,13 @@ def load_config() -> Config:
         try:
             with open(config_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
-            return Config(**{k: v for k, v in data.items() if k in Config.__dataclass_fields__})
+            config = Config(**{k: v for k, v in data.items() if k in Config.__dataclass_fields__})
+            # A hand-edited file can hold 0, which made the refresh loop spin.
+            try:
+                config.refresh_interval = max(MIN_REFRESH_INTERVAL, int(config.refresh_interval))
+            except (TypeError, ValueError):
+                config.refresh_interval = Config().refresh_interval
+            return config
         except (json.JSONDecodeError, TypeError, KeyError):
             pass
 
@@ -85,14 +96,36 @@ def load_config() -> Config:
     return Config()
 
 
+def atomic_write_bytes(path: Path, data: bytes) -> None:
+    """Replace `path` with `data` in one step.
+
+    The data goes to a temp file beside it, then os.replace swaps it in, so a
+    crash mid-write leaves the old file whole rather than truncated. The temp
+    name is per process and thread, so two writers never share one.
+    """
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+    try:
+        with open(tmp, "wb") as f:
+            f.write(data)
+        os.replace(tmp, path)
+    except OSError:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        raise
+
+
+def atomic_write_text(path: Path, text: str) -> None:
+    """atomic_write_bytes for UTF-8 text."""
+    atomic_write_bytes(path, text.encode("utf-8"))
+
+
 def save_config(config: Config) -> None:
     """Save configuration to file."""
-    config_dir = get_config_dir()
-    config_dir.mkdir(parents=True, exist_ok=True)
-
-    config_path = get_config_path()
-    with open(config_path, "w", encoding="utf-8") as f:
-        json.dump(asdict(config), f, indent=2)
+    atomic_write_text(get_config_path(), json.dumps(asdict(config), indent=2))
 
 
 def find_claude_cli() -> Optional[str]:

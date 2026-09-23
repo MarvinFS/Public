@@ -7,8 +7,7 @@ import urllib.request
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from config import get_config_dir
-from retry import with_retry
+from config import atomic_write_text, get_config_dir
 
 
 # Supported currencies
@@ -76,21 +75,16 @@ def load_cached_rates() -> Optional[ExchangeRates]:
 
 def save_rates_cache(rates: ExchangeRates) -> None:
     """Save exchange rates to cache."""
-    cache_path = get_rates_cache_path()
-    cache_path.parent.mkdir(parents=True, exist_ok=True)
-
     try:
-        with open(cache_path, "w", encoding="utf-8") as f:
-            json.dump({
-                "rates": rates.rates,
-                "timestamp": rates.timestamp.isoformat(),
-                "source": rates.source,
-            }, f)
-    except IOError:
+        atomic_write_text(get_rates_cache_path(), json.dumps({
+            "rates": rates.rates,
+            "timestamp": rates.timestamp.isoformat(),
+            "source": rates.source,
+        }))
+    except OSError:
         pass
 
 
-@with_retry(max_attempts=3, base_delay=1.0)
 def fetch_exchange_rates() -> Optional[ExchangeRates]:
     """Fetch current exchange rates from a free API."""
     try:

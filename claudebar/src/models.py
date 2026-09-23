@@ -242,7 +242,7 @@ class DeepSeekSnapshot:
     prev_month_cost_usd: float = 0.0
     prev_month_tokens: int = 0
 
-    # Trailing 7 days, oldest first, ending today (zero-filled for quiet days)
+    # Trailing DAILY_HISTORY_DAYS days, oldest first, ending today (zero-filled)
     daily_costs: list[float] = field(default_factory=list)
     daily_tokens: list[int] = field(default_factory=list)
     daily_requests: list[int] = field(default_factory=list)
@@ -254,6 +254,12 @@ class DeepSeekSnapshot:
     # Status
     error_message: Optional[str] = None   # why there is no balance
     usage_error: Optional[str] = None     # why there is no usage
+
+    # When each half was last fetched. The halves fail independently, and one
+    # carried over from the cache keeps its own time rather than taking the
+    # time of the fetch that carried it.
+    balance_fetched_at: Optional[datetime] = None
+    usage_fetched_at: Optional[datetime] = None
 
     # Staleness tracking (for cached data)
     is_stale: bool = False

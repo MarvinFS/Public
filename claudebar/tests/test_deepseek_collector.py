@@ -101,7 +101,7 @@ class TestAssembly:
 
         assert snap.today_cost_usd == 1.0
         assert snap.today_tokens == 100
-        assert len(snap.daily_costs) == 7          # a full week, zero-filled
+        assert len(snap.daily_costs) == 31         # the chart's 31 days, zero-filled
         assert snap.daily_costs[-1] == 1.0
         assert snap.last7_cost_usd == 1.0 + (2.0 if today.day == 1 else 0.0)
 
@@ -229,6 +229,23 @@ class TestCacheFallback:
         assert snap.prev_month_cost_usd == 12.5
         assert snap.prev_month_tokens == 1250
         assert snap.is_stale
+
+    def test_a_carried_half_keeps_its_own_age(self, monkeypatch):
+        """Usage fetched now, balance carried from three days ago: the panel
+        says three days, and the balance is not re-stamped as fresh when this
+        snapshot is saved (verification P5)."""
+        from models import DeepSeekSnapshot
+        fixed_rates(monkeypatch)
+        old = datetime.now() - timedelta(days=3)
+        cached = DeepSeekSnapshot(balance_available=True, balance_usable=True,
+                                  balance_total=12.0, balance_fetched_at=old)
+        today = date.today().isoformat()
+        isolate(monkeypatch, cached=cached,
+                usage=du.UsageData(available=True, currency="USD", days=[day(today, cost=1.0)]))
+        snap = dc.DataCollector().collect_deepseek()
+        assert snap.stale_since == old
+        assert snap.balance_fetched_at == old
+        assert snap.usage_fetched_at == snap.timestamp
 
 
 class TestCacheRoundTrip:

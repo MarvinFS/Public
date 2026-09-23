@@ -1,14 +1,13 @@
 """Runtime price catalog from models.dev, with the bundled tables as fallback."""
 
 import json
-import os
 import urllib.request
 from datetime import datetime, timedelta
 from typing import Optional
 
 import codex_pricing
 import pricing
-from config import get_config_dir
+from config import atomic_write_text, get_config_dir
 
 URL = "https://models.dev/api.json"
 CACHE_TTL = timedelta(hours=24)
@@ -44,12 +43,7 @@ def _fetch() -> Optional[dict]:
         }
         data["timestamp"] = datetime.now().isoformat()
 
-        path = _cache_path()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_suffix(".tmp")
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(data, f)
-        os.replace(tmp, path)
+        atomic_write_text(_cache_path(), json.dumps(data))
         return data
     except Exception:
         return None

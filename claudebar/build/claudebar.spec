@@ -37,6 +37,15 @@ a = Analysis(
     noarchive=False,
 )
 
+# Pillow's wheel carries a decoder for every format it supports. ClaudeBar opens
+# only PNG, so the AVIF, WebP and colour-management plugins are dead weight
+# (8.5 MB, most of it AVIF). Pillow imports a plugin only when a file of that
+# format is opened, so nothing here ever loads them. The Linux build drops the
+# same three.
+_UNUSED_BY_THIS_APP = ("PIL\\_avif.", "PIL\\_webp.", "PIL\\_imagingcms.")
+a.binaries = [entry for entry in a.binaries
+              if not any(marker in entry[0] for marker in _UNUSED_BY_THIS_APP)]
+
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 
 exe = EXE(

@@ -80,6 +80,29 @@ def test_codex_daily_series_ends_on_the_given_day_and_pads_missing_days(tmp_path
     assert all(u.total_tokens == 0 for u in series[:-1])
 
 
+def test_codex_daily_series_buckets_each_request_by_its_own_local_day(tmp_path):
+    """A session started before midnight and left running, and an old session
+    resumed today (codex appends to the original file), spend today's tokens."""
+    def turn(local, tokens):
+        stamp = local.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+        return {"type": "event_msg", "timestamp": stamp, "payload": {"type": "token_count", "info": {
+            "last_token_usage": {"input_tokens": tokens, "output_tokens": 0}}}}
+
+    def write(dir_day, *events):
+        day_dir = tmp_path / str(dir_day.year) / f"{dir_day.month:02d}" / f"{dir_day.day:02d}"
+        day_dir.mkdir(parents=True)
+        (day_dir / "rollout.jsonl").write_text(
+            "\n".join(json.dumps(e) for e in events) + "\n", encoding="utf-8")
+
+    write(datetime(2026, 9, 8), turn(datetime(2026, 9, 8, 23, 30), 1_000),
+          turn(datetime(2026, 9, 9, 0, 30), 2_000))
+    write(datetime(2026, 6, 25), turn(datetime(2026, 9, 9, 10, 0), 4_000))
+
+    series = get_codex_daily_usage(tmp_path, days=3, end=datetime(2026, 9, 9, 12, 0))
+
+    assert [u.input_tokens for u in series] == [0, 1_000, 6_000]
+
+
 def test_format_tokens_has_a_billions_step():
     assert format_tokens(1_234_000_000) == "1.23B"
     assert format_tokens(999_999_999) == "1000.0M"

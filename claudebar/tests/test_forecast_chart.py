@@ -184,3 +184,47 @@ class TestAxisLabels:
         caption = next(i for i in canvas.find_all()
                        if canvas.type(i) == "text" and canvas.itemcget(i, "text") == "estimated")
         assert canvas.bbox(caption)[1] >= 0
+
+
+class TestNowBesideTheAxisLabels:
+    """"Now" sits at the top, where the 100% gridline label is. Early in a
+    session the Now rule is at the left edge and the two used to overprint."""
+
+    TICKS = [(0, "0%"), (50, "50%"), (100, "100%")]
+
+    def boxes(self, canvas, now_offset):
+        now = NOW + now_offset
+        canvas.set_data(chart.ChartData(
+            recorded=[(now - h(0.5), 99.0), (now, 98.0)], projected=[(now, 98.0)], now=now,
+            start=NOW, end=NOW + h(5), y_max=100.0, y_ticks=self.TICKS))
+        found = {canvas.itemcget(i, "text"): canvas.bbox(i) for i in canvas.find_all()
+                 if canvas.type(i) == "text"}
+        return found["Now"], found["100%"]
+
+    @staticmethod
+    def overlap(a, b):
+        return a[0] < b[2] and b[0] < a[2] and a[1] < b[3] and b[1] < a[3]
+
+    @pytest.mark.parametrize("minutes", [0, 1, 5, 12])
+    def test_now_does_not_overprint_the_top_label_near_the_left_edge(self, canvas, minutes):
+        now, top = self.boxes(canvas, timedelta(minutes=minutes))
+        assert not self.overlap(now, top)
+
+    def test_now_stays_beside_its_rule_in_the_middle(self, canvas):
+        now, _ = self.boxes(canvas, h(2.5))
+        rule_x = chart.x_of(NOW + h(2.5), NOW, NOW + h(5), W)
+        assert rule_x < now[0] <= rule_x + 8
+
+
+class TestTheEmptyMessage:
+    """With nothing to chart the plot stays and the reason is written on it, between
+    gridlines rather than across one."""
+
+    def test_the_message_does_not_sit_on_a_gridline(self, canvas):
+        canvas.set_data(None, "Session reset - waiting for the next reading")
+        text = next(i for i in canvas.find_all()
+                    if canvas.type(i) == "text" and "waiting" in canvas.itemcget(i, "text"))
+        top, bottom = canvas.bbox(text)[1], canvas.bbox(text)[3]
+        for value in (0, 50, 100):
+            row = chart.y_of(value, 100, H)
+            assert not top <= row <= bottom

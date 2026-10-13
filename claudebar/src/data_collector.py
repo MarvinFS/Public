@@ -126,7 +126,7 @@ class DataCollector:
             if self._on_oauth_failure:
                 self._on_oauth_failure(error_msg)
 
-            cached_claude, _, cached_at = load_cache()
+            cached_claude, _, _ = load_cache()
             if cached_claude:
                 # Use cached OAuth data (session/weekly/extra percentages)
                 snapshot.session_percent = cached_claude.session_percent
@@ -143,7 +143,7 @@ class DataCollector:
                 snapshot.banked = cached_claude.banked
                 # Mark as stale
                 snapshot.is_stale = True
-                snapshot.stale_since = cached_at
+                snapshot.stale_since = cached_claude.stale_since
             else:
                 # No cache and OAuth unavailable - surface it rather than render
                 # a silent all-zeros usage panel (the line-121 guard would suppress it).
@@ -272,7 +272,7 @@ class DataCollector:
 
         # If API failed, try to load cached data
         if api_failed:
-            _, cached_openai, cached_at = load_cache()
+            _, cached_openai, _ = load_cache()
             if cached_openai:
                 snapshot.session_percent = cached_openai.session_percent
                 snapshot.session_reset = cached_openai.session_reset
@@ -287,7 +287,7 @@ class DataCollector:
                 snapshot.credits_remaining = cached_openai.credits_remaining
                 snapshot.plan_type = cached_openai.plan_type
                 snapshot.is_stale = True
-                snapshot.stale_since = cached_at
+                snapshot.stale_since = cached_openai.stale_since
 
         # Fetch token usage and costs from local JSONL logs: the daily series
         # ends today, so today, the month and the last 31 days are slices of it.

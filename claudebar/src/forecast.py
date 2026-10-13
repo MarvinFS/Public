@@ -49,6 +49,7 @@ YEAR_DAYS = 365
 
 # A recording that began less than this after its window did needs no estimate.
 ESTIMATE_MIN_GAP = timedelta(minutes=30)
+RESET_EDGE = timedelta(seconds=60)    # a reset this close to the view's start is "at" the start
 
 
 def as_utc(when: Optional[datetime]) -> Optional[datetime]:
@@ -129,6 +130,26 @@ def with_resets(records: list, now: datetime) -> list:
         if reset is not None and t < reset <= after:
             points += [(reset, value), (reset, FULL)]
     return points
+
+
+def edge_steps_to_full(samples: list, start: datetime) -> list:
+    """The samples with any reset step within RESET_EDGE of `start` replaced by a
+    single full point at `start`. Right after a reset the view begins where the
+    earlier session ended, give or take the second the API's reset time jitters
+    by, and the step would be a vertical sliver at the chart's edge."""
+    ordered = sorted(samples, key=lambda s: s[0])
+    out, i = [], 0
+    while i < len(ordered):
+        t, value = ordered[i]
+        after = ordered[i + 1] if i + 1 < len(ordered) else None
+        if (after is not None and after[0] == t and after[1] >= FULL > value
+                and abs(t - start) <= RESET_EDGE):
+            out.append((start, FULL))
+            i += 2
+        else:
+            out.append(ordered[i])
+            i += 1
+    return out
 
 
 def estimate_past(samples: list, remaining: float, resets_at: Optional[datetime],
@@ -315,9 +336,7 @@ def forecast_quota(samples: list, used_percent: float, resets_at: Optional[datet
 
     runout = runout_time(now, remaining, rate, resets_at, window_hours)
     since = min((t for t, _ in samples), default=None)
-    recorded = [(t, v) for t, v in sorted(samples, key=lambda s: s[0]) if start <= t < now]
-    if len(recorded) > 1 and recorded[0][0] == recorded[1][0]:
-        del recorded[0]                   # a reset on the left edge: start from its full side
+    recorded = [(t, v) for t, v in edge_steps_to_full(samples, start) if start <= t < now]
     return QuotaForecast(
         remaining=remaining, rate=rate, start=start, end=end,
         recorded=recorded + [(now, remaining)],

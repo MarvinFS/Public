@@ -32,6 +32,25 @@ def project_window(percent: float, resets_at: Optional[datetime], window_hours: 
     return expected, remaining, runout
 
 
+def reset_clock(resets_at: Optional[datetime], now: Optional[datetime] = None) -> Optional[tuple[bool, str]]:
+    """(ended, words) for a reset time: "in 3m" while it is ahead, "4m ago" once it
+    has passed. Drawn from the time itself, so it does not freeze with a cached reading.
+    None when the reset time is unknown."""
+    if resets_at is None:
+        return None
+    if now is None:
+        now = datetime.now(resets_at.tzinfo)
+    seconds = (resets_at - now).total_seconds()
+    ended = seconds <= 0
+    days, rest = divmod(int(abs(seconds)), 86400)
+    hours, rest = divmod(rest, 3600)
+    minutes = rest // 60
+    span = f"{days}d {hours}h" if days else f"{hours}h {minutes}m" if hours else f"{minutes}m"
+    if not ended:
+        return False, f"in {span}"
+    return True, "just now" if abs(seconds) < 60 else f"{span} ago"
+
+
 class Engine(Enum):
     """AI engine/provider selection."""
     CLAUDE = "claude"

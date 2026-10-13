@@ -16,14 +16,13 @@ from pathlib import Path
 from PIL import Image, ImageDraw, ImageTk
 
 from models import (UsageSnapshot, OpenAISnapshot, DeepSeekSnapshot, CombinedSnapshot, Engine,
-                    project_window, SESSION_WINDOW_HOURS, WEEKLY_WINDOW_HOURS, DAILY_HISTORY_DAYS)
+                    project_window, reset_clock, SESSION_WINDOW_HOURS, WEEKLY_WINDOW_HOURS, DAILY_HISTORY_DAYS)
 from config import Config, save_config, get_resources_path, MIN_REFRESH_INTERVAL, PANEL_VIEWS
 from currency import (
     format_currency, convert_usd, get_exchange_rates, get_supported_currencies,
     get_currency_symbol, ExchangeRates
 )
 from claude_check import check_claude_status, ClaudeStatus
-from snapshot_cache import get_staleness_text
 from pricing import format_tokens
 import banked_resets
 import reset_redeem
@@ -109,6 +108,10 @@ def tab_titles(engine: Engine) -> tuple:
 
 # How long the result of spending a banked reset stays on the panel.
 _NOTICE_SECONDS = 90
+
+# The panel shows times that move without any new data (a countdown, whether a window
+# has ended), so while it is open it is redrawn this often.
+_REDRAW_SECONDS = 60
 
 # Quota view: chart height, and how many detail rows the frame can hold.
 _FORECAST_HEIGHT = 110
@@ -1057,6 +1060,7 @@ class ClaudeBarWindow:
         self._logo_image: Optional[ImageTk.PhotoImage] = None
         self._layout_key = None      # which optional rows are visible
         self._loop_running = False   # the 50 ms update loop is scheduled
+        self._redraw_at = 0.0        # time.monotonic() after which the panel is redrawn
 
         # Engine toggle UI elements
         self._engine_btns: dict = {}       # Engine -> selector Label
@@ -1884,6 +1888,7 @@ class ClaudeBarWindow:
         if not self._window or not self._window.winfo_exists():
             return
 
+        self._redraw_at = time.monotonic() + _REDRAW_SECONDS
         money = lambda usd: format_currency(usd, self.config.currency, self._exchange_rates)
         engine = self._active_engine
         self._apply_accent(engine)
@@ -1895,6 +1900,12 @@ class ClaudeBarWindow:
             self._fill_codex_view(self._openai_snapshot, money)
         elif engine == Engine.DEEPSEEK and self._deepseek_snapshot:
             self._fill_deepseek_view(self._deepseek_snapshot, money)
+
+    def _redraw_if_due(self):
+        """Redraw an open panel once a minute: a countdown moves, and a window can end,
+        without any new reading arriving."""
+        if time.monotonic() >= self._redraw_at and self._window.winfo_viewable():
+            self._refresh_display_immediate()
 
     def _apply_accent(self, engine: Engine):
         """Each engine tints the shared bars and chart with its own colour."""
@@ -2127,15 +2138,18 @@ class ClaudeBarWindow:
 
     def _fill_meta(self, snap, source_text: str, rates_text: str):
         self._rates_label.config(text=f"· {rates_text}" if rates_text else "")
-        if self._is_collecting and snap.is_stale:
-            self._updated_label.config(text="Collecting fresh data...")
-        else:
-            self._updated_label.config(text=f"Updated {snap.timestamp.strftime('%H:%M')}")
+        # One time, when the figures were last updated. For old ones that is the
+        # last good reading, not the attempt that failed: two times side by side
+        # ("Updated 16:28 (from 16:23)") read as a contradiction.
+        old = snap.is_stale and snap.stale_since is not None
+        when = snap.stale_since if old else snap.timestamp
+        stamp = f"{when:%H:%M}" if when.date() == datetime.now().date() else f"{when:%b %d %H:%M}"
+        collecting = self._is_collecting and snap.is_stale
+        self._updated_label.config(text="Collecting fresh data..." if collecting else f"Updated {stamp}")
         # Clear once any snapshot has been applied (stale or fresh); the stale
         # label keeps communicating staleness.
         self._is_collecting = False
-        self._stale_label.config(
-            text=f"(cached from {get_staleness_text(snap.stale_since)})" if snap.is_stale and snap.stale_since else "")
+        self._stale_label.config(text="(cached)" if old else "")
         self._source_label.config(text=source_text)
 
     def _apply_layout(self, layout_key):
@@ -2329,6 +2343,13 @@ class ClaudeBarWindow:
                                                         else "No quota reported"))
 
         now = datetime.now(timezone.utc)
+        reset = forecast.as_utc(resets_at)
+        if reset is not None and reset <= now:
+            # The reading is the last one of a session that is over, so its figures
+            # say nothing about the one that began at the reset. Drawing them
+            # would put the old quota on the new window.
+            return self._forecast_empty(f"{'Session' if session else 'Window'} reset - "
+                                        "waiting for the next reading")
         records = quota_history.load(quota_history.window_key(engine.value, session),
                                      now - quota_history.RETENTION)
         history = forecast.with_resets(records, now)
@@ -2381,9 +2402,21 @@ class ClaudeBarWindow:
 
     def _fill_limit(self, key, percent, reset_str, resets_at, window_hours, placeholder):
         w = self._limits[key]
+        clock = reset_clock(resets_at)
+        if clock and clock[0] and not placeholder:
+            # The reading is the last of a window that is over, so its percentage says
+            # nothing about the one that began at the reset.
+            w["bar"].set_value(0.0, None)
+            w["reset"].config(text=f"Reset {clock[1]}")
+            w["left"].config(text="Waiting for the next reading")
+            for cell in ("note", "pace"):
+                w[cell].config(text="")
+            return
         proj = project_window(percent, resets_at, window_hours)
         w["bar"].set_value(percent, proj[0] if proj else None)
-        w["reset"].config(text=f"Resets {reset_str}" if reset_str else "")
+        # The words from the reading itself only when it carries no reset time to count down.
+        reset_text = clock[1] if clock else reset_str
+        w["reset"].config(text=f"Resets {reset_text}" if reset_text else "")
         w["left"].config(text=placeholder or f"{100 - percent:.0f}% left")
         if placeholder or proj is None:
             for cell in ("note", "pace"):
@@ -2448,7 +2481,7 @@ class ClaudeBarWindow:
 
             # Apply any pending data updates. A step that fails is logged and must
             # not stop the loop, nor keep a finished redeem result from landing.
-            for step in (self._apply_snapshot_update, self._apply_redeem_result):
+            for step in (self._apply_snapshot_update, self._apply_redeem_result, self._redraw_if_due):
                 try:
                     step()
                 except tk.TclError:

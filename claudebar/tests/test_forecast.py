@@ -598,3 +598,26 @@ class TestTimeTicks:
     def test_a_span_of_days_keeps_the_day_ticks(self):
         start = datetime(2026, 10, 9, 15, 0, tzinfo=UTC)
         assert fc.time_ticks(start, start + h(7 * 24), tz=UTC) == fc.day_ticks(start, start + h(7 * 24), tz=UTC)
+
+
+class TestResetAtTheLeftEdge:
+    """Right after a reset the view starts within a second of the reset that
+    ended the earlier session. The step is for the middle of a chart; at its
+    edge it would be a vertical sliver, so the line starts full instead."""
+
+    def records(self, jitter):
+        start = NOW - h(0.01)                         # the new session began 36 s ago
+        old_reset = start + timedelta(seconds=jitter)
+        return [(NOW - h(1), 40.0, old_reset), (NOW - h(0.005), 98.0, NOW + h(4.99))]
+
+    @pytest.mark.parametrize("jitter", [-0.4, 0.0, 0.4, 15.0])
+    def test_a_step_within_a_minute_of_the_edge_is_dropped(self, jitter):
+        history = fc.with_resets(self.records(jitter), NOW)
+        f = fc.forecast_quota(history, 2.0, NOW + h(4.99), 5, NOW)
+        assert f.recorded[0][1] == 100.0
+        assert [v for _, v in f.recorded] == [100.0, 98.0, 98.0]
+
+    def test_a_step_well_inside_the_view_is_kept(self):
+        records = [(NOW - h(3), 40.0, NOW - h(1.8)), (NOW - h(1.5), 98.0, NOW + h(3))]
+        f = fc.forecast_quota(fc.with_resets(records, NOW), 2.0, NOW + h(3), 5, NOW)
+        assert (NOW - h(1.8), 40.0) in f.recorded and (NOW - h(1.8), 100.0) in f.recorded

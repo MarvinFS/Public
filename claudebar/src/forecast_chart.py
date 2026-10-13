@@ -347,21 +347,35 @@ class ForecastChart(tk.Canvas):
         self._labels(d)
         if d is None:
             if self._message:
-                self.create_text(self.w / 2, self.h / 2, text=self._message, fill=self.muted,
-                                 font=self.font)
+                # Midway between the 100% and 50% gridlines, not across the 50% one.
+                self.create_text(self.w / 2, (y_of(100, 100, self.h) + y_of(50, 100, self.h)) / 2,
+                                 text=self._message, fill=self.muted, font=self.font)
             return
 
-        x_now = x_of(d.now, d.start, d.end, self.w)
-        if x_now + 4 + tkfont.Font(root=self, font=self.font).measure("Now") <= self.w:
-            self.create_text(x_now + 4, 1, text="Now", anchor=tk.NW, fill=self.muted, font=self.font)
-        else:                                          # at the right edge: left of the rule
-            self.create_text(x_now - 4, 1, text="Now", anchor=tk.NE, fill=self.muted, font=self.font)
+        self._now_label(d)
         if pill is not None:
             self.create_text((pill[0] + pill[2]) / 2, (pill[1] + pill[3]) / 2, text=d.reset_label,
                              fill=background, font=self._bold_font())
         self._estimate_caption(d)
         self._hover = hover_samples(d.recorded, d.projected, d.now, d.start, d.end, d.y_max,
                                     self.w, self.h)
+
+    def _now_label(self, d: ChartData):
+        """"Now" beside its rule, on the right: after the gridline labels when the
+        rule is close enough to the left edge to run into them, and on the left of
+        the rule when the right side has no room."""
+        font = tkfont.Font(root=self, font=self.font)
+        x_now = x_of(d.now, d.start, d.end, self.w)
+        width, line = font.measure("Now"), font.metrics("linespace")
+        x = x_now + 4
+        for value, label in d.y_ticks:
+            top = y_of(value, d.y_max, self.h) - 1 - line       # the label's rows: top to y - 1
+            if top < 1 + line and y_of(value, d.y_max, self.h) - 1 > 1:
+                x = max(x, 3 + font.measure(label) + 4)
+        if x + width <= self.w:
+            self.create_text(x, 1, text="Now", anchor=tk.NW, fill=self.muted, font=self.font)
+        else:                                          # at the right edge: left of the rule
+            self.create_text(x_now - 4, 1, text="Now", anchor=tk.NE, fill=self.muted, font=self.font)
 
     def _bold_font(self):
         return (self.font[0], self.font[1], "bold") if self.font and len(self.font) > 1 else self.font

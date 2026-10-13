@@ -5,6 +5,8 @@ from datetime import datetime
 from enum import Enum
 from typing import Optional
 
+from banked_resets import BankedResets
+
 SESSION_WINDOW_HOURS = 5
 WEEKLY_WINDOW_HOURS = 168
 DAILY_HISTORY_DAYS = 31
@@ -117,6 +119,9 @@ class UsageSnapshot(_UsageStatus):
     extra_limit: float = 0.0             # Monthly limit in actual currency
     extra_currency: str = "usd"          # Currency code from API
 
+    # Saved one-time limit resets; None when the response had none to report
+    banked: Optional[BankedResets] = None
+
     # Log-derived data
     today_cost_usd: float = 0.0
     month_cost_usd: float = 0.0
@@ -142,6 +147,11 @@ class UsageSnapshot(_UsageStatus):
         """Return status level using default thresholds."""
         return self.get_status_level()
 
+    def charted_window(self) -> tuple:
+        """(is the session, percent used, resets_at, window hours) of the window
+        the quota view charts: always the 5-hour session."""
+        return True, self.session_percent, self.session_resets_at, SESSION_WINDOW_HOURS
+
 
 @dataclass
 class OpenAISnapshot(_UsageStatus):
@@ -156,6 +166,13 @@ class OpenAISnapshot(_UsageStatus):
     weekly_percent: float = 0.0
     weekly_reset: Optional[str] = None
     weekly_resets_at: Optional[datetime] = None
+    # Window lengths as the API reports them. The "weekly" slot holds any window
+    # over six hours, so on some plans it is 30 days, not 7.
+    session_window_hours: float = SESSION_WINDOW_HOURS
+    weekly_window_hours: float = WEEKLY_WINDOW_HOURS
+
+    # Saved one-time limit resets; None when the response had none to report
+    banked: Optional[BankedResets] = None
 
     # Token usage (from local JSONL logs)
     today_input_tokens: int = 0
@@ -192,6 +209,14 @@ class OpenAISnapshot(_UsageStatus):
     @property
     def month_total_tokens(self) -> int:
         return self.month_input_tokens + self.month_output_tokens
+
+    def charted_window(self) -> tuple:
+        """(is the session, percent used, resets_at, window hours) of the window
+        the quota view charts: the 5-hour session where the plan has one, else
+        its one long window."""
+        if self.session_available:
+            return True, self.session_percent, self.session_resets_at, self.session_window_hours
+        return False, self.weekly_percent, self.weekly_resets_at, self.weekly_window_hours
 
 
 @dataclass

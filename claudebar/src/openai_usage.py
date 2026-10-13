@@ -3,11 +3,20 @@
 import base64
 import json
 import os
+import logging
+import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 from pathlib import Path
+
+from banked_resets import BankedResets, parse_codex_banked
+
+logger = logging.getLogger("claudebar")
+
+USAGE_URL = "https://chatgpt.com/backend-api/wham/usage"
+RESET_CREDITS_URL = "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits"
 
 
 
@@ -68,6 +77,7 @@ class OpenAIUsageData:
     weekly: Optional[OpenAIUsageWindow] = None
     credits_remaining: Optional[float] = None
     plan_type: Optional[str] = None  # "plus", "pro", "enterprise", "free"
+    banked: Optional[BankedResets] = None  # saved one-time resets, when the response has them
     error: Optional[str] = None
 
     @property
@@ -156,6 +166,47 @@ def load_codex_token() -> Optional[str]:
         return None
 
 
+def load_codex_account_id() -> Optional[str]:
+    """The ChatGPT account id from Codex's auth.json, when it has one."""
+    try:
+        with open(get_codex_auth_path(), "r", encoding="utf-8") as f:
+            account_id = (json.load(f).get("tokens") or {}).get("account_id")
+    except (OSError, json.JSONDecodeError, AttributeError, TypeError):
+        return None
+    return account_id if isinstance(account_id, str) and account_id else None
+
+
+def chatgpt_headers(access_token: str, account_id: Optional[str] = None) -> dict:
+    """Headers for a call to the ChatGPT backend (usage, credits, redeem)."""
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+        "User-Agent": "ClaudeBar/1.0",
+    }
+    if account_id:
+        headers["ChatGPT-Account-ID"] = account_id
+    return headers
+
+
+def fetch_reset_credits(access_token: str, account_id: Optional[str] = None) -> Optional[dict]:
+    """The banked reset credits, or None if the call fails for any reason.
+
+    The usage call already gave the count, so a failure here costs only the
+    titles and expiries and is not worth an error."""
+    try:
+        req = urllib.request.Request(RESET_CREDITS_URL, method="GET",
+                                     headers=chatgpt_headers(access_token, account_id))
+        with urllib.request.urlopen(req, timeout=10) as response:
+            body = json.loads(response.read().decode("utf-8"))
+        return body if isinstance(body, dict) else None
+    except urllib.error.HTTPError as e:
+        logger.debug("Reset credit details answered HTTP %d", e.code)
+    except (urllib.error.URLError, OSError, ValueError) as e:
+        logger.debug("Reset credit details unavailable: %s", type(e).__name__)
+    return None
+
+
 def _parse_window(raw: Optional[dict]) -> Optional[OpenAIUsageWindow]:
     """Build a usage window from one `rate_limit.*_window` object."""
     if not raw:
@@ -199,17 +250,8 @@ def fetch_openai_usage(access_token: Optional[str] = None) -> OpenAIUsageData:
     if not access_token:
         return OpenAIUsageData(error="No Codex OAuth token. Run 'codex login' first.")
 
-    url = "https://chatgpt.com/backend-api/wham/usage"
-
-    headers = {
-        "Authorization": f"Bearer {access_token}",
-        "Accept": "application/json",
-        "Content-Type": "application/json",
-        "User-Agent": "ClaudeBar/1.0",
-    }
-
     try:
-        req = urllib.request.Request(url, headers=headers, method="GET")
+        req = urllib.request.Request(USAGE_URL, headers=chatgpt_headers(access_token), method="GET")
 
         with urllib.request.urlopen(req, timeout=10) as response:
             data = json.loads(response.read().decode("utf-8"))
@@ -239,11 +281,21 @@ def fetch_openai_usage(access_token: Optional[str] = None) -> OpenAIUsageData:
             except (ValueError, TypeError):
                 pass
 
+        # Banked resets: the usage call has the count; the list (titles and
+        # expiries) costs one more call, made only when there is something to list.
+        now = datetime.now(timezone.utc)
+        credits_block = data.get("rate_limit_reset_credits")
+        banked = parse_codex_banked(credits_block, None, now)
+        if banked is not None and banked.available > 0:
+            details = fetch_reset_credits(access_token, load_codex_account_id())
+            banked = parse_codex_banked(credits_block, details, now)
+
         return OpenAIUsageData(
             five_hour=five_hour,
             weekly=weekly,
             credits_remaining=credits_balance,
             plan_type=plan_type,
+            banked=banked,
         )
 
     except urllib.error.HTTPError as e:

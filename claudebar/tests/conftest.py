@@ -28,3 +28,10 @@ def temp_dir():
     """Create a temporary directory."""
     with tempfile.TemporaryDirectory() as td:
         yield Path(td)
+
+
+@pytest.fixture(autouse=True)
+def _isolated_appdata(tmp_path, monkeypatch):
+    """Point %LOCALAPPDATA% at a temp dir, so no test reads or writes the real
+    snapshot cache, config or quota history."""
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "localappdata"))

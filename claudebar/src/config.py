@@ -12,6 +12,9 @@ from typing import Optional
 # Every refresh calls the usage APIs; faster than this only invites rate limits.
 MIN_REFRESH_INTERVAL = 30  # seconds
 
+# The two halves of the panel below the limits: today's costs, or the forecast.
+PANEL_VIEWS = ("cost", "forecast")
+
 
 @dataclass
 class Config:
@@ -27,6 +30,8 @@ class Config:
     # Where the user last dragged the panel; None = default spot near the tray
     window_x: Optional[int] = None
     window_y: Optional[int] = None
+    # Which half of the panel shows below the limits; kept across providers and restarts
+    panel_view: str = "cost"
 
 
 def get_resources_path() -> Path:
@@ -88,6 +93,8 @@ def load_config() -> Config:
                 config.refresh_interval = max(MIN_REFRESH_INTERVAL, int(config.refresh_interval))
             except (TypeError, ValueError):
                 config.refresh_interval = Config().refresh_interval
+            if config.panel_view not in PANEL_VIEWS:
+                config.panel_view = Config().panel_view
             return config
         except (json.JSONDecodeError, TypeError, KeyError):
             pass

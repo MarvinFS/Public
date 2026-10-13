@@ -7,7 +7,8 @@ from typing import Optional
 import logging
 
 from models import (UsageSnapshot, OpenAISnapshot, DeepSeekSnapshot, CombinedSnapshot,
-                    Engine, ModelUsage, DAILY_HISTORY_DAYS)
+                    Engine, ModelUsage, DAILY_HISTORY_DAYS, SESSION_WINDOW_HOURS,
+                    WEEKLY_WINDOW_HOURS)
 from log_parser import collect_entries, aggregate_usage, daily_costs
 from oauth_usage import fetch_oauth_usage, OAuthUsageData
 from openai_usage import fetch_openai_usage, is_codex_configured
@@ -15,6 +16,7 @@ from codex_log_parser import CodexTokenUsage, get_codex_daily_usage
 from config import get_claude_projects_dir
 import model_catalog
 import deepseek_auth
+import quota_history
 from deepseek_usage import fetch_usage, fetch_summary, last_n_days, month_days, previous_month_days
 from currency import to_usd
 from snapshot_cache import save_cache, load_cache, load_deepseek_cache
@@ -24,6 +26,16 @@ logger = logging.getLogger("claudebar")
 #: While the OAuth fetch stays broken, repeat the warning no more often than
 #: this. A five-minute refresh would otherwise write 288 identical lines a day.
 OAUTH_REMINDER_INTERVAL = timedelta(hours=1)
+
+
+def _remaining(percent_used: float) -> float:
+    return min(max(100.0 - percent_used, 0.0), 100.0)
+
+
+def _window_hours(window, default: float) -> float:
+    """A window's length in hours as the API reported it, else the default."""
+    seconds = getattr(window, "window_seconds", 0) if window else 0
+    return seconds / 3600 if seconds > 0 else default
 
 
 def format_duration(since: Optional[datetime]) -> str:
@@ -86,6 +98,11 @@ class DataCollector:
                 snapshot.session_percent = oauth_data.session.percent
                 snapshot.session_reset = oauth_data.session.reset_str
                 snapshot.session_resets_at = oauth_data.session.resets_at
+                # A live reading of the session the quota view charts; a response
+                # without one must not be recorded as a full quota.
+                quota_history.append(quota_history.window_key("claude", True),
+                                     _remaining(snapshot.session_percent),
+                                     snapshot.session_resets_at, snapshot.timestamp)
             if oauth_data.weekly:
                 snapshot.weekly_percent = oauth_data.weekly.percent
                 snapshot.weekly_reset = oauth_data.weekly.reset_str
@@ -96,6 +113,7 @@ class DataCollector:
                 snapshot.extra_used = oauth_data.extra.used_credits
                 snapshot.extra_limit = oauth_data.extra.monthly_limit
                 snapshot.extra_currency = oauth_data.extra.currency
+            snapshot.banked = oauth_data.banked
             snapshot.cli_available = True
         else:
             snapshot.cli_available = False
@@ -122,6 +140,7 @@ class DataCollector:
                 snapshot.extra_used = cached_claude.extra_used
                 snapshot.extra_limit = cached_claude.extra_limit
                 snapshot.extra_currency = cached_claude.extra_currency
+                snapshot.banked = cached_claude.banked
                 # Mark as stale
                 snapshot.is_stale = True
                 snapshot.stale_since = cached_at
@@ -231,6 +250,13 @@ class DataCollector:
                 snapshot.weekly_percent = openai_data.weekly_percent
                 snapshot.weekly_reset = openai_data.weekly_reset
                 snapshot.weekly_resets_at = openai_data.weekly.resets_at if openai_data.weekly else None
+                snapshot.session_window_hours = _window_hours(openai_data.five_hour, SESSION_WINDOW_HOURS)
+                snapshot.weekly_window_hours = _window_hours(openai_data.weekly, WEEKLY_WINDOW_HOURS)
+                snapshot.banked = openai_data.banked
+                session, used, resets_at, _ = snapshot.charted_window()
+                if openai_data.five_hour if session else openai_data.weekly:
+                    quota_history.append(quota_history.window_key("codex", session),
+                                         _remaining(used), resets_at, snapshot.timestamp)
                 snapshot.credits_remaining = openai_data.credits_remaining
                 snapshot.plan_type = openai_data.plan_type
                 snapshot.available = True
@@ -255,6 +281,9 @@ class DataCollector:
                 snapshot.weekly_percent = cached_openai.weekly_percent
                 snapshot.weekly_reset = cached_openai.weekly_reset
                 snapshot.weekly_resets_at = cached_openai.weekly_resets_at
+                snapshot.session_window_hours = cached_openai.session_window_hours
+                snapshot.weekly_window_hours = cached_openai.weekly_window_hours
+                snapshot.banked = cached_openai.banked
                 snapshot.credits_remaining = cached_openai.credits_remaining
                 snapshot.plan_type = cached_openai.plan_type
                 snapshot.is_stale = True
@@ -340,6 +369,7 @@ class DataCollector:
             snapshot.error_message = None
             snapshot.balance_fetched_at = snapshot.timestamp
             balance_fresh = True
+            quota_history.append("deepseek", snapshot.balance_total, now=snapshot.timestamp)
             if summary.total_cost_available:
                 snapshot.total_cost_usd = summary.total_cost
                 snapshot.total_cost_available = True

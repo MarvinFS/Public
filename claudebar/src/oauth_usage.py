@@ -1,14 +1,30 @@
 """Fetch Claude usage data via OAuth API."""
 
 import json
+import logging
 import time
+import urllib.error
 import urllib.request
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 from pathlib import Path
 
+from banked_resets import BankedResets, CLAUDE, parse_claude_banked
 from validation import safe_get_float
+
+logger = logging.getLogger("claudebar")
+
+USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
+
+# Anthropic only hands the banked-reset data (`cedar_ember`) to the Claude CLI's
+# own user-agent; with ours it answers `eligible: false, reason: surface`. The
+# user approved sending it. This is the one place the version lives (the profile
+# and redeem calls import it): the CLI's version is not read anywhere cheap, and
+# running `claude --version` on every refresh is not.
+CLAUDE_CLI_VERSION = "2.1.296"
+CLAUDE_CLI_USER_AGENT = f"claude-cli/{CLAUDE_CLI_VERSION} (external, cli)"
+LEGACY_USER_AGENT = "ClaudeBar/1.0"
 
 
 @dataclass
@@ -74,6 +90,7 @@ class OAuthUsageData:
     weekly: Optional[UsageWindow] = None   # seven_day
     extra: Optional[ExtraUsage] = None
     plan_type: Optional[str] = None  # subscription tier
+    banked: Optional[BankedResets] = None  # saved one-time resets, when the response has them
     error: Optional[str] = None
 
     @property
@@ -186,28 +203,47 @@ def parse_reset_time(resets_at_str: Optional[str]) -> Optional[datetime]:
         return None
 
 
+def claude_headers(access_token: str, user_agent: str = CLAUDE_CLI_USER_AGENT) -> dict:
+    """Headers for a call to Anthropic's OAuth API (usage, profile, redeem)."""
+    return {
+        "Authorization": f"Bearer {access_token}",
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+        "anthropic-beta": "oauth-2025-04-20",
+        "User-Agent": user_agent,
+    }
+
+
+def _get_usage_json(url: str, access_token: str, user_agent: str) -> dict:
+    req = urllib.request.Request(url, headers=claude_headers(access_token, user_agent), method="GET")
+    with urllib.request.urlopen(req, timeout=10) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
 def fetch_oauth_usage(access_token: Optional[str] = None, debug: bool = False) -> OAuthUsageData:
-    """Fetch usage data from Anthropic OAuth API."""
+    """Fetch usage data from Anthropic OAuth API.
+
+    One request, which also asks for the banked resets. A 400 or 403 repeats it
+    once as the old plain call, so the quota windows survive a refusal of the
+    new query; the banked data is then "failed to load". Any other failure
+    (401, 429, a server error, no network) is not retried, so a struggling
+    endpoint is never called twice per refresh.
+    """
     if access_token is None:
         access_token, reason = access_token_or_reason()
         if not access_token:
             return OAuthUsageData(error=reason or "No OAuth token available")
 
-    url = "https://api.anthropic.com/api/oauth/usage"
-
-    headers = {
-        "Authorization": f"Bearer {access_token}",
-        "Accept": "application/json",
-        "Content-Type": "application/json",
-        "anthropic-beta": "oauth-2025-04-20",
-        "User-Agent": "ClaudeBar/1.0",
-    }
-
     try:
-        req = urllib.request.Request(url, headers=headers, method="GET")
-
-        with urllib.request.urlopen(req, timeout=10) as response:
-            data = json.loads(response.read().decode("utf-8"))
+        banked_failed = False
+        try:
+            data = _get_usage_json(f"{USAGE_URL}?cedar_ember=1", access_token, CLAUDE_CLI_USER_AGENT)
+        except urllib.error.HTTPError as e:
+            if e.code not in (400, 403):
+                raise
+            logger.debug("Usage call with banked resets answered HTTP %d, repeating it plain", e.code)
+            data = _get_usage_json(USAGE_URL, access_token, LEGACY_USER_AGENT)
+            banked_failed = True
 
         # Debug logging to verify API response format
         if debug:
@@ -256,11 +292,17 @@ def fetch_oauth_usage(access_token: Optional[str] = None, debug: bool = False) -
             data.get("tier")
         )
 
+        if banked_failed:
+            banked = BankedResets(provider=CLAUDE, state="failed")
+        else:
+            banked = parse_claude_banked(data.get("cedar_ember"), datetime.now(timezone.utc))
+
         return OAuthUsageData(
             session=session,
             weekly=weekly,
             extra=extra,
             plan_type=plan_type,
+            banked=banked,
         )
 
     except urllib.error.HTTPError as e:

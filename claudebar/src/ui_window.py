@@ -6,16 +6,18 @@ from tkinter import ttk
 from typing import Optional, Callable
 import ctypes
 import threading
+import time
 import io
+from types import SimpleNamespace
 import urllib.request
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageTk
 
 from models import (UsageSnapshot, OpenAISnapshot, DeepSeekSnapshot, CombinedSnapshot, Engine,
                     project_window, SESSION_WINDOW_HOURS, WEEKLY_WINDOW_HOURS, DAILY_HISTORY_DAYS)
-from config import Config, save_config, get_resources_path, MIN_REFRESH_INTERVAL
+from config import Config, save_config, get_resources_path, MIN_REFRESH_INTERVAL, PANEL_VIEWS
 from currency import (
     format_currency, convert_usd, get_exchange_rates, get_supported_currencies,
     get_currency_symbol, ExchangeRates
@@ -23,6 +25,12 @@ from currency import (
 from claude_check import check_claude_status, ClaudeStatus
 from snapshot_cache import get_staleness_text
 from pricing import format_tokens
+import banked_resets
+import reset_redeem
+import forecast
+import forecast_text
+import quota_history
+from forecast_chart import ForecastChart, ChartData, nice_ticks
 import logging
 
 import browser_signin
@@ -84,6 +92,27 @@ _ENABLED_FLAG = {
     Engine.CODEX: "codex_enabled",
     Engine.DEEPSEEK: "deepseek_enabled",
 }
+
+# The labels of the two panel views, per engine: DeepSeek has spend and a
+# balance rather than costs and a quota.
+_TAB_TITLES = {
+    Engine.CLAUDE: ("Cost", "Quota"),
+    Engine.CODEX: ("Cost", "Quota"),
+    Engine.DEEPSEEK: ("Spend", "Balance"),
+}
+
+
+def tab_titles(engine: Engine) -> tuple:
+    """(cost view, forecast view) labels for an engine's subtabs."""
+    return _TAB_TITLES[engine]
+
+
+# How long the result of spending a banked reset stays on the panel.
+_NOTICE_SECONDS = 90
+
+# Quota view: chart height, and how many detail rows the frame can hold.
+_FORECAST_HEIGHT = 110
+_FORECAST_ROWS = 6
 
 # Selector glyph geometry
 _GLYPH_CANVAS = 64
@@ -848,6 +877,113 @@ class SettingsDialog:
         self.dialog.destroy()
 
 
+class ResetConfirmDialog:
+    """Confirmation before spending a banked reset, which cannot be undone.
+
+    Modal, like the settings dialog. Cancel is the default: it takes the focus,
+    and Escape, the window close button and a stray Return all cancel. Only a
+    deliberate click on (or Tab to and press of) "Use reset" confirms; one that
+    lands in the first ARM_SECONDS, such as the second click of a double-click
+    on the panel's Use button, is ignored. The callbacks run once, after the
+    dialog is gone.
+    """
+
+    ARM_SECONDS = 0.6
+
+    def __init__(self, parent, lines, on_confirm, on_cancel, style):
+        self._parent = parent
+        self._on_confirm, self._on_cancel = on_confirm, on_cancel
+        self._finished = False
+        self._armed_at = time.monotonic() + self.ARM_SECONDS
+        try:
+            parent.attributes('-topmost', False)
+        except tk.TclError:
+            pass
+
+        self.dialog = tk.Toplevel(parent)
+        self.dialog.title("Use banked reset")
+        self.dialog.configure(bg=style.bg)
+        self.dialog.resizable(False, False)
+        self.dialog.transient(parent)
+        self.dialog.grab_set()
+        self.dialog.attributes('-topmost', True)
+
+        frame = tk.Frame(self.dialog, bg=style.bg)
+        frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=18)
+        tk.Label(frame, text="Use a banked reset?", font=style.font(11, "bold"),
+                 fg=style.primary, bg=style.bg).pack(anchor=tk.W)
+        *details, warning = lines
+        for i, line in enumerate(details):
+            tk.Label(frame, text=line, font=style.font(10 if i == 0 else 9, "bold" if i == 0 else "normal"),
+                     fg=style.primary if i == 0 else style.secondary, bg=style.bg,
+                     wraplength=320, justify=tk.LEFT, anchor=tk.W).pack(
+                         anchor=tk.W, pady=(10 if i == 0 else 3, 0))
+        tk.Label(frame, text=warning, font=style.font(9, "bold"), fg=style.accent, bg=style.bg,
+                 wraplength=320, justify=tk.LEFT, anchor=tk.W).pack(anchor=tk.W, pady=(14, 0))
+
+        buttons = tk.Frame(frame, bg=style.bg)
+        buttons.pack(fill=tk.X, pady=(18, 0))
+        self.use_button = self._button(buttons, "Use reset", self._confirm, style, style.warn, style.bg)
+        self.cancel_button = self._button(buttons, "Cancel", self._cancel, style, style.primary,
+                                          style.button_bg)
+        self.use_button.pack(side=tk.RIGHT)
+        self.cancel_button.pack(side=tk.RIGHT, padx=(0, 8))
+
+        self.dialog.bind("<Escape>", lambda e: self._cancel())
+        self.dialog.bind("<Return>", lambda e: self._cancel())
+        self.dialog.protocol("WM_DELETE_WINDOW", self._cancel)
+
+        self.dialog.update_idletasks()
+        width = max(360, self.dialog.winfo_reqwidth())
+        height = self.dialog.winfo_reqheight()
+        x = parent.winfo_x() + (parent.winfo_width() - width) // 2
+        y = parent.winfo_y() + (parent.winfo_height() - height) // 2
+        x = max(0, min(x, self.dialog.winfo_screenwidth() - width))
+        y = max(0, min(y, self.dialog.winfo_screenheight() - height - 60))
+        self.dialog.geometry(f"{width}x{height}+{x}+{y}")
+        self.dialog.lift()
+        self.dialog.focus_force()
+        self.cancel_button.focus_set()
+
+    @staticmethod
+    def _button(parent, text, command, style, fg, bg):
+        button = tk.Button(parent, text=text, command=command, font=style.font(9, "bold"),
+                           fg=fg, bg=bg, activeforeground=style.primary,
+                           activebackground=style.hover_bg, relief=tk.FLAT, bd=0, cursor="hand2",
+                           padx=14, pady=5, takefocus=1, highlightthickness=2,
+                           highlightbackground=style.bg, highlightcolor=style.accent)
+        # Return presses the focused button, so Tab then Return is a deliberate confirm.
+        button.bind("<Return>", lambda e: (command(), "break")[1])
+        button.bind("<Enter>", lambda e: button.config(bg=style.hover_bg))
+        button.bind("<Leave>", lambda e: button.config(bg=bg))
+        return button
+
+    def _close(self):
+        try:
+            self.dialog.grab_release()
+            self.dialog.destroy()
+        except tk.TclError:
+            pass
+        try:
+            self._parent.attributes('-topmost', True)
+        except tk.TclError:
+            pass
+
+    def _confirm(self):
+        if self._finished or time.monotonic() < self._armed_at:
+            return
+        self._finished = True
+        self._close()
+        self._on_confirm()
+
+    def _cancel(self):
+        if self._finished:
+            return
+        self._finished = True
+        self._close()
+        self._on_cancel()
+
+
 class ClaudeBarWindow:
     """Premium popup window for ClaudeBar."""
 
@@ -897,6 +1033,27 @@ class ClaudeBarWindow:
         self._top_model: Optional[tk.Label] = None
         self._top_share: Optional[tk.Label] = None
         self._source_label: Optional[tk.Label] = None
+        self._tabs: dict = {}            # view -> (label, underline)
+        self._cost_frame: Optional[tk.Frame] = None
+        self._forecast_frame: Optional[tk.Frame] = None
+        self._fc_value: Optional[tk.Label] = None
+        self._fc_rate: Optional[tk.Label] = None
+        self._fc_chart: Optional[ForecastChart] = None
+        self._fc_rows: list = []         # (row, label, value) widgets of the detail rows
+        self._banked_frame: Optional[tk.Frame] = None
+        self._banked_visible = False
+        # Spending a banked reset: the confirm/idempotency/in-flight rules, the runner
+        # (replaceable, so tests never reach a real endpoint), and the worker's result.
+        self._redeem_flow = reset_redeem.RedeemFlow()
+        self._run_attempt = reset_redeem.run_attempt
+        self._redeem_result: Optional[tuple] = None    # (provider, outcome), set by the worker
+        self._redeem_thread: Optional[threading.Thread] = None
+        self._banked_notice: Optional[tuple] = None    # (text, colour, until, provider)
+        self._notice_job = None
+        # Until a snapshot collected after the last result arrives, the old one's
+        # claim on the reset is out of date: nothing is offered from a snapshot
+        # collected before this.
+        self._redeem_floor = datetime.min
         self._logo_image: Optional[ImageTk.PhotoImage] = None
         self._layout_key = None      # which optional rows are visible
         self._loop_running = False   # the 50 ms update loop is scheduled
@@ -1005,10 +1162,20 @@ class ClaudeBarWindow:
         self._limits_host.pack(fill=tk.X)
         self._create_limits(self._limits_host)
         self._create_balance(self._limits_host)
-        self._hairline(content)
-        self._create_stats(content)
-        self._hairline(content)
-        self._create_chart(content)
+        self._create_banked(self._limits_host)
+        self._hairline(content, pady=(10, 6))
+        self._create_tabs(content)
+        # Host for the two views of the lower half. Like the limits host, its
+        # children pack and unpack inside it, so switching never reorders the
+        # panel around it.
+        self._view_host = tk.Frame(content, bg=self.bg_color)
+        self._view_host.pack(fill=tk.X)
+        self._cost_frame = tk.Frame(self._view_host, bg=self.bg_color)
+        self._create_stats(self._cost_frame)
+        self._hairline(self._cost_frame)
+        self._create_chart(self._cost_frame)
+        self._forecast_frame = tk.Frame(self._view_host, bg=self.bg_color)
+        self._create_forecast(self._forecast_frame)
         self._create_footer(content)
 
         self._window.bind('<Escape>', lambda e: self.hide())
@@ -1249,16 +1416,16 @@ class ClaudeBarWindow:
         """One rate-limit block: title/reset, bar, left/run-out, pace."""
         frame = tk.Frame(parent, bg=self.bg_color)
         frame.pack(fill=tk.X, pady=(0, 8))
-        _, _, reset = self._row(frame, title, "", self._font(9, "bold"), self._font(8),
-                                self.text_primary, self.text_muted)
+        _, heading, reset = self._row(frame, title, "", self._font(9, "bold"), self._font(8),
+                                      self.text_primary, self.text_muted)
         bar = PaceBar(frame, width=348, bg=self.bg_color, track=self.track_color)
         bar.pack(fill=tk.X)
         _, left, note = self._row(frame, "", "", self._font(8, mono=True), self._font(8),
                                   self.text_secondary, self.text_muted)
         pace = tk.Label(frame, text="", font=self._font(8), fg=self.text_muted, bg=self.bg_color)
         pace.pack(anchor=tk.W)
-        self._limits[key] = {"frame": frame, "reset": reset, "bar": bar, "left": left,
-                             "note": note, "pace": pace}
+        self._limits[key] = {"frame": frame, "title": heading, "reset": reset, "bar": bar,
+                             "left": left, "note": note, "pace": pace}
 
     def _create_limits(self, parent):
         self._create_limit(parent, "session", "Session (5-hour)")
@@ -1285,6 +1452,134 @@ class ClaudeBarWindow:
         # needs no caption. Packed by _fill_deepseek_view.
         self._balance_state = tk.Label(self._balance_frame, text="", font=self._font(8),
                                        fg=self.warn_color, bg=self.bg_color)
+
+    def _create_banked(self, parent):
+        """Saved one-time limit resets (Claude and Codex), under the limit bars.
+        Packed only when there is something to say."""
+        self._banked_frame = tk.Frame(parent, bg=self.bg_color)
+        row, _, self._banked_hint = self._row(self._banked_frame, "Banked resets", "",
+                                              self._font(9, "bold"), self._font(8),
+                                              self.text_primary, self.text_muted)
+        # The action. Packed only while a live reset can be spent (or one is in
+        # flight, when it shows disabled); otherwise a short reason stands here.
+        self._banked_use = tk.Button(
+            row, text="Use", command=self._on_use_reset, font=self._font(8, "bold"),
+            fg=self.accent_color, bg=self.bg_color, activeforeground=self.text_primary,
+            activebackground=self.active_engine_bg, disabledforeground=self.text_muted,
+            relief=tk.FLAT, bd=0, cursor="hand2", padx=8, pady=0, takefocus=1,
+            highlightthickness=1, highlightbackground=self.bg_color,
+            highlightcolor=self.accent_color)
+        self._banked_use.bind("<Enter>", lambda e: self._banked_use.cget("state") == tk.NORMAL
+                              and self._banked_use.config(fg=self.text_primary))
+        self._banked_use.bind("<Leave>", lambda e: self._banked_use.config(fg=self.accent_color))
+        self._banked_line = tk.Label(self._banked_frame, text="", font=self._font(8),
+                                     fg=self.text_secondary, bg=self.bg_color)
+        # What happened to the last attempt to spend one (until it times out).
+        self._banked_notice_label = tk.Label(
+            self._banked_frame, text="", font=self._font(8), fg=self.text_secondary,
+            bg=self.bg_color, justify=tk.LEFT, anchor=tk.W, wraplength=348)
+
+    def _create_tabs(self, parent):
+        """Two labels that switch the lower half between today's costs and the
+        quota forecast. The active one carries an underline in the provider's
+        accent, resting on a hairline that runs the width of the strip."""
+        self._tabs = {}
+        strip = tk.Frame(parent, bg=self.bg_color)
+        strip.pack(fill=tk.X)
+        row = tk.Frame(strip, bg=self.bg_color)
+        row.pack(fill=tk.X)
+        for view in PANEL_VIEWS:
+            tab = tk.Frame(row, bg=self.bg_color)
+            tab.pack(side=tk.LEFT, padx=(0, 18))
+            # A label rather than a button so it matches the rest of the panel's
+            # type; focusable, with Return and Space, so the keyboard reaches it.
+            label = tk.Label(tab, text="", font=self._font(9, "bold"), bg=self.bg_color,
+                             cursor="hand2", takefocus=1, highlightthickness=1,
+                             highlightbackground=self.bg_color, highlightcolor=self.accent_color,
+                             padx=0, pady=2)
+            label.pack()
+            rule = tk.Frame(tab, bg=self.bg_color, height=2)
+            rule.pack(fill=tk.X)
+            for event in ("<Button-1>", "<Return>", "<space>"):
+                label.bind(event, lambda e, v=view: self._on_view_select(v))
+            label.bind("<Enter>", lambda e, v=view: self._tab_hover(v, True))
+            label.bind("<Leave>", lambda e, v=view: self._tab_hover(v, False))
+            self._tabs[view] = (label, rule)
+        tk.Frame(strip, bg=self.separator_color, height=1).pack(fill=tk.X)
+        tk.Frame(parent, bg=self.bg_color, height=10).pack()
+
+    def _tab_hover(self, view, inside):
+        label, _ = self._tabs[view]
+        if view != self.config.panel_view:
+            label.config(fg=self.text_secondary if inside else self.text_muted)
+
+    def _paint_tabs(self, engine: Engine):
+        accent = _ENGINE_META[engine][3]
+        for view, title in zip(PANEL_VIEWS, tab_titles(engine)):
+            label, rule = self._tabs[view]
+            on = view == self.config.panel_view
+            label.config(text=title, fg=self.text_primary if on else self.text_muted)
+            rule.config(bg=accent if on else self.bg_color)
+
+    def _sync_view(self, engine: Engine):
+        """Label the tabs for this engine and show the chosen half of the panel."""
+        self._paint_tabs(engine)
+        showing, hidden = ((self._forecast_frame, self._cost_frame)
+                           if self.config.panel_view == "forecast"
+                           else (self._cost_frame, self._forecast_frame))
+        if hidden.winfo_manager():
+            hidden.pack_forget()
+        if not showing.winfo_manager():
+            showing.pack(fill=tk.X)
+
+    def _on_view_select(self, view: str):
+        if view == self.config.panel_view:
+            return
+        self.config.panel_view = view
+        save_config(self.config)
+        self._refresh_display_immediate()
+
+    def _create_forecast(self, parent):
+        """The quota (or balance) view: a headline figure, the chart, detail rows."""
+        header = tk.Frame(parent, bg=self.bg_color)
+        header.pack(fill=tk.X, pady=(0, 6))
+        self._fc_value = tk.Label(header, text="", font=self._font(16, "bold", mono=True),
+                                  fg=self.accent_color, bg=self.bg_color)
+        self._fc_value.pack(side=tk.LEFT)
+        self._fc_rate = tk.Label(header, text="", font=self._font(8), fg=self.text_muted,
+                                 bg=self.bg_color)
+        self._fc_rate.pack(side=tk.LEFT, padx=(8, 0), pady=(0, 2), anchor=tk.S)
+        self._fc_chart = ForecastChart(parent, width=348, height=_FORECAST_HEIGHT,
+                                       bg=self.bg_color, font=self._font(7),
+                                       grid=self.separator_color, muted=self.text_muted)
+        self._fc_chart.pack(fill=tk.X)
+        rows_host = tk.Frame(parent, bg=self.bg_color)
+        rows_host.pack(fill=tk.X, pady=(8, 0))
+        self._fc_rows = [self._row(rows_host, "", "", self._font(8), self._font(8),
+                                   self.text_muted, self.text_secondary)
+                         for _ in range(_FORECAST_ROWS)]
+        for frame, _, _ in self._fc_rows:
+            frame.pack_forget()
+
+    def _set_forecast_rows(self, rows) -> int:
+        """Show the given (label, value, tone) rows in the pool, in order."""
+        colours = {"normal": self.text_secondary, "ok": self.ok_color,
+                   "warn": self.warn_color, "muted": self.text_muted}
+        for frame, _, _ in self._fc_rows:
+            frame.pack_forget()
+        shown = rows[:len(self._fc_rows)]
+        for (frame, left, right), (label, value, tone) in zip(self._fc_rows, shown):
+            left.config(text=label)
+            right.config(text=value, fg=colours[tone])
+            frame.pack(fill=tk.X, pady=1)
+        return len(shown)
+
+    def _forecast_empty(self, message: str) -> int:
+        """Nothing to forecast yet: the plot stays, with the reason on it."""
+        self._fc_value.config(text="—")
+        self._fc_rate.config(text="")
+        self._fc_chart.set_data(None, message)
+        return self._set_forecast_rows([])
 
     def _create_stat(self, parent, key, title, row, column):
         f = tk.Frame(parent, bg=self.bg_color)
@@ -1592,6 +1887,7 @@ class ClaudeBarWindow:
         money = lambda usd: format_currency(usd, self.config.currency, self._exchange_rates)
         engine = self._active_engine
         self._apply_accent(engine)
+        self._sync_view(engine)
 
         if engine == Engine.CLAUDE and self._snapshot:
             self._fill_claude_view(self._snapshot, money)
@@ -1604,7 +1900,7 @@ class ClaudeBarWindow:
         """Each engine tints the shared bars and chart with its own colour."""
         accent = _ENGINE_META[engine][3]
         for widget in (self._limits["session"]["bar"], self._limits["weekly"]["bar"],
-                       self._extra_bar, self._chart):
+                       self._extra_bar, self._chart, self._fc_chart):
             if widget is not None:
                 widget.set_accent(accent)
 
@@ -1636,6 +1932,9 @@ class ClaudeBarWindow:
                 widget.pack_forget()
         if not self._balance_frame.winfo_manager():
             self._balance_frame.pack(fill=tk.X, pady=(0, 8))
+        if self._banked_frame.winfo_manager():
+            self._banked_frame.pack_forget()
+        self._banked_visible = False
 
     def _fill_claude_view(self, snap: UsageSnapshot, money):
         collecting = (self._is_collecting and snap.session_percent == 0 and snap.weekly_percent == 0
@@ -1643,11 +1942,15 @@ class ClaudeBarWindow:
         unavailable = not snap.cli_available and not snap.is_stale
         placeholder = "Collecting..." if collecting else ("Unavailable" if unavailable else None)
 
+        self._limits["session"]["title"].config(text="Session (5-hour)")
+        self._limits["weekly"]["title"].config(text="Weekly")
         self._fill_limit("session", snap.session_percent, snap.session_reset,
                          snap.session_resets_at, SESSION_WINDOW_HOURS, placeholder)
         self._fill_limit("weekly", snap.weekly_percent, snap.weekly_reset,
                          snap.weekly_resets_at, WEEKLY_WINDOW_HOURS, placeholder)
         self._show_limits(session_visible=True, extra_visible=snap.extra_enabled)
+        banked_shown = self._fill_banked(
+            snap, self._extra_frame if snap.extra_enabled else self._limits["weekly"]["frame"])
 
         if snap.extra_enabled:
             symbol = get_currency_symbol(snap.extra_currency.upper())
@@ -1663,19 +1966,27 @@ class ClaudeBarWindow:
                        f"{format_tokens(snap.last31_tokens)} tokens", f"Last {DAILY_HISTORY_DAYS} days")
         self._fill_daily_costs(snap.daily_costs, snap.timestamp.date(), money)
         self._fill_top_model(snap.models_used, snap.month_cost_usd)
-        self._fill_meta(snap, "Estimated from local Claude Code logs", "")
-        self._apply_layout(("claude", snap.extra_enabled))
+        quota_rows = self._fill_quota_view(Engine.CLAUDE, snap, snap.banked, placeholder)
+        self._fill_meta(snap, self._source_text("Estimated from local Claude Code logs",
+                                                "Usage limits from the Claude API"), "")
+        self._apply_layout(("claude", snap.extra_enabled, banked_shown, self.config.panel_view,
+                            quota_rows))
 
     def _fill_codex_view(self, snap: OpenAISnapshot, money):
         collecting = (self._is_collecting and snap.session_percent == 0 and snap.weekly_percent == 0
                       and not snap.is_stale)
         placeholder = "Collecting..." if collecting else None
 
+        # The window lengths come from the API: the "weekly" slot holds any
+        # window over six hours, and a free plan's is 30 days.
+        self._limits["session"]["title"].config(text=f"Session ({snap.session_window_hours:g}-hour)")
+        self._limits["weekly"]["title"].config(text=forecast_text.window_title(snap.weekly_window_hours))
         self._fill_limit("session", snap.session_percent, snap.session_reset,
-                         snap.session_resets_at, SESSION_WINDOW_HOURS, placeholder)
+                         snap.session_resets_at, snap.session_window_hours, placeholder)
         self._fill_limit("weekly", snap.weekly_percent, snap.weekly_reset,
-                         snap.weekly_resets_at, WEEKLY_WINDOW_HOURS, placeholder)
+                         snap.weekly_resets_at, snap.weekly_window_hours, placeholder)
         self._show_limits(session_visible=snap.session_available, extra_visible=False)
+        banked_shown = self._fill_banked(snap, self._limits["weekly"]["frame"])
 
         self._set_stat("today", money(snap.today_cost_usd),
                        f"{format_tokens(snap.today_total_tokens)} tokens", "Today")
@@ -1685,8 +1996,11 @@ class ClaudeBarWindow:
                        f"{format_tokens(snap.last31_tokens)} tokens", f"Last {DAILY_HISTORY_DAYS} days")
         self._fill_daily_costs(snap.daily_costs, snap.timestamp.date(), money)
         self._fill_top_model([], 0.0)
-        self._fill_meta(snap, "Estimated from local Codex logs", "")
-        self._apply_layout(("codex", snap.session_available))
+        quota_rows = self._fill_quota_view(Engine.CODEX, snap, snap.banked, placeholder)
+        self._fill_meta(snap, self._source_text("Estimated from local Codex logs",
+                                                "Usage limits from the Codex API"), "")
+        self._apply_layout(("codex", snap.session_available, banked_shown,
+                            self.config.panel_view, quota_rows))
 
     def _fill_daily_costs(self, daily_costs, today, money):
         """The week cell and the month chart, for the engines costed from local
@@ -1761,8 +2075,11 @@ class ClaudeBarWindow:
             source = "Balance only · sign in for usage"
         else:
             source = "Sign in to DeepSeek in Settings"
-        self._fill_meta(snap, source, rates)
-        self._apply_layout(("deepseek", snap.usage_available, usable))
+        balance_rows = self._fill_balance_view(snap, money)
+        self._fill_meta(snap, self._source_text(
+            source, "Balance from the DeepSeek platform" if snap.balance_available else source), rates)
+        self._apply_layout(("deepseek", snap.usage_available, usable, self.config.panel_view,
+                            balance_rows))
 
     @staticmethod
     def _chart_days(count, today, dates=()) -> list:
@@ -1825,6 +2142,242 @@ class ClaudeBarWindow:
         if layout_key != self._layout_key:
             self._layout_key = layout_key
             self._update_window_size()
+
+    def _source_text(self, cost_text: str, forecast_text_: str) -> str:
+        """The footer's source note follows the half of the panel showing."""
+        return forecast_text_ if self.config.panel_view == "forecast" else cost_text
+
+    def _fill_banked(self, snap, after) -> tuple:
+        """Show the banked-resets block under the limit bars, or hide it.
+
+        Drawn when there is something to say: at least one reset available, or
+        a failure to load them, or the result of spending one. An account that is
+        not eligible, or has none, gets no row. Returns what decides the block's
+        height (whether it shows, its line, the Use button, the notice's text),
+        which is part of the layout key.
+        """
+        banked, stale = snap.banked, snap.is_stale
+        now = datetime.now(timezone.utc)
+        notice = self._active_notice()
+        has_data = banked is not None and (
+            banked.state == "failed" or (banked.state == "ok" and banked.available > 0))
+        # A result stays on the panel even when the reset it spent was the last one.
+        self._banked_visible = shown = has_data or notice is not None
+        if not shown:
+            if self._banked_frame.winfo_manager():
+                self._banked_frame.pack_forget()
+            return (False,)
+
+        # Spendable only from live data; cached data is shown, never offered.
+        claim = (banked_resets.claim_for(banked, True, now)
+                 if banked is not None and self._spendable(snap) else None)
+        in_flight = self._redeem_flow.in_flight
+        use_shown = claim is not None or in_flight
+        if use_shown:
+            self._banked_hint.config(text="")
+            self._banked_use.config(text="Using…" if in_flight else "Use",
+                                    state=tk.DISABLED if in_flight else tk.NORMAL)
+            if not self._banked_use.winfo_manager():
+                self._banked_use.pack(side=tk.RIGHT)
+        else:
+            if self._banked_use.winfo_manager():
+                self._banked_use.pack_forget()
+            # Why a live reset cannot be used right now; cached data names no reason.
+            self._banked_hint.config(
+                text="" if stale or banked is None else banked_resets.claim_hint(banked, now))
+
+        for widget in (self._banked_line, self._banked_notice_label):
+            if widget.winfo_manager():
+                widget.pack_forget()
+        if has_data:
+            if banked.state == "failed":
+                text, colour = "Couldn't load banked resets", self.text_muted
+            else:
+                text, urgent = banked_resets.summary_text(banked, now)
+                colour = self.accent_color if urgent else self.text_secondary
+            if stale:
+                text += " · cached"
+            self._banked_line.config(text=text, fg=colour)
+            self._banked_line.pack(anchor=tk.W)
+        if notice is not None:
+            self._banked_notice_label.config(text=notice[0], fg=notice[1])
+            self._banked_notice_label.pack(anchor=tk.W, pady=(2, 0))
+        self._banked_frame.pack(fill=tk.X, pady=(8, 0), after=after)
+        return True, has_data, use_shown, notice[0] if notice is not None else ""
+
+    # --- spending a banked reset ---------------------------------------------------------
+
+    def _active_snapshot(self):
+        return {Engine.CLAUDE: self._snapshot,
+                Engine.CODEX: self._openai_snapshot}.get(self._active_engine)
+
+    def _spendable(self, snap) -> bool:
+        """Live data, collected after the last attempt finished: never the cached
+        fallback, and never a snapshot that predates a result."""
+        return snap is not None and not snap.is_stale and snap.timestamp > self._redeem_floor
+
+    def _banked_claim(self):
+        """What may be spent right now from the active engine, or None."""
+        snap = self._active_snapshot()
+        if not self._spendable(snap):
+            return None
+        return banked_resets.claim_for(snap.banked, True, datetime.now(timezone.utc))
+
+    def _usage_text(self) -> str:
+        """The current usage the confirmation quotes, in the panel's own words."""
+        snap = self._active_snapshot()
+        if self._active_engine == Engine.CLAUDE:
+            return f"session {snap.session_percent:.0f}%, weekly {snap.weekly_percent:.0f}%"
+        weekly = f"{forecast_text.window_title(snap.weekly_window_hours).lower()} {snap.weekly_percent:.0f}%"
+        return f"session {snap.session_percent:.0f}%, {weekly}" if snap.session_available else weekly
+
+    def _on_use_reset(self):
+        """The Use button: ask first. Nothing is sent until the dialog confirms."""
+        claim = self._banked_claim()
+        if not self._window or not self._redeem_flow.request(claim):
+            return
+        lines = reset_redeem.confirm_lines(claim, self._usage_text(), datetime.now(timezone.utc))
+        style = SimpleNamespace(
+            bg=self.bg_color, primary=self.text_primary, secondary=self.text_secondary,
+            muted=self.text_muted, accent=self.accent_color, warn=self.warn_color,
+            button_bg=self.active_engine_bg, hover_bg=self.track_color, font=self._font)
+        ResetConfirmDialog(self._window, lines, self._confirm_redeem, self._cancel_redeem, style)
+
+    def _cancel_redeem(self):
+        self._redeem_flow.cancel()
+
+    def _confirm_redeem(self):
+        """The user confirmed: send exactly one request, off the UI thread."""
+        if self._redeem_flow.in_flight:
+            return                                   # a repeated confirmation sends nothing
+        attempt = self._redeem_flow.confirm(self._banked_claim())
+        if attempt is None:
+            self._set_notice("The reset changed · check the panel and try again", "warn",
+                             self._active_engine.value)
+            return
+        # The flow is "sending" from here, so the worker starts before anything
+        # else that could fail: a repaint error must not strand it.
+        try:
+            self._redeem_thread = threading.Thread(target=self._redeem_worker, args=(attempt,),
+                                                   daemon=True)
+            self._redeem_thread.start()
+        except RuntimeError:                         # no thread: nothing was sent
+            self._redeem_flow.finish(reset_redeem.NOT_SENT)
+            self._set_notice(reset_redeem.NOT_SENT.message, "warn", self._active_engine.value)
+            return
+        self._refresh_display_immediate()            # Use shows disabled while it is out
+
+    def _redeem_worker(self, attempt):
+        try:
+            outcome = self._run_attempt(attempt)
+        except Exception as e:                       # never let a message carry a secret
+            logger.warning("Banked reset request failed: %s", type(e).__name__)
+            outcome = reset_redeem.UNKNOWN
+        with self._lock:
+            self._redeem_result = (attempt.provider, outcome)
+
+    def _apply_redeem_result(self):
+        """On the UI thread: show what happened, then re-fetch usage rather than
+        working out the new state."""
+        with self._lock:
+            result, self._redeem_result = self._redeem_result, None
+        if result is None:
+            return
+        provider, outcome = result
+        self._redeem_flow.finish(outcome)
+        self._redeem_floor = datetime.now()
+        self._set_notice(outcome.message, "ok" if outcome.kind == "success"
+                         else "info" if outcome.kind == "nothing" else "warn", provider)
+        self.on_refresh()
+
+    def _set_notice(self, text: str, tone: str, provider: str):
+        colour = {"ok": self.ok_color, "info": self.text_secondary, "warn": self.warn_color}[tone]
+        self._banked_notice = (text, colour, time.monotonic() + _NOTICE_SECONDS, provider)
+        if self._window and self._window.winfo_exists():
+            if self._notice_job is not None:
+                self._window.after_cancel(self._notice_job)
+            self._notice_job = self._window.after(_NOTICE_SECONDS * 1000, self._expire_notice)
+        self._refresh_display_immediate()
+
+    def _expire_notice(self):
+        self._notice_job = None
+        self._banked_notice = None
+        self._refresh_display_immediate()
+
+    def _active_notice(self):
+        notice = self._banked_notice
+        if notice is None or time.monotonic() >= notice[2] or notice[3] != self._active_engine.value:
+            return None
+        return notice
+
+    def _banked_notice_text(self) -> str:
+        notice = self._active_notice()
+        return notice[0] if notice else ""
+
+    def _fill_quota_view(self, engine: Engine, snap, banked, placeholder) -> int:
+        """The quota view of the snapshot's charted window: the 5-hour session,
+        or a Codex plan's one long window. Returns the detail rows shown (0
+        while the other view is up, so the history is not read for nothing)."""
+        if self.config.panel_view != "forecast":
+            return 0
+        accent = _ENGINE_META[engine][3]
+        self._fc_value.config(fg=accent)
+        self._fc_chart.set_accent(accent)
+        session, used, resets_at, window_hours = snap.charted_window()
+        if placeholder or (resets_at is None and used == 0):
+            return self._forecast_empty(placeholder or ("No session running" if session
+                                                        else "No quota reported"))
+
+        now = datetime.now(timezone.utc)
+        records = quota_history.load(quota_history.window_key(engine.value, session),
+                                     now - quota_history.RETENTION)
+        history = forecast.with_resets(records, now)
+        f = forecast.forecast_quota(history, used, forecast.as_utc(resets_at), window_hours, now)
+        value, rate = forecast_text.quota_header(f)
+        window = f"{forecast_text.window_title(window_hours)} {'session' if session else 'window'}"
+        self._fc_value.config(text=value)
+        self._fc_rate.config(text=f"{window} · {rate}" + (" · cached" if snap.is_stale else ""))
+        self._fc_chart.set_data(ChartData(
+            recorded=f.recorded, projected=f.projected, now=now, start=f.start, end=f.end,
+            y_max=100.0, y_ticks=[(0, "0%"), (50, "50%"), (100, "100%")],
+            day_ticks=forecast.time_ticks(f.start, f.end),
+            estimated=f.estimated, reset=f.next_reset, reset_label=forecast_text.gain_text(f),
+            tip=lambda t, v, projected: forecast_text.tip_text(
+                t, v, projected, now, None, forecast_text.percent_left)))
+        return self._set_forecast_rows(forecast_text.quota_rows(f, banked, now))
+
+    def _axis_money(self, usd: float) -> str:
+        """A gridline label: whole units when it is one, cents otherwise."""
+        amount = convert_usd(usd, self.config.currency, self._exchange_rates)
+        symbol = get_currency_symbol(self.config.currency)
+        return f"{symbol}{amount:,.0f}" if abs(amount - round(amount)) < 1e-6 else f"{symbol}{amount:,.2f}"
+
+    def _fill_balance_view(self, snap: DeepSeekSnapshot, money) -> int:
+        """The balance view: recorded balance and a projection at the recent spend."""
+        if self.config.panel_view != "forecast":
+            return 0
+        accent = _ENGINE_META[Engine.DEEPSEEK][3]
+        self._fc_value.config(fg=accent)
+        self._fc_chart.set_accent(accent)
+        if not snap.balance_available:
+            return self._forecast_empty(snap.balance_message)
+
+        now = datetime.now(timezone.utc)
+        history = [(r.t, r.value) for r in quota_history.load("deepseek", now - quota_history.RETENTION)]
+        f = forecast.forecast_balance(history, snap.balance_total, snap.daily_costs, now)
+        value, rate = forecast_text.balance_header(f, self._money_fixed, money)
+        self._fc_value.config(text=value)
+        self._fc_rate.config(text=rate + (" · cached" if snap.is_stale else ""))
+        # Gridlines sit at round values of the currency shown, whatever the rate.
+        factor = convert_usd(1.0, self.config.currency, self._exchange_rates) or 1.0
+        ticks = [(v / factor, self._axis_money(v / factor)) for v in nice_ticks(f.y_max * factor)]
+        self._fc_chart.set_data(ChartData(
+            recorded=f.recorded, projected=f.projected, now=now, start=f.start, end=f.end,
+            y_max=f.y_max, y_ticks=ticks,
+            day_ticks=forecast.day_ticks(f.start, f.end),
+            tip=lambda t, v, projected: forecast_text.tip_text(
+                t, v, projected, now, None, lambda x: f"{self._money_fixed(x)} left")))
+        return self._set_forecast_rows(forecast_text.balance_rows(f, now, None, money))
 
     def _fill_limit(self, key, percent, reset_str, resets_at, window_hours, placeholder):
         w = self._limits[key]
@@ -1893,8 +2446,15 @@ class ClaudeBarWindow:
                 self._loop_running = False
                 return
 
-            # Apply any pending data updates
-            self._apply_snapshot_update()
+            # Apply any pending data updates. A step that fails is logged and must
+            # not stop the loop, nor keep a finished redeem result from landing.
+            for step in (self._apply_snapshot_update, self._apply_redeem_result):
+                try:
+                    step()
+                except tk.TclError:
+                    raise
+                except Exception:
+                    logger.exception("Panel update failed")
 
             # Check if status needs update
             with self._lock:

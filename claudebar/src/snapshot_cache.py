@@ -10,8 +10,10 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+import banked_resets
 from config import atomic_write_text, get_config_dir
-from models import UsageSnapshot, OpenAISnapshot, DeepSeekSnapshot, TokenUsage, ModelUsage
+from models import (UsageSnapshot, OpenAISnapshot, DeepSeekSnapshot, TokenUsage, ModelUsage,
+                    SESSION_WINDOW_HOURS, WEEKLY_WINDOW_HOURS)
 
 
 def get_cache_path() -> Path:
@@ -54,6 +56,13 @@ def _to_dict(snapshot) -> dict:
     data.pop("is_stale", None)
     data.pop("stale_since", None)
     return data
+
+
+def _hours(value, default: float) -> float:
+    """A window length from the cache, or the default when it is missing or odd."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not value > 0:
+        return default
+    return float(value)
 
 
 def _dict_to_usage_snapshot(data: dict, is_stale: bool = False, stale_since: Optional[datetime] = None) -> UsageSnapshot:
@@ -104,6 +113,7 @@ def _dict_to_usage_snapshot(data: dict, is_stale: bool = False, stale_since: Opt
         cli_available=data.get("cli_available", True),
         logs_available=data.get("logs_available", True),
         error_message=data.get("error_message"),
+        banked=banked_resets.from_dict(data.get("banked")),
         is_stale=is_stale,
         stale_since=stale_since,
     )
@@ -121,6 +131,9 @@ def _dict_to_openai_snapshot(data: dict, is_stale: bool = False, stale_since: Op
         weekly_percent=data.get("weekly_percent", 0.0),
         weekly_reset=data.get("weekly_reset"),
         weekly_resets_at=_parse_iso(data.get("weekly_resets_at")),
+        session_window_hours=_hours(data.get("session_window_hours"), SESSION_WINDOW_HOURS),
+        weekly_window_hours=_hours(data.get("weekly_window_hours"), WEEKLY_WINDOW_HOURS),
+        banked=banked_resets.from_dict(data.get("banked")),
         today_input_tokens=data.get("today_input_tokens", 0),
         today_output_tokens=data.get("today_output_tokens", 0),
         today_cached_tokens=data.get("today_cached_tokens", 0),

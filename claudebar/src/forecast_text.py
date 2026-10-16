@@ -51,6 +51,22 @@ def _date(when: datetime, tz=None) -> str:
     return f"{local:%b} {local.day}"
 
 
+def hours_text(hours: float) -> str:
+    """"3d 4h" from a day up, else "0h 24m"."""
+    if hours == float("inf"):
+        return "never"
+    d, r = divmod(hours, 24)
+    if d >= 1:
+        return f"{int(d)}d {int(r)}h"
+    return f"{int(r)}h {int((r % 1) * 60)}m"
+
+
+def runout_text(hours: float) -> str:
+    """The run-out as the limit bar words it, "Runs out in 0h 24m". The quota view's row
+    starts with the same words, so one prediction never reads as two."""
+    return f"Runs out in {hours_text(hours)}"
+
+
 def percent_left(value: float) -> str:
     return f"{value:.0f}% left"
 
@@ -71,7 +87,8 @@ def quota_rows(f: QuotaForecast, banked: Optional[banked_resets.BankedResets],
         rows.append(("Next reset", f"{gain_text(f)} {MID_DOT} {stamp(f.next_reset, now, tz)}", "normal"))
 
     if f.runout is not None:
-        rows.append(("At this rate", f"Runs out {stamp(f.runout, now, tz)}", "warn"))
+        hours = max((f.runout - now).total_seconds() / 3600, 0.0)
+        rows.append(("At this rate", f"{runout_text(hours)} {MID_DOT} {stamp(f.runout, now, tz)}", "warn"))
         if banked_resets.restores_at(banked, f.runout, now):
             rows.append(("", "A banked reset would restore it", "muted"))
     elif f.unused is not None:

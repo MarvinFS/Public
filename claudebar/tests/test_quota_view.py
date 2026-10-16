@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+import quota_history
 import ui_window
 from config import Config
 from models import CombinedSnapshot, Engine, OpenAISnapshot, UsageSnapshot
@@ -92,15 +93,27 @@ def bars(panel, key="session"):
 
 
 class TestTheLimitBarsAfterAReset:
-    def test_a_reading_from_before_the_reset_is_not_shown_as_the_current_quota(self, panel):
+    def test_a_window_that_has_reset_shows_as_full_until_the_next_reading(self, panel):
+        # A reset always brings the window back to nothing used, and a refused request
+        # can keep the next reading away for twenty minutes or more.
         snap = claude(-timedelta(minutes=2, seconds=10), used=14.0, stale=True)
         snap.session_reset = "in 3m"                        # the words from when it was collected
         show(panel, claude=snap)
         shown = bars(panel)
         assert shown["reset"] == "Reset 2m ago"
-        assert shown["left"] == "Waiting for the next reading"
+        assert shown["left"] == "100% left"
+        assert shown["pace"] == "New session"
         assert shown["bar"] == (0.0, None)
-        assert shown["note"] == "" and shown["pace"] == ""
+        assert shown["note"] == ""
+
+    def test_a_weekly_window_that_has_reset_is_full_too(self, panel):
+        snap = claude(h(2))
+        snap.weekly_resets_at = datetime.now(UTC) - timedelta(minutes=5)
+        show(panel, claude=snap)
+        shown = bars(panel, "weekly")
+        assert shown["left"] == "100% left"
+        assert shown["pace"] == "New window"
+        assert shown["bar"] == (0.0, None)
 
     def test_the_weekly_bar_is_not_touched(self, panel):
         show(panel, claude=claude(-h(0.1), stale=True))
@@ -128,7 +141,7 @@ class TestTheLimitBarsAfterAReset:
         snap.session_resets_at = datetime.now(UTC) - timedelta(seconds=30)
         panel._redraw_at = 0.0                              # a minute has gone by
         panel._redraw_if_due()
-        assert bars(panel)["left"] == "Waiting for the next reading"
+        assert bars(panel)["left"] == "100% left"
 
     def test_nothing_is_redrawn_before_the_minute_is_up(self, panel):
         panel._window.deiconify()
@@ -138,6 +151,62 @@ class TestTheLimitBarsAfterAReset:
         panel._redraw_at = time.monotonic() + 30
         panel._redraw_if_due()
         assert bars(panel)["left"] == "71% left"
+
+
+class TestTheRunOutOnTheLimitBar:
+    """The bar and the quota view answer one question, so they use one rate: how fast the
+    quota drained lately, not the average over the whole session."""
+
+    def record(self, key, snap, minutes_ago_remaining):
+        now = datetime.now(UTC)
+        for minutes, remaining in minutes_ago_remaining:
+            quota_history.append(key, remaining, snap.session_resets_at, now=now - timedelta(minutes=minutes))
+
+    def test_a_charted_session_runs_out_at_the_recent_rate(self, panel):
+        snap = claude(h(2), used=76.0)          # 3 h in: the session average is 25 %/h
+        self.record("claude_session", snap, [(60, 72.0), (30, 48.0), (15, 36.0)])   # 48 %/h lately
+        show(panel, claude=snap)
+        assert bars(panel)["note"] == "Runs out in 0h 30m"      # 24% left at 48 %/h
+
+    def test_the_quota_view_row_starts_with_the_bars_words(self, panel):
+        # One prediction, printed under the bar and again as the chart's caption: the same
+        # words, with the clock time added, so the two never read as two calculations.
+        snap = claude(h(2), used=76.0)
+        self.record("claude_session", snap, [(60, 72.0), (30, 48.0), (15, 36.0)])
+        show(panel, claude=snap)
+        row = next(right.cget("text") for _, left, right in panel._fc_rows
+                   if left.cget("text") == "At this rate")
+        assert bars(panel)["note"] == "Runs out in 0h 30m"
+        assert row.startswith("Runs out in 0h 30m · ")
+
+    def test_a_session_with_no_history_keeps_the_window_average(self, panel):
+        show(panel, claude=claude(h(2), used=76.0))
+        assert bars(panel)["note"] == "Runs out in 0h 56m"      # 24% left at 76% over 3 h
+
+    def test_a_flat_recent_history_lasts_until_the_reset(self, panel):
+        snap = claude(h(2), used=76.0)
+        self.record("claude_session", snap, [(60, 24.0), (30, 24.0), (15, 24.0)])
+        show(panel, claude=snap)
+        assert bars(panel)["note"] == "Lasts until reset"
+
+    def test_the_weekly_bar_has_no_history_and_keeps_the_window_average(self, panel):
+        snap = claude(h(2), used=76.0)
+        snap.weekly_percent = 70.0              # 108 h in: 0.65 %/h, so 30% left lasts 46 h
+        self.record("claude_session", snap, [(60, 72.0), (30, 48.0), (15, 36.0)])
+        show(panel, claude=snap)
+        assert bars(panel, "weekly")["note"] == "Runs out in 1d 22h"
+
+    def test_a_codex_long_window_is_the_charted_one_when_the_plan_has_no_session(self, panel):
+        resets = datetime.now(UTC) + h(24 * 20)
+        codex = OpenAISnapshot(session_available=False, weekly_percent=50.0, weekly_window_hours=720.0,
+                               available=True, weekly_resets_at=resets)
+        now = datetime.now(UTC)
+        for hours_ago, remaining in [(48, 80.0), (36, 70.0), (24, 60.0), (12, 54.0)]:
+            quota_history.append("codex", remaining, resets, now=now - h(hours_ago))
+        show(panel, claude=claude(h(2)), openai=codex, engine=Engine.CODEX)
+        # 26 points over 36 h = 0.72 %/h: the 50% left lasts 69 h. The window average (10 days
+        # in, 50% used) would say 10 days.
+        assert bars(panel, "weekly")["note"] == "Runs out in 2d 21h"
 
 
 class TestWhatTheHeaderSaysAboutOldFigures:

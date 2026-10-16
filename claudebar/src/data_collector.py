@@ -16,9 +16,11 @@ from codex_log_parser import CodexTokenUsage, get_codex_daily_usage
 from config import get_claude_projects_dir
 import model_catalog
 import deepseek_auth
+import claude_cli_snapshot
 import quota_history
 from deepseek_usage import fetch_usage, fetch_summary, last_n_days, month_days, previous_month_days
 from currency import to_usd
+from forecast import as_utc
 from snapshot_cache import save_cache, load_cache, load_deepseek_cache
 
 logger = logging.getLogger("claudebar")
@@ -78,6 +80,7 @@ class DataCollector:
         self._oauth_failures = 0
         self._oauth_failed_since: Optional[datetime] = None
         self._oauth_last_reminder: Optional[datetime] = None
+        self._cli_snapshot_noted = False
 
     def set_oauth_callbacks(self, on_failure: Optional[callable] = None,
                             on_success: Optional[callable] = None) -> None:
@@ -148,6 +151,8 @@ class DataCollector:
                 # No cache and OAuth unavailable - surface it rather than render
                 # a silent all-zeros usage panel (the line-121 guard would suppress it).
                 snapshot.error_message = error_msg
+            if self._apply_cli_snapshot(snapshot):
+                errors = [e for e in errors if not e.startswith("OAuth:")]  # superseded by the reading
         else:
             # OAuth succeeded, notify callback to clear any previous error
             if self._on_oauth_success:
@@ -183,6 +188,53 @@ class DataCollector:
 
         return snapshot
 
+    def _apply_cli_snapshot(self, snapshot: UsageSnapshot) -> bool:
+        """Lay the Claude CLI's saved reading over the cached figures when it is newer.
+
+        The reading comes from a file, so it costs no request and cannot be refused. It
+        stays "cached": it is stamped with the time the CLI took it, and banked resets and
+        extra usage keep their cached values, so a reset is never offered from it.
+        Returns whether it did. Never raises: this is an enhancement behind the endpoint
+        call, not a path of its own.
+        """
+        try:
+            reading = claude_cli_snapshot.read()
+            if reading is None:
+                return False
+            if snapshot.stale_since is not None and as_utc(snapshot.stale_since) >= reading.t:
+                return False
+            usage = reading.usage
+            if usage.session:
+                snapshot.session_percent = usage.session.percent
+                snapshot.session_reset = usage.session.reset_str
+                snapshot.session_resets_at = usage.session.resets_at
+                self._chart_cli_reading(reading)
+            if usage.weekly:
+                snapshot.weekly_percent = usage.weekly.percent
+                snapshot.weekly_reset = usage.weekly.reset_str
+                snapshot.weekly_resets_at = usage.weekly.resets_at
+            snapshot.is_stale = True
+            snapshot.stale_since = reading.t.astimezone().replace(tzinfo=None)
+            snapshot.error_message = None
+            if not self._cli_snapshot_noted:
+                self._cli_snapshot_noted = True
+                logger.info("Using the Claude CLI's saved usage reading from %s",
+                            f"{snapshot.stale_since:%H:%M}")
+            return True
+        except Exception as e:
+            logger.debug("Claude CLI usage snapshot not used: %s", type(e).__name__)
+            return False
+
+    @staticmethod
+    def _chart_cli_reading(reading) -> None:
+        """Record the session once, at the time the CLI took it; every refused refresh
+        reads the same file until the CLI writes a newer one."""
+        key = quota_history.window_key("claude", True)
+        if any(r.t == reading.t for r in quota_history.load(key, reading.t)):
+            return
+        session = reading.usage.session
+        quota_history.append(key, _remaining(session.percent), session.resets_at, reading.t)
+
     def _fetch_usage_limits(self, errors: list) -> OAuthUsageData:
         """Fetch usage limits from the OAuth API (caller falls back to cache)."""
         try:
@@ -209,6 +261,7 @@ class DataCollector:
         self._oauth_failures = 0
         self._oauth_failed_since = None
         self._oauth_last_reminder = None
+        self._cli_snapshot_noted = False
 
     def _note_oauth_failure(self, reason: str) -> None:
         """Warn when the fetch breaks, then at most hourly while it stays broken."""

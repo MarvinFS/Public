@@ -359,15 +359,6 @@ def _round_corners(window) -> None:
         pass
 
 
-def _fmt_hours(h: float) -> str:
-    if h == float("inf"):
-        return "never"
-    d, r = divmod(h, 24)
-    if d >= 1:
-        return f"{int(d)}d {int(r)}h"
-    return f"{int(r)}h {int((r % 1) * 60)}m"
-
-
 class SettingsDialog:
     """Settings dialog for ClaudeBar.
 
@@ -1956,7 +1947,8 @@ class ClaudeBarWindow:
         self._limits["session"]["title"].config(text="Session (5-hour)")
         self._limits["weekly"]["title"].config(text="Weekly")
         self._fill_limit("session", snap.session_percent, snap.session_reset,
-                         snap.session_resets_at, SESSION_WINDOW_HOURS, placeholder)
+                         snap.session_resets_at, SESSION_WINDOW_HOURS, placeholder,
+                         quota_history.window_key(Engine.CLAUDE.value, True))
         self._fill_limit("weekly", snap.weekly_percent, snap.weekly_reset,
                          snap.weekly_resets_at, WEEKLY_WINDOW_HOURS, placeholder)
         self._show_limits(session_visible=True, extra_visible=snap.extra_enabled)
@@ -1992,10 +1984,15 @@ class ClaudeBarWindow:
         # window over six hours, and a free plan's is 30 days.
         self._limits["session"]["title"].config(text=f"Session ({snap.session_window_hours:g}-hour)")
         self._limits["weekly"]["title"].config(text=forecast_text.window_title(snap.weekly_window_hours))
+        # Only the charted window is recorded, so only its bar has a recent rate to use.
+        session_charted = snap.charted_window()[0]
+        key = quota_history.window_key(Engine.CODEX.value, session_charted)
         self._fill_limit("session", snap.session_percent, snap.session_reset,
-                         snap.session_resets_at, snap.session_window_hours, placeholder)
+                         snap.session_resets_at, snap.session_window_hours, placeholder,
+                         key if session_charted else None)
         self._fill_limit("weekly", snap.weekly_percent, snap.weekly_reset,
-                         snap.weekly_resets_at, snap.weekly_window_hours, placeholder)
+                         snap.weekly_resets_at, snap.weekly_window_hours, placeholder,
+                         None if session_charted else key)
         self._show_limits(session_visible=snap.session_available, extra_visible=False)
         banked_shown = self._fill_banked(snap, self._limits["weekly"]["frame"])
 
@@ -2349,7 +2346,7 @@ class ClaudeBarWindow:
             # say nothing about the one that began at the reset. Drawing them
             # would put the old quota on the new window.
             return self._forecast_empty(f"{'Session' if session else 'Window'} reset - "
-                                        "waiting for the next reading")
+                                        "the chart starts with the next reading")
         records = quota_history.load(quota_history.window_key(engine.value, session),
                                      now - quota_history.RETENTION)
         history = forecast.with_resets(records, now)
@@ -2400,17 +2397,32 @@ class ClaudeBarWindow:
                 t, v, projected, now, None, lambda x: f"{self._money_fixed(x)} left")))
         return self._set_forecast_rows(forecast_text.balance_rows(f, now, None, money))
 
-    def _fill_limit(self, key, percent, reset_str, resets_at, window_hours, placeholder):
+    @staticmethod
+    def _recent_runout(history_key, percent, resets_at, window_hours) -> float:
+        """Hours until a window runs dry at the quota view's rate (how fast it drained
+        lately), so the bar and the chart give one answer; inf when it lasts to the reset."""
+        now = datetime.now(timezone.utc)
+        reset = forecast.as_utc(resets_at)
+        history = forecast.with_resets(quota_history.load(history_key, now - quota_history.RETENTION), now)
+        rate = forecast.recent_rate(history, percent, reset, window_hours, now)
+        dry = forecast.runout_time(now, 100 - percent, rate, reset, window_hours)
+        return float("inf") if dry is None else (dry - now).total_seconds() / 3600
+
+    def _fill_limit(self, key, percent, reset_str, resets_at, window_hours, placeholder,
+                    history_key=None):
+        """`history_key` names the recorded window behind this bar (the one the quota view
+        charts); a bar with no recording predicts from its window average."""
         w = self._limits[key]
         clock = reset_clock(resets_at)
         if clock and clock[0] and not placeholder:
-            # The reading is the last of a window that is over, so its percentage says
-            # nothing about the one that began at the reset.
+            # The reading is the last of a window that is over. A reset always starts the
+            # next one at nothing used, and a refused request can hold the next reading back
+            # for twenty minutes, so show the new window as full until then.
             w["bar"].set_value(0.0, None)
             w["reset"].config(text=f"Reset {clock[1]}")
-            w["left"].config(text="Waiting for the next reading")
-            for cell in ("note", "pace"):
-                w[cell].config(text="")
+            w["left"].config(text="100% left")
+            w["note"].config(text="")
+            w["pace"].config(text="New session" if key == "session" else "New window")
             return
         proj = project_window(percent, resets_at, window_hours)
         w["bar"].set_value(percent, proj[0] if proj else None)
@@ -2423,8 +2435,10 @@ class ClaudeBarWindow:
                 w[cell].config(text="")
             return
         expected, remaining, runout = proj
+        if history_key:
+            runout = self._recent_runout(history_key, percent, resets_at, window_hours)
         lasts = runout >= remaining
-        w["note"].config(text="Lasts until reset" if lasts else f"Runs out in {_fmt_hours(runout)}",
+        w["note"].config(text="Lasts until reset" if lasts else forecast_text.runout_text(runout),
                          fg=self.ok_color if lasts else self.warn_color)
         ahead = percent - expected
         w["pace"].config(text="On pace" if ahead <= 5 else f"{ahead:.0f}% ahead of pace")

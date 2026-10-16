@@ -33,5 +33,8 @@ def temp_dir():
 @pytest.fixture(autouse=True)
 def _isolated_appdata(tmp_path, monkeypatch):
     """Point %LOCALAPPDATA% at a temp dir, so no test reads or writes the real
-    snapshot cache, config or quota history."""
+    snapshot cache, config or quota history, and the Claude CLI's config (which a
+    refused refresh reads) at a file that does not exist."""
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "localappdata"))
+    import claude_cli_snapshot
+    monkeypatch.setattr(claude_cli_snapshot, "config_path", lambda: tmp_path / "claude_home" / ".claude.json")

@@ -100,6 +100,14 @@ def drain_rate(samples: list, now: datetime, fallback: float, scale: float = 1.0
     return drops / span
 
 
+def recent_rate(samples: list, used_percent: float, resets_at: Optional[datetime],
+                window_hours: float, now: datetime) -> float:
+    """The rate every run-out prediction uses, the quota view's and the limit bar's:
+    recent drain, or the window average while the history is thin."""
+    return drain_rate(samples, now, window_rate(used_percent, resets_at, window_hours, now),
+                      _scale(window_hours))
+
+
 def projected_remaining(now: datetime, remaining: float, rate: float, at: datetime) -> float:
     """What is left at `at` if the drain continues, floored at zero."""
     return max(remaining - rate * max(_hours(at - now), 0.0), 0.0)
@@ -328,9 +336,8 @@ def forecast_quota(samples: list, used_percent: float, resets_at: Optional[datet
     """Everything the quota view shows for a percentage window."""
     remaining = min(max(FULL - used_percent, 0.0), FULL)
     reset = next_reset(now, resets_at, window_hours)
-    fallback = window_rate(used_percent, resets_at, window_hours, now)
     scale = _scale(window_hours)
-    rate = drain_rate(samples, now, fallback, scale)
+    rate = recent_rate(samples, used_percent, resets_at, window_hours, now)
     back, ahead = view_span(window_hours, resets_at, now)
     start, end = now - back, now + ahead
 

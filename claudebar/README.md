@@ -111,6 +111,8 @@ The file is UTF-8. It rotates at midnight into `claudebar.log.YYYY-MM-DD` and fi
 
 Rate limits come from the Anthropic OAuth API, with the token from `~/.claude/.credentials.json`, and from the ChatGPT backend API, with the token from `~/.codex/auth.json`. Tokens and costs come from the JSONL logs in `~/.claude/projects/` and `~/.codex/`.
 
+When the Anthropic request fails, the Claude figures come from the usage reading that Claude Code last saved in `~/.claude.json`, if it is newer than ClaudeBar's own last reading. ClaudeBar only reads that file.
+
 Banked resets come with the same two calls: the `cedar_ember` block of Anthropic's usage response, and the `rate_limit_reset_credits` count in the ChatGPT usage response, with one extra request for the list when that count is above zero. Spending one is a separate, explicit request: Anthropic's organisation reset endpoint, or the ChatGPT reset-credit consume endpoint. Nothing else in ClaudeBar writes to either service.
 
 The quota forecast is drawn from `%LOCALAPPDATA%\ClaudeBar\quota_history.jsonl`, one line per provider per successful refresh, with anything older than ten days dropped. It is only written from live responses, never from the cached fallback.

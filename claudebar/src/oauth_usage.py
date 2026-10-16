@@ -220,6 +220,62 @@ def _get_usage_json(url: str, access_token: str, user_agent: str) -> dict:
         return json.loads(response.read().decode("utf-8"))
 
 
+def parse_usage_response(data: dict, banked_failed: bool = False) -> OAuthUsageData:
+    """The usage reply as windows, extra usage and banked resets. The same JSON arrives from
+    the endpoint and from the Claude CLI's saved copy of it, so both read it here."""
+    # Parse session (five_hour)
+    session = None
+    if "five_hour" in data:
+        fh = data["five_hour"]
+        session = UsageWindow(
+            utilization=fh.get("utilization", 0.0),
+            resets_at=parse_reset_time(fh.get("resets_at")),
+        )
+
+    # Parse weekly (seven_day)
+    weekly = None
+    if "seven_day" in data:
+        sd = data["seven_day"]
+        weekly = UsageWindow(
+            utilization=sd.get("utilization", 0.0),
+            resets_at=parse_reset_time(sd.get("resets_at")),
+        )
+
+    # Parse extra usage
+    # API returns monthly_limit and used_credits in CENTS, divide by 100
+    extra = None
+    if "extra_usage" in data:
+        eu = data["extra_usage"]
+        extra = ExtraUsage(
+            enabled=eu.get("is_enabled") or False,
+            monthly_limit=safe_get_float(eu, "monthly_limit") / 100.0,  # cents → currency
+            used_credits=safe_get_float(eu, "used_credits") / 100.0,    # cents → currency
+            utilization=safe_get_float(eu, "utilization"),              # API returns percentage
+            currency=eu.get("currency") or "usd",
+        )
+
+    # Extract plan type from various possible fields
+    plan_type = (
+        data.get("plan_type") or
+        data.get("plan") or
+        data.get("subscription_type") or
+        data.get("tier")
+    )
+
+    if banked_failed:
+        banked = BankedResets(provider=CLAUDE, state="failed")
+    else:
+        banked = parse_claude_banked(data.get("cedar_ember"), datetime.now(timezone.utc))
+
+    return OAuthUsageData(
+        session=session,
+        weekly=weekly,
+        extra=extra,
+        plan_type=plan_type,
+        banked=banked,
+    )
+
+
 def fetch_oauth_usage(access_token: Optional[str] = None, debug: bool = False) -> OAuthUsageData:
     """Fetch usage data from Anthropic OAuth API.
 
@@ -253,57 +309,7 @@ def fetch_oauth_usage(access_token: Optional[str] = None, debug: bool = False) -
             if "seven_day" in data:
                 print(f"DEBUG seven_day.utilization = {data['seven_day'].get('utilization')}")
 
-        # Parse session (five_hour)
-        session = None
-        if "five_hour" in data:
-            fh = data["five_hour"]
-            session = UsageWindow(
-                utilization=fh.get("utilization", 0.0),
-                resets_at=parse_reset_time(fh.get("resets_at")),
-            )
-
-        # Parse weekly (seven_day)
-        weekly = None
-        if "seven_day" in data:
-            sd = data["seven_day"]
-            weekly = UsageWindow(
-                utilization=sd.get("utilization", 0.0),
-                resets_at=parse_reset_time(sd.get("resets_at")),
-            )
-
-        # Parse extra usage
-        # API returns monthly_limit and used_credits in CENTS, divide by 100
-        extra = None
-        if "extra_usage" in data:
-            eu = data["extra_usage"]
-            extra = ExtraUsage(
-                enabled=eu.get("is_enabled") or False,
-                monthly_limit=safe_get_float(eu, "monthly_limit") / 100.0,  # cents → currency
-                used_credits=safe_get_float(eu, "used_credits") / 100.0,    # cents → currency
-                utilization=safe_get_float(eu, "utilization"),              # API returns percentage
-                currency=eu.get("currency") or "usd",
-            )
-
-        # Extract plan type from various possible fields
-        plan_type = (
-            data.get("plan_type") or
-            data.get("plan") or
-            data.get("subscription_type") or
-            data.get("tier")
-        )
-
-        if banked_failed:
-            banked = BankedResets(provider=CLAUDE, state="failed")
-        else:
-            banked = parse_claude_banked(data.get("cedar_ember"), datetime.now(timezone.utc))
-
-        return OAuthUsageData(
-            session=session,
-            weekly=weekly,
-            extra=extra,
-            plan_type=plan_type,
-            banked=banked,
-        )
+        return parse_usage_response(data, banked_failed)
 
     except urllib.error.HTTPError as e:
         if e.code == 401:

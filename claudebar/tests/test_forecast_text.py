@@ -58,6 +58,17 @@ class TestRateText:
         assert ft.rate_text(rate) == text
 
 
+class TestRunOutText:
+    @pytest.mark.parametrize("hours,text", [
+        (0.4, "Runs out in 0h 24m"), (1.5, "Runs out in 1h 30m"), (23.99, "Runs out in 23h 59m"),
+        (76.0, "Runs out in 3d 4h"), (46.5, "Runs out in 1d 22h"), (0.0, "Runs out in 0h 0m")])
+    def test_the_words_the_limit_bar_and_the_quota_row_share(self, hours, text):
+        assert ft.runout_text(hours) == text
+
+    def test_a_row_that_never_runs_out_says_never(self):
+        assert ft.hours_text(float("inf")) == "never"
+
+
 class TestStamp:
     def test_within_a_week_it_is_a_weekday_and_time(self):
         assert ft.stamp(NOW + h(34), NOW, UTC) == "Tue 22:00"
@@ -92,12 +103,12 @@ class TestQuotaRows:
 
     def test_a_quota_that_runs_out_says_when(self):
         f = quota(used=24.0, reset_in=100, per_hour=1.0)                 # dry at +76 h
-        assert ("At this rate", "Runs out Thu 16:00", "warn") in rows(f)
+        assert ("At this rate", "Runs out in 3d 4h · Thu 16:00", "warn") in rows(f)
 
     def test_a_banked_reset_that_would_restore_it_is_mentioned(self):
         f = quota(used=24.0, reset_in=100, per_hour=1.0)
         out = rows(f, claude_banked())
-        i = out.index(("At this rate", "Runs out Thu 16:00", "warn"))
+        i = out.index(("At this rate", "Runs out in 3d 4h · Thu 16:00", "warn"))
         assert out[i + 1] == ("", "A banked reset would restore it", "muted")
 
     def test_a_banked_reset_that_expires_first_is_not_promised(self):
@@ -146,7 +157,7 @@ class TestQuotaRows:
         f = quota(used=24.0, reset_in=None, per_hour=1.0)
         labels = [label for label, _, _ in rows(f)]
         assert "Next reset" not in labels
-        assert ("At this rate", "Runs out Thu 16:00", "warn") in rows(f)
+        assert ("At this rate", "Runs out in 3d 4h · Thu 16:00", "warn") in rows(f)
 
     def test_without_a_reset_time_and_no_drain_there_is_nothing_to_say(self):
         f = quota(used=24.0, reset_in=None, per_hour=0.0)

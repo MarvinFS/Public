@@ -98,6 +98,25 @@ class TestDrainRate:
         assert fc.drain_rate(samples, NOW, fallback=9.9) == pytest.approx(2.0)
 
 
+class TestRecentRate:
+    """The one rate the quota view and the limit bar both predict from."""
+
+    # a 5-hour session 3 h in, 76% used: 25.3 %/h over the whole session
+    SESSION = dict(used_percent=76.0, resets_at=NOW + h(2), window_hours=5, now=NOW)
+    RECENT = [(NOW - h(1), 72.0), (NOW - h(0.5), 48.0), (NOW - h(0.25), 36.0)]   # 48 %/h lately
+
+    def test_recent_use_beats_the_window_average(self):
+        assert fc.recent_rate(self.RECENT, **self.SESSION) == pytest.approx(48.0)
+
+    def test_too_little_history_falls_back_to_the_window_average(self):
+        assert fc.recent_rate([], **self.SESSION) == pytest.approx(76.0 / 3)
+
+    def test_it_is_the_rate_the_forecast_reports(self):
+        f = fc.forecast_quota(self.RECENT, used_percent=76.0, resets_at=NOW + h(2),
+                              window_hours=5, now=NOW)
+        assert f.rate == fc.recent_rate(self.RECENT, **self.SESSION)
+
+
 class TestProjectedRemaining:
     def test_drains_and_floors_at_zero(self):
         assert fc.projected_remaining(NOW, 80, 2, NOW + h(10)) == 60

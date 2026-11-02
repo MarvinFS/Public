@@ -196,6 +196,19 @@ EOF
     read -rp "Enable AmneziaWG 1.5? [y/N]: " AWG
     
     if [[ "${AWG}" =~ ^[Yy]$ ]]; then
+        # Decoy packets: a fresh I1 for this client, plus any fixed I2-I5.
+        # Empty ones are left out of the config instead of written as "0".
+        AWG_DECOY_LINES=""
+        CLIENT_I1="$(awg_client_i1)"
+        if [[ -n "${CLIENT_I1}" ]]; then
+            AWG_DECOY_LINES+="I1 = ${CLIENT_I1}"$'\n'
+        fi
+        for _n in 2 3 4 5; do
+            _v="AWG_I${_n}"
+            if [[ -n "${!_v}" ]]; then
+                AWG_DECOY_LINES+="I${_n} = ${!_v}"$'\n'
+            fi
+        done
         cat > ${CLIENT_DIR}/${CLIENT_NAME}.conf << EOF
 [Interface]
 PrivateKey = ${CLIENT_PRIV_KEY}
@@ -204,12 +217,7 @@ DNS = ${CLIENT_DNS}
 Jc = ${AWG_JC}
 Jmin = ${AWG_JMIN}
 Jmax = ${AWG_JMAX}
-I1 = ${AWG_I1}
-I2 = ${AWG_I2}
-I3 = ${AWG_I3}
-I4 = ${AWG_I4}
-I5 = ${AWG_I5}
-MTU = ${AWG_MTU}
+${AWG_DECOY_LINES}MTU = ${AWG_MTU}
 
 [Peer]
 PublicKey = ${SERVER_PUB_KEY}

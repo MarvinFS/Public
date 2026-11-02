@@ -323,6 +323,19 @@ During user creation, you can choose:
 
 > ⚠️ **Important**: AmneziaWG 1.5 configs with `Jc`, `Jmin`, `Jmax`, `I1` parameters **only work with AmneziaWG 1.5 client or official AmneziaVPN for Windows**. Standard WireGuard client will crash.
 
+### Decoy packet (I1)
+
+AmneziaWG 1.5 clients can send a decoy packet before the WireGuard handshake, so the start of the connection resembles ordinary traffic. The decoy is sent unencrypted and only the client needs it: a stock WireGuard server ignores it.
+
+The generator no longer writes a fixed value. Each new AmneziaWG client gets its own `I1` from `awg-decoy.py`: a real UDP DNS query for a popular Russian public service, with a random transaction id on every send. The empty `I2`-`I5` lines are no longer written.
+
+- The vendor wiki advises UDP port 53 for a DNS-looking decoy: forward WAN UDP 53 to the WireGuard port and use that port in the client `Endpoint`. One 2026 field test got a decoy through on a high port, so try both.
+- `I1` must be the UDP payload only. If you capture a packet with Wireshark, copy the bytes of the DNS layer, never the whole frame with Ethernet, IP and UDP or TCP headers.
+- QUIC decoys are not generated yet. Russia drops QUIC v1 whose SNI is on the blocklist, on any UDP port, so a QUIC decoy needs a domain that is not blocked; 2026 field reports show it helping on some ISPs. Most Russian public services do not serve HTTP/3.
+- To force a fixed value or turn the decoy off, set `AWG_I1` (and `AWG_I2`-`AWG_I5`) or `AWG_DECOY=none` in `/etc/wireguard/awg-params`. `AWG_DECOY_DOMAIN` pins the domain the decoy asks for.
+- The server needs `python3`. Without it the client config simply has no `I1`.
+- Existing client configs keep their old `I1` until you create them again.
+
 ### Client Configuration
 
 **Option A: QR Code (Mobile)**

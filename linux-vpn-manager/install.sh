@@ -24,6 +24,7 @@ SCRIPTS=(
     "vpn-manager.sh"
     "common.sh"
     "wireguard.sh"
+    "awg-decoy.py"
     "openvpn.sh"
     "shadowsocks.sh"
     "xray.sh"

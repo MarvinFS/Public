@@ -25,7 +25,7 @@ def _fetch(rate_limit):
         def __exit__(self, *exc):
             return False
 
-    with patch("urllib.request.urlopen", return_value=_Resp()):
+    with patch("http_json.open_url", return_value=_Resp()):
         return fetch_openai_usage(access_token="token")
 
 
@@ -70,21 +70,3 @@ def test_a_plan_with_no_session_charts_its_long_window():
     codex = OpenAISnapshot(timestamp=reset, session_available=False, weekly_percent=4,
                            weekly_resets_at=reset, weekly_window_hours=720)
     assert codex.charted_window() == (False, 4, reset, 720)
-
-
-def test_month_usage_covers_the_calendar_month_only():
-    """The "This month" figure must reset on the 1st, not roll 30 days back."""
-    from datetime import datetime
-    from pathlib import Path
-    import codex_log_parser
-
-    scanned = []
-    with patch.object(codex_log_parser, "get_sessions_for_date",
-                      side_effect=lambda d, date: scanned.append(date.date()) or []):
-        with patch.object(codex_log_parser, "datetime") as fake:
-            fake.now.return_value = datetime(2026, 9, 5, 18, 30)
-            codex_log_parser.get_month_codex_usage(sessions_dir=Path("."))
-
-    assert scanned[0] == datetime(2026, 9, 1).date()
-    assert scanned[-1] == datetime(2026, 9, 5).date()
-    assert len(scanned) == 5

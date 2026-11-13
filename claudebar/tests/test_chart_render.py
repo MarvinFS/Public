@@ -184,3 +184,75 @@ class TestThePillRectangle:
         x0, y0, x1, y1 = reset_pill_rect(data(FLAT, high, reset=reset, label="+12%"), W, H, 24, 11)
         assert y0 > y_of(88.0, 100.0, H)
         assert y1 < y_of(0, 100.0, H)
+
+
+class TestAtTwiceTheScale:
+    """The same chart at the panel's factor 2: every length doubles, and at 1 nothing moved."""
+
+    W2, H2 = 2 * W, 2 * H
+
+    def draw2(self, d, pill=None):
+        return render_plot(d, self.W2, self.H2, ACCENT, BG, GRID, MUTED, pill=pill, scale=2)
+
+    @staticmethod
+    def thickness(img, x, y, bar=150):
+        """How many rows of column x, near row y, are strongly the line's colour."""
+        return sum(1 for r in range(y - 8, y + 9) if away(img.getpixel((x, r))) > bar)
+
+    def test_the_image_is_the_requested_size(self):
+        assert self.draw2(data(FLAT)).size == (self.W2, self.H2)
+
+    def test_the_plot_area_moves_with_the_padding(self):
+        assert y_of(100, 100.0, self.H2, 2) == 2 * y_of(100, 100.0, H)
+        assert y_of(0, 100.0, self.H2, 2) == 2 * y_of(0, 100.0, H)
+        assert y_of(37, 100.0, self.H2, 2) == pytest.approx(2 * y_of(37, 100.0, H))
+
+    def test_the_default_scale_is_one(self):
+        assert y_of(40, 100.0, H) == y_of(40, 100.0, H, 1.0)
+        assert draw(data(FLAT)).tobytes() == render_plot(data(FLAT), W, H, ACCENT, BG, GRID, MUTED,
+                                                          scale=1.0).tobytes()
+
+    def test_gridlines_sit_on_the_scaled_rows_and_are_twice_as_thick(self):
+        one, two = draw(data()), self.draw2(data())
+        for value in (0, 50, 100):
+            y1, y2 = round(y_of(value, 100.0, H)), round(y_of(value, 100.0, self.H2, 2))
+            ink = lambda img, x, y: sum(away(img.getpixel((x, r))) for r in range(y - 3, y + 4))
+            assert 1.6 < ink(two, 650, y2) / ink(one, 320, y1) < 2.4
+        assert away(two.getpixel((650, round(y_of(75, 100.0, self.H2, 2))))) < 5      # between the lines
+
+    def test_the_recorded_line_is_about_twice_as_thick_and_on_the_scaled_row(self):
+        one, two = draw(data(FLAT)), self.draw2(data(FLAT))
+        x1, x2 = round(0.3 * W), round(0.3 * self.W2)
+        y2 = round(y_of(50, 100.0, self.H2, 2))
+        thin, thick = self.thickness(one, x1, row_y(50)), self.thickness(two, x2, y2)
+        assert thin >= 2 and 1.4 * thin < thick < 2.6 * thin
+        rows = [r for r in range(y2 - 8, y2 + 9) if away(two.getpixel((x2, r))) > 150]
+        assert min(rows) <= y2 <= max(rows)
+
+    def test_the_now_marker_and_the_dot_scale_too(self):
+        d = data(FLAT, AHEAD)
+        one, two = draw(d), self.draw2(d)
+        x1, x2 = x_of(NOW, START, END, W), x_of(NOW, START, END, self.W2)
+
+        def dot(img, x, y):                    # pixels near the end of the line that are the ring's or dot's
+            return sum(1 for dx in range(-9, 10) for dy in range(-9, 10)
+                       if away(img.getpixel((round(x) + dx, round(y) + dy)), ACCENT_RGB) < 40)
+        assert dot(two, x2, y_of(50, 100.0, self.H2, 2)) > 2.5 * dot(one, x1, row_y(50))
+
+    def test_the_reset_pill_is_padded_by_twice_the_pixels(self):
+        reset = NOW + h(69)
+        d = data(FLAT, reset=reset, label="+80%")
+        x0, y0, x1, y1 = reset_pill_rect(d, self.W2, self.H2, 48, 22, scale=2)
+        assert (x1 - x0, y1 - y0) == (48 + 16, 22 + 8)
+        assert y0 == 2 * (14 + 3)                                  # under the top gridline, as at 1
+        rx = x_of(reset, START, END, self.W2)
+        assert x1 == pytest.approx(rx - 6)
+
+    def test_the_pill_stays_clear_of_a_projection_it_would_cover_at_any_scale(self):
+        reset = NOW + h(69)
+        high = [(NOW, 92.0), (reset, 88.0), (reset, 100.0), (END, 95.0)]
+        for scale in (1, 2):
+            x0, y0, x1, y1 = reset_pill_rect(data(FLAT, high, reset=reset, label="+12%"), W * scale,
+                                             H * scale, 24 * scale, 11 * scale, scale=scale)
+            assert y0 > y_of(88.0, 100.0, H * scale, scale)
+            assert y1 < y_of(0, 100.0, H * scale, scale)

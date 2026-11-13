@@ -1,6 +1,7 @@
 """The chart hover hit test, which maps a cursor x to a bar index."""
 
-from ui_window import bar_index_at, _dim, _monochrome_glyph
+from ui_widgets import bar_index_at, _dim
+from ui_window import _monochrome_glyph
 from PIL import Image
 
 

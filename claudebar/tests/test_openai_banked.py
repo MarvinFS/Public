@@ -5,11 +5,14 @@ zero one more GET lists the credits. The window length matters because the
 free plan on this account has a single 30-day window.
 """
 
+import http.client
 import io
 import json
 import urllib.error
 from datetime import datetime, timezone
 from unittest.mock import patch
+
+import pytest
 
 import openai_usage
 
@@ -58,7 +61,7 @@ class FakeUrlopen:
         self.routes = routes
         self.requests = []
 
-    def __call__(self, request, timeout=None):
+    def __call__(self, request, timeout=None, follow_redirects=False):
         self.requests.append(request)
         answer = self.routes[request.full_url]
         if isinstance(answer, Exception):
@@ -71,7 +74,7 @@ class FakeUrlopen:
 
 def fetch(routes, account_id="acct-1"):
     fake = FakeUrlopen(routes)
-    with patch("urllib.request.urlopen", fake), \
+    with patch("http_json.open_url", fake), \
             patch.object(openai_usage, "load_codex_account_id", lambda: account_id):
         data = openai_usage.fetch_openai_usage(access_token="token")
     return data, fake
@@ -139,6 +142,23 @@ class TestBankedCredits:
         data, _ = fetch({USAGE_URL: FREE_30_DAY,
                          DETAILS_URL: urllib.error.URLError("offline")})
         assert data.is_valid and data.banked.available == 3
+
+    @pytest.mark.parametrize("error", [
+        http.client.IncompleteRead(b"", 5),         # the connection closed in the middle of the body
+        http.client.BadStatusLine("garbage"),
+        http.client.RemoteDisconnected("closed without a response"),
+    ], ids=lambda error: type(error).__name__)
+    def test_a_connection_that_breaks_on_the_details_call_degrades_to_the_count(self, error):
+        """None for any failure, as the docstring says: these are HTTPException, not OSError,
+        and used to fail the whole usage fetch."""
+        data, _ = fetch({USAGE_URL: FREE_30_DAY, DETAILS_URL: error})
+        assert data.is_valid and data.error is None
+        assert data.banked.available == 3 and data.banked.credits == []
+
+    def test_the_details_call_gives_none_for_a_broken_connection(self):
+        fake = FakeUrlopen({DETAILS_URL: http.client.IncompleteRead(b"", 5)})
+        with patch("http_json.open_url", fake):
+            assert openai_usage.fetch_reset_credits("token") is None
 
     def test_the_usage_windows_do_not_depend_on_the_details_call(self):
         down = urllib.error.HTTPError(DETAILS_URL, 403, "no", {}, io.BytesIO(b""))

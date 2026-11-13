@@ -1,5 +1,6 @@
 """The forecast chart's coordinate maths and hover lookup (no Tk window)."""
 
+import types
 from datetime import datetime, timedelta, timezone
 from typing import NamedTuple
 
@@ -144,15 +145,10 @@ class TestNiceTicks:
         assert chart.nice_ticks(-3) == [0.0]
 
 @pytest.fixture(scope="module")
-def canvas():
-    import tkinter as tk
-    try:
-        root = tk.Tk()
-    except tk.TclError as e:
-        pytest.skip(f"no display for Tk: {e}")
-    root.withdraw()
-    yield chart.ForecastChart(root, width=W, height=H, font=("Segoe UI", 7))
-    root.destroy()
+def canvas(tk_root):
+    widget = chart.ForecastChart(tk_root, width=W, height=H, font=("Segoe UI", 7))
+    yield widget
+    widget.destroy()
 
 
 class TestAxisLabels:
@@ -228,3 +224,62 @@ class TestTheEmptyMessage:
         for value in (0, 50, 100):
             row = chart.y_of(value, 100, H)
             assert not top <= row <= bottom
+
+
+@pytest.fixture(scope="module")
+def canvas2(tk_root):
+    """The same chart at the panel's factor 2, with pixel-sized fonts as the panel gives it."""
+    widget = chart.ForecastChart(tk_root, width=W, height=H, font=("Segoe UI", -12),
+                                 tip_font=("Segoe UI", -16, "bold"), scale=2)
+    yield widget
+    widget.destroy()
+
+
+class TestAtTwiceTheScale:
+    def data(self, **kw):
+        return chart.ChartData(recorded=[(START, 90.0), (NOW, 80.0)], projected=[(NOW, 80.0), (END, 40.0)],
+                               now=NOW, start=START, end=END, y_max=100.0,
+                               y_ticks=[(0, "0%"), (50, "50%"), (100, "100%")], tip=lambda t, v, p: "tip", **kw)
+
+    @staticmethod
+    def texts(widget):
+        return {widget.itemcget(i, "text"): widget.coords(i) for i in widget.find_all()
+                if widget.type(i) == "text"}
+
+    def test_the_canvas_is_twice_the_design_size(self, canvas2):
+        assert (int(canvas2.cget("width")), int(canvas2.cget("height"))) == (2 * W, 2 * H)
+        assert (canvas2.w, canvas2.h) == (2 * W, 2 * H)
+
+    def test_the_gridline_labels_sit_twice_as_far_from_the_edge(self, canvas2):
+        canvas2.set_data(self.data())
+        labels = self.texts(canvas2)
+        for text, value in (("0%", 0), ("50%", 50), ("100%", 100)):
+            x, y = labels[text]
+            assert x == 6                                              # 3 design pixels
+            assert y == chart.y_of(value, 100.0, 2 * H, 2) - 2         # and 1 above the line
+
+    def test_the_hover_samples_are_every_two_design_pixels(self, canvas2):
+        canvas2.set_data(self.data())
+        assert [p.x for p in canvas2._hover[:4]] == [0, 4, 8, 12]
+
+    def test_the_hover_follows_the_scaled_plot_rows(self, canvas2):
+        canvas2.set_data(self.data())
+        assert canvas2._hover[0].y == chart.y_of(90.0, 100.0, 2 * H, 2)
+
+    def test_the_flyout_marker_is_twice_as_big(self, canvas2):
+        canvas2.set_data(self.data())
+        canvas2._on_motion(types.SimpleNamespace(x=100))
+        marker = next(i for i in canvas2.find_withtag("tip") if canvas2.type(i) == "oval")
+        x0, y0, x1, y1 = canvas2.coords(marker)
+        assert (x1 - x0, y1 - y0) == (12, 12)
+        assert int(float(canvas2.itemcget(marker, "width"))) == 4
+
+    def test_a_chart_at_the_default_scale_is_what_it_was(self, tk_root):
+        plain = chart.ForecastChart(tk_root, width=W, height=H, font=("Segoe UI", 7))
+        try:
+            assert (int(plain.cget("width")), int(plain.cget("height"))) == (W, H)
+            plain.set_data(self.data())
+            assert self.texts(plain)["0%"] == [3, chart.y_of(0, 100.0, H) - 1]
+            assert [p.x for p in plain._hover[:3]] == [0, 2, 4]
+        finally:
+            plain.destroy()

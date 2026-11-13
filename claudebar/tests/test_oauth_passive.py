@@ -34,56 +34,59 @@ def _past_ms():
     return time.time() * 1000 - 3_600_000  # -1h
 
 
-# --- load_access_token: valid / expired / missing -------------------------
+def _token():
+    """The token the usage call would send, or None when there is none to send."""
+    return oauth_usage.access_token_or_reason()[0]
+
+
+# --- access_token_or_reason: valid / expired / missing --------------------
 
 def test_token_valid_returned(monkeypatch, tmp_path):
     _patch_creds(monkeypatch, tmp_path,
                  {"claudeAiOauth": {"accessToken": "tok", "expiresAt": _future_ms()}})
-    assert oauth_usage.load_access_token() == "tok"
+    assert _token() == "tok"
 
 
 def test_token_expired_returns_none(monkeypatch, tmp_path):
     _patch_creds(monkeypatch, tmp_path,
                  {"claudeAiOauth": {"accessToken": "tok", "expiresAt": _past_ms()}})
-    assert oauth_usage.load_access_token() is None
+    assert _token() is None
 
 
 def test_token_missing_returns_none(monkeypatch, tmp_path):
     _patch_creds(monkeypatch, tmp_path, {"claudeAiOauth": {"expiresAt": _future_ms()}})
-    assert oauth_usage.load_access_token() is None
+    assert _token() is None
 
 
 def test_token_no_expiry_returned(monkeypatch, tmp_path):
     # No usable expiresAt -> treat as non-expiring, hand the token over.
     _patch_creds(monkeypatch, tmp_path, {"claudeAiOauth": {"accessToken": "tok"}})
-    assert oauth_usage.load_access_token() == "tok"
+    assert _token() == "tok"
 
 
-# --- load_credentials hardening (Codex r1 #1 / r2 #1) ---------------------
+# --- credential hardening (Codex r1 #1 / r2 #1) ---------------------------
 
 def test_oauth_none_does_not_crash(monkeypatch, tmp_path):
     _patch_creds(monkeypatch, tmp_path, {"claudeAiOauth": None})
-    assert oauth_usage.load_credentials() == (None, None)
+    assert _token() is None
 
 
 def test_oauth_truthy_non_dict_does_not_crash(monkeypatch, tmp_path):
     _patch_creds(monkeypatch, tmp_path, {"claudeAiOauth": "bad"})
-    assert oauth_usage.load_credentials() == (None, None)
+    assert _token() is None
 
 
 def test_expiresat_string_treated_as_no_expiry(monkeypatch, tmp_path):
     _patch_creds(monkeypatch, tmp_path,
                  {"claudeAiOauth": {"accessToken": "tok", "expiresAt": "soon"}})
-    token, exp = oauth_usage.load_credentials()
-    assert token == "tok" and exp is None
-    assert oauth_usage.load_access_token() == "tok"
+    assert oauth_usage.access_token_or_reason() == ("tok", None)
 
 
 def test_expiresat_bool_not_treated_as_number(monkeypatch, tmp_path):
+    # Read as a number, True would be an expiry one millisecond after the epoch.
     _patch_creds(monkeypatch, tmp_path,
                  {"claudeAiOauth": {"accessToken": "tok", "expiresAt": True}})
-    _, exp = oauth_usage.load_credentials()
-    assert exp is None
+    assert oauth_usage.access_token_or_reason() == ("tok", None)
 
 
 # --- check_credentials (Codex r1 #7 / r2 #2) ------------------------------
@@ -115,5 +118,5 @@ def test_status_and_reader_agree_near_expiry(monkeypatch, tmp_path):
                  {"claudeAiOauth": {"accessToken": "tok",
                                     "expiresAt": time.time() * 1000 + 120_000}})
     ok, _creds, err = claude_check.check_credentials()
-    assert oauth_usage.load_access_token() == "tok"
+    assert _token() == "tok"
     assert ok is True and err is None

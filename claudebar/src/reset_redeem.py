@@ -24,13 +24,13 @@ import json
 import logging
 import re
 import urllib.error
-import urllib.request
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Callable, Optional, Protocol
 
 import banked_resets
+import http_json
 from banked_resets import Claim
 
 logger = logging.getLogger("claudebar")
@@ -74,13 +74,15 @@ class Transport(Protocol):
 
 class UrllibTransport:
     """The real transport. An HTTP error status is an answer; anything else
-    that goes wrong is a TransportError carrying only the exception's type."""
+    that goes wrong is a TransportError carrying only the exception's type.
+
+    No redirect is followed (http_json), so a 301, 302 or 303 reaches _failure as the
+    status it is, and the token and the body never go to the host a Location names."""
 
     def request(self, method, url, headers, body, timeout=TIMEOUT_SECONDS) -> HttpResult:
-        data = json.dumps(body).encode("utf-8") if body is not None else None
-        req = urllib.request.Request(url, data=data, headers=headers, method=method)
+        req = http_json.build_request(url, headers, method, body)
         try:
-            with urllib.request.urlopen(req, timeout=timeout) as response:
+            with http_json.open_url(req, timeout) as response:
                 return HttpResult(response.status, self._parse(response.read()))
         except urllib.error.HTTPError as e:
             try:

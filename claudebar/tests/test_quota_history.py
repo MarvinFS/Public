@@ -300,7 +300,8 @@ class TestCollectorsRecordLiveFetchesOnly:
         monkeypatch.setattr(dc.deepseek_auth, "discover_user_token",
                             lambda: dc.deepseek_auth.Credential("tok", "saved"))
         monkeypatch.setattr(dc, "fetch_usage", lambda token, today: du.UsageData(error="no usage"))
-        monkeypatch.setattr(dc, "fetch_summary", lambda token: summary)
+        monkeypatch.setattr(dc, "fetch_summary", lambda token, rates=None: summary)
+        monkeypatch.setattr(dc, "get_exchange_rates", lambda: None)
         monkeypatch.setattr(dc, "load_deepseek_cache", lambda: (cached, None))
 
     def summary(self):
@@ -322,3 +323,70 @@ class TestCollectorsRecordLiveFetchesOnly:
         monkeypatch.setattr(dc.deepseek_auth, "discover_user_token", lambda: None)
         collector.collect_deepseek()
         assert stored("deepseek") == []
+
+
+class TestLoadParsesAnUnchangedFileOnce:
+    """The panel asks for the history one to three times per redraw. The file is parsed when it
+    has changed, and not otherwise."""
+
+    @pytest.fixture
+    def parsed(self, monkeypatch):
+        seen = []
+        real = qh._parse_line
+        monkeypatch.setattr(qh, "_parse_line", lambda line: seen.append(line) or real(line))
+        return seen
+
+    def fill(self, n=50):
+        for i in range(n):
+            qh.append("claude", 90.0 - i, now=NOW + h(i))
+
+    def test_repeated_loads_of_an_unchanged_file_parse_it_once(self, parsed):
+        self.fill()
+        parsed.clear()
+        first = qh.load("claude", NOW - h(1))
+        for _ in range(5):
+            assert qh.load("claude", NOW - h(1)) == first
+        assert len(parsed) == 50
+
+    def test_other_providers_and_windows_are_served_from_the_same_parse(self, parsed):
+        self.fill(10)
+        qh.append("deepseek", 12.0, now=NOW)
+        parsed.clear()
+        qh.load("claude", NOW - h(1))
+        qh.load("deepseek", NOW - h(1))
+        qh.load("claude", NOW + h(5))
+        assert len(parsed) == 11
+
+    def test_an_append_is_seen_by_the_next_load(self, parsed):
+        self.fill(5)
+        assert len(qh.load("claude", NOW - h(1))) == 5
+        qh.append("claude", 3.0, now=NOW + h(9))
+        assert [r.value for r in qh.load("claude", NOW - h(1))][-1] == 3.0
+        assert len(qh.load("claude", NOW - h(1))) == 6
+
+    def test_a_prune_is_seen_by_the_next_load(self, monkeypatch):
+        old = NOW - timedelta(days=20)
+        write_lines(record(old, remaining=10.0), record(NOW - h(1), remaining=20.0))
+        assert len(qh.load("claude", old - h(1))) == 2          # both are in the file, and cached
+        qh.append("claude", 30.0, now=NOW)                       # the first append of a process prunes
+        assert [r.value for r in qh.load("claude", old - h(1))] == [20.0, 30.0]
+
+    def test_a_file_changed_by_something_else_is_read_again(self):
+        write_lines(record(NOW, remaining=10.0))
+        assert [r.value for r in qh.load("claude", NOW - h(1))] == [10.0]
+        write_lines(record(NOW, remaining=10.0), record(NOW + h(1), remaining=55.0))
+        assert [r.value for r in qh.load("claude", NOW - h(1))] == [10.0, 55.0]
+
+    def test_a_file_that_is_gone_is_an_empty_history_again(self):
+        qh.append("claude", 10.0, now=NOW)
+        assert qh.load("claude", NOW - h(1))
+        qh.history_path().unlink()
+        assert qh.load("claude", NOW - h(1)) == []
+
+    def test_the_caller_cannot_change_what_the_next_one_gets(self):
+        self.fill(5)
+        got = qh.load("claude", NOW - h(1))
+        expected = list(got)
+        got.clear()
+        got.append("not a record")
+        assert qh.load("claude", NOW - h(1)) == expected

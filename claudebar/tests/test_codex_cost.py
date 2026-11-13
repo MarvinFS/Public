@@ -198,3 +198,39 @@ def test_huge_session_file_is_still_counted(tmp_path):
         f.write(json.dumps(token_count(500, 0, 10)) + "\n")
 
     assert parse_session_file(session).input_tokens == 500
+
+
+def bytes_session(tmp_path, *lines):
+    """A session file whose middle line is not valid UTF-8 (a log cut mid-character)."""
+    session = tmp_path / "rollout.jsonl"
+    session.write_bytes(b"\n".join(lines) + b"\n")
+    return session
+
+
+def test_a_byte_that_is_not_utf8_does_not_stop_the_file(tmp_path):
+    """Strict decoding raised at the bad byte, so the turns after it were never read."""
+    session = bytes_session(
+        tmp_path,
+        json.dumps(token_count(500, 0, 10)).encode(),
+        b'{"type": "response_item", "payload": {"text": "caf\xe9 \xff"}}',
+        json.dumps(token_count(300, 0, 10)).encode(),
+    )
+    assert parse_session_file(session).input_tokens == 800
+
+
+def test_the_daily_series_keeps_the_turns_after_a_bad_byte(tmp_path):
+    """get_codex_daily_usage swallowed the decode error, so the rest of the day went missing
+    without a trace."""
+    from datetime import datetime
+    from codex_log_parser import get_codex_daily_usage
+
+    day = tmp_path / "2026" / "11" / "11"
+    day.mkdir(parents=True)
+    (day / "rollout.jsonl").write_bytes(b"\n".join([
+        json.dumps(token_count(500, 0, 10)).encode(),
+        b'{"type": "response_item", "payload": {"text": "\xff"}}',
+        json.dumps(token_count(300, 0, 10)).encode(),
+    ]) + b"\n")
+
+    series = get_codex_daily_usage(tmp_path, days=3, end=datetime(2026, 11, 11, 12))
+    assert series[-1].input_tokens == 800

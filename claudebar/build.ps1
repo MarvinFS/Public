@@ -36,7 +36,7 @@ $VenvPython = Join-Path $VenvDir "Scripts\python.exe"
 $VenvPip = Join-Path $VenvDir "Scripts\pip.exe"
 
 & $VenvPip install --upgrade pip
-& $VenvPip install -r (Join-Path $ProjectRoot "requirements.txt")
+& $VenvPip install -r (Join-Path $ProjectRoot "requirements-dev.txt")
 
 # Build with PyInstaller
 Write-Host "`nBuilding executable..." -ForegroundColor Yellow

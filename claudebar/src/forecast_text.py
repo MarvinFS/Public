@@ -3,6 +3,10 @@
 Pure: every time and zone is passed in. Rows are (label, value, tone) with the
 tone one of "normal", "ok", "warn" or "muted", which the panel maps to its
 colours; an empty label is a continuation line.
+
+The panel says no fact twice: the limit bars, the banked-resets block and the
+DeepSeek balance above the tabs keep what they show, and these views carry only
+what those do not (the burn rate, the clock times, the gain of a reset).
 """
 
 from datetime import datetime, timedelta
@@ -15,6 +19,9 @@ MID_DOT = "·"
 
 # A weekday name is unambiguous only within a week of now.
 WEEKDAY_WITHIN = timedelta(days=6)
+
+# What the balance forecast's spend rate averages (forecast.forecast_balance takes the last seven days).
+BALANCE_BASIS = "last 7 days"
 
 
 def window_title(hours: float) -> str:
@@ -30,7 +37,7 @@ def window_title(hours: float) -> str:
 def rate_text(rate: float) -> str:
     """"~0.9%/h": more decimals the smaller the rate, so it never reads 0."""
     if rate <= 0:
-        return "no recent use"
+        return "No recent use"
     if rate >= 10:
         return f"~{rate:.0f}%/h"
     if rate >= 0.1:
@@ -63,7 +70,7 @@ def hours_text(hours: float) -> str:
 
 def runout_text(hours: float) -> str:
     """The run-out as the limit bar words it, "Runs out in 0h 24m". The quota view's row
-    starts with the same words, so one prediction never reads as two."""
+    gives the clock time only, so one prediction is not said twice."""
     return f"Runs out in {hours_text(hours)}"
 
 
@@ -76,53 +83,48 @@ def gain_text(f: QuotaForecast) -> str:
     return f"+{f.gain:.0f}%" if f.gain is not None else ""
 
 
-def quota_header(f: QuotaForecast) -> tuple:
-    return percent_left(f.remaining), rate_text(f.rate)
+def quota_header(f: QuotaForecast, window_hours: float, session: bool) -> tuple:
+    """The burn rate, the one figure only this view has, and the window it was measured on
+    ("5-hour session", "30-day window"). The percent left is the limit bar's."""
+    return rate_text(f.rate), f"{window_title(window_hours)} {'session' if session else 'window'}"
 
 
 def quota_rows(f: QuotaForecast, banked: Optional[banked_resets.BankedResets],
                now: datetime, tz=None) -> list:
+    """What the limit bars and the banked block do not say: the gain and the time of the next
+    reset, the run-out as a clock time (the bar has the countdown), what is left unused when it
+    lasts (the bar says it lasts), and whether a banked reset would restore a run-out."""
     rows = []
     if f.next_reset is not None:
         rows.append(("Next reset", f"{gain_text(f)} {MID_DOT} {stamp(f.next_reset, now, tz)}", "normal"))
 
     if f.runout is not None:
-        hours = max((f.runout - now).total_seconds() / 3600, 0.0)
-        rows.append(("At this rate", f"{runout_text(hours)} {MID_DOT} {stamp(f.runout, now, tz)}", "warn"))
+        rows.append(("At this rate", f"Runs out {stamp(f.runout, now, tz)}", "warn"))
         if banked_resets.restores_at(banked, f.runout, now):
             rows.append(("", "A banked reset would restore it", "muted"))
     elif f.unused is not None:
-        rows.append(("At this rate", f"Lasts until reset {MID_DOT} ~{f.unused:.0f}% unused", "ok"))
-
-    if banked is not None and banked.state == "ok" and banked.available > 0:
-        soonest = banked_resets.next_expiry(banked, now)
-        text = f"{banked.available} available"
-        if soonest is not None:
-            text += f", expires {_date(soonest, tz)}"
-        urgent = soonest is not None and soonest - now <= banked_resets.URGENT_WITHIN
-        rows.append(("Banked", text, "warn" if urgent else "normal"))
+        rows.append(("At this rate", f"~{f.unused:.0f}% unused at reset", "ok"))
 
     if f.recording and f.since is not None:
         rows.append(("Recording since", stamp(f.since, now, tz), "muted"))
     return rows
 
 
-def balance_header(f: BalanceForecast, money_fixed: Callable, money: Callable) -> tuple:
-    return f"{money_fixed(f.balance)} left", f"~{money(f.rate_per_day)}/day"
-
-
-def balance_rows(f: BalanceForecast, now: datetime, tz, money: Callable) -> list:
+def balance_header(f: BalanceForecast, money: Callable) -> tuple:
+    """The spend rate, the one figure the balance block above does not give, and what it averages."""
     if f.rate_per_day <= 0:
-        return [("Spend rate", "none in the last 7 days", "muted")]
-    rows = []
+        return "No spend", BALANCE_BASIS
+    return f"~{money(f.rate_per_day)}/day", BALANCE_BASIS
+
+
+def balance_rows(f: BalanceForecast, now: datetime, tz) -> list:
+    if f.rate_per_day <= 0:
+        return []
     if f.days_left > YEAR_DAYS:
-        rows.append(("At this rate", "Lasts over a year", "ok"))
-    else:
-        days = "<1 day" if f.days_left < 1 else (
-            "1 day" if round(f.days_left) == 1 else f"{round(f.days_left)} days")
-        rows.append(("Runs out", f"~{_date(f.runout, tz)} ({days})", "normal"))
-    rows.append(("Spend rate", f"{money(f.rate_per_day)}/day, last 7 days", "normal"))
-    return rows
+        return [("At this rate", "Lasts over a year", "ok")]
+    days = "<1 day" if f.days_left < 1 else (
+        "1 day" if round(f.days_left) == 1 else f"{round(f.days_left)} days")
+    return [("Runs out", f"~{_date(f.runout, tz)} ({days})", "normal")]
 
 
 def tip_text(when: datetime, value: float, projected: bool, now: datetime, tz,

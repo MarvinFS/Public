@@ -76,6 +76,19 @@ def load_catalog(models: dict) -> None:
             continue
 
 
+def longest_prefix(table: dict, name: str):
+    """The entry of `table` whose key is the longest prefix of `name`, else None.
+
+    Longest wins, so a dated "claude-opus-4-5-20251101" cannot be captured by a
+    shorter key that happens to share its opening, nor "gpt-5.1-codex-2026-01-01"
+    by "gpt-5". Case is the caller's business: it passes the name the keys are in.
+    """
+    for known in sorted(table, key=len, reverse=True):
+        if name.startswith(known):
+            return table[known]
+    return None
+
+
 def get_model_pricing(model: str) -> Optional[ModelPricing]:
     """Pricing for a Claude model; None for anything that is not one.
 
@@ -89,11 +102,9 @@ def get_model_pricing(model: str) -> Optional[ModelPricing]:
     if model in MODEL_PRICING:
         return MODEL_PRICING[model]
 
-    # Longest prefix wins, so a dated "claude-opus-4-5-20251101" cannot be
-    # captured by a shorter key that happens to share its opening.
-    for known_model in sorted(MODEL_PRICING, key=len, reverse=True):
-        if model_lower.startswith(known_model):
-            return MODEL_PRICING[known_model]
+    by_prefix = longest_prefix(MODEL_PRICING, model_lower)
+    if by_prefix is not None:
+        return by_prefix
 
     for family, newest in FAMILY_FALLBACK.items():
         if family in model_lower:

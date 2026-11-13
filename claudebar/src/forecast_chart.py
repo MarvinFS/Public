@@ -23,6 +23,10 @@ from typing import Callable, NamedTuple, Optional
 from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageOps, ImageTk
 
 from forecast import value_at
+from ui_scale import Scale
+
+# Every length below is in design pixels. The functions and the canvas take a `scale` (the
+# panel's factor, 1.0 by default) and multiply what they draw by it.
 
 # Room above the plot for the 100% label and "Now", below it for day labels.
 PAD_TOP = 14
@@ -57,20 +61,21 @@ def x_of(when: datetime, start: datetime, end: datetime, width: float) -> float:
     return (when - start) / (end - start) * width
 
 
-def y_of(value: float, y_max: float, height: float) -> float:
+def y_of(value: float, y_max: float, height: float, scale: float = 1.0) -> float:
     """Pixel row of a value; 0 sits on the plot bottom, y_max on the top."""
     fraction = min(max(value / y_max, 0.0), 1.0) if y_max > 0 else 0.0
-    return PAD_TOP + (height - PAD_TOP - PAD_BOTTOM) * (1 - fraction)
+    top, bottom = PAD_TOP * scale, PAD_BOTTOM * scale
+    return top + (height - top - bottom) * (1 - fraction)
 
 
 def to_pixels(points: list, start: datetime, end: datetime, y_max: float,
-              width: float, height: float) -> list:
-    return [(x_of(t, start, end, width), y_of(v, y_max, height)) for t, v in points]
+              width: float, height: float, scale: float = 1.0) -> list:
+    return [(x_of(t, start, end, width), y_of(v, y_max, height, scale)) for t, v in points]
 
 
 def hover_samples(recorded: list, projected: list, now: datetime, start: datetime,
                   end: datetime, y_max: float, width: float, height: float,
-                  step: int = HOVER_STEP) -> list:
+                  step: int = HOVER_STEP, scale: float = 1.0) -> list:
     """The line sampled every `step` pixels, each sample carrying its own time,
     value and whether it lies on the projection. Nothing before the recording
     began: hovering where there is no line shows no flyout."""
@@ -80,7 +85,7 @@ def hover_samples(recorded: list, projected: list, now: datetime, start: datetim
         is_projected = when > now
         value = value_at(projected if is_projected else recorded, when)
         if value is not None:
-            samples.append(HoverPoint(x, y_of(value, y_max, height), when, value, is_projected))
+            samples.append(HoverPoint(x, y_of(value, y_max, height, scale), when, value, is_projected))
     return samples
 
 
@@ -131,8 +136,8 @@ class _Painter:
     """Antialiased drawing: everything is drawn SUPERSAMPLE times larger on one
     surface and scaled down at the end. Points are in output pixels."""
 
-    def __init__(self, width: int, height: int, background: tuple):
-        self.width, self.height = width, height
+    def __init__(self, width: int, height: int, background: tuple, scale: float = 1.0):
+        self.width, self.height, self.scale = width, height, scale
         self.image = Image.new("RGBA", (width * SUPERSAMPLE, height * SUPERSAMPLE), background + (255,))
 
     def _scaled(self, points):
@@ -149,7 +154,7 @@ class _Painter:
             halo = self._blank()
             ImageDraw.Draw(halo).line(pts, fill=colour + (int(255 * glow),),
                                       width=int(width * 3 * SUPERSAMPLE), joint="curve")
-            self.image.alpha_composite(halo.filter(ImageFilter.GaussianBlur(2.6 * SUPERSAMPLE)))
+            self.image.alpha_composite(halo.filter(ImageFilter.GaussianBlur(2.6 * SUPERSAMPLE * self.scale)))
         layer = self._blank()
         draw = ImageDraw.Draw(layer)
         draw.line(pts, fill=colour + (alpha,), width=max(int(width * SUPERSAMPLE), 1), joint="curve")
@@ -227,7 +232,7 @@ class _Painter:
 
 
 def reset_pill_rect(d: Optional[ChartData], width: float, height: float, text_width: float,
-                    text_height: float) -> Optional[tuple]:
+                    text_height: float, scale: float = 1.0) -> Optional[tuple]:
     """Where the reset's gain label sits, as (x0, y0, x1, y1): just left of the
     reset line, where the plot is empty (the projection restarts on its right),
     under the top gridline, or under the projection where it would cover it;
@@ -238,78 +243,89 @@ def reset_pill_rect(d: Optional[ChartData], width: float, height: float, text_wi
     rx = x_of(d.reset, d.start, d.end, width)
     if not 0 < rx < width:
         return None
-    w, h = text_width + 8, text_height + 4
-    x0 = rx - 3 - w
-    if x0 < 2:
-        x0 = rx + 3
-    y0 = PAD_TOP + 3
+    w, h = text_width + 8 * scale, text_height + 4 * scale
+    x0 = rx - 3 * scale - w
+    if x0 < 2 * scale:
+        x0 = rx + 3 * scale
+    y0 = (PAD_TOP + 3) * scale
     # The projection falls steadily beside the reset, so its ends give its rows under the pill.
-    rows = [y_of(v, d.y_max, height) for v in
+    rows = [y_of(v, d.y_max, height, scale) for v in
             (value_at(d.projected, d.start + (d.end - d.start) * (x / width)) for x in (x0, x0 + w))
             if v is not None]
-    if rows and min(rows) - 2 < y0 + h and max(rows) + 2 > y0:
-        y0 = max(rows) + 4
+    if rows and min(rows) - 2 * scale < y0 + h and max(rows) + 2 * scale > y0:
+        y0 = max(rows) + 4 * scale
     return (x0, y0, x0 + w, y0 + h)
 
 
 def render_plot(d: Optional[ChartData], width: int, height: int, accent: str, background: str,
-                grid: str, muted: str, pill: Optional[tuple] = None):
+                grid: str, muted: str, pill: Optional[tuple] = None, scale: float = 1.0):
     """The chart's graphics as an RGB image: fills, gridlines, the recorded and
     estimated lines, the projection, the reset's hairline, the Now marker and
     the reset label's pill. The canvas puts its text over it."""
     accent, bg, grid, muted = _rgb(accent), _rgb(background), _rgb(grid), _rgb(muted)
-    paint = _Painter(width, height, bg)
+    paint = _Painter(width, height, bg, scale)
+    hairline = Scale(scale).px(1)
+    # A line of odd width fills whole pixel rows when centred half a pixel in; an even one centres on the pixel.
+    centre = 0.5 if hairline % 2 else 0.0
+    top = PAD_TOP * scale
     ticks = d.y_ticks if d else DEFAULT_TICKS
     y_max = d.y_max if d else 100.0
-    base = y_of(0, y_max, height)
-    px = (lambda pts: to_pixels(pts, d.start, d.end, y_max, width, height)) if d else None
+    base = y_of(0, y_max, height, scale)
+    px = (lambda pts: to_pixels(pts, d.start, d.end, y_max, width, height, scale)) if d else None
 
     estimated = px(d.estimated) if d else []
     recorded = px(d.recorded) if d else []
     if len(estimated) >= 2:
-        paint.fill(estimated, base, PAD_TOP, accent, ESTIMATE_FILL_ALPHA)
+        paint.fill(estimated, base, top, accent, ESTIMATE_FILL_ALPHA)
     if len(recorded) >= 2:
-        paint.fill(recorded, base, PAD_TOP, accent, FILL_ALPHA)
+        paint.fill(recorded, base, top, accent, FILL_ALPHA)
     for value, _ in ticks:
-        y = round(y_of(value, y_max, height)) + 0.5        # a 1 px line fills one pixel row
-        paint.line([(0, y), (width, y)], 1, grid, caps=False)
+        y = round(y_of(value, y_max, height, scale)) + centre
+        paint.line([(0, y), (width, y)], hairline, grid, caps=False)
     if d is None:
         return paint.result()
 
     for when, _ in d.day_ticks:
-        x = round(x_of(when, d.start, d.end, width)) + 0.5
-        paint.line([(x, base), (x, base + 3)], 1, muted, 160, caps=False)
+        x = round(x_of(when, d.start, d.end, width)) + centre
+        paint.line([(x, base), (x, base + 3 * scale)], hairline, muted, 160, caps=False)
     if d.reset is not None:
         rx = x_of(d.reset, d.start, d.end, width)
         if 0 <= rx <= width:
-            paint.line([(rx, PAD_TOP), (rx, base)], 1, muted, 110, caps=False)
+            paint.line([(rx, top), (rx, base)], hairline, muted, 110, caps=False)
     projected = px(d.projected)
     if len(projected) >= 2:
-        paint.dashed(projected, 1.8, accent, DASH, GAP, PROJECTION_ALPHA)
-    paint.line(estimated, ESTIMATE_WIDTH, accent, ESTIMATE_LINE_ALPHA)
-    paint.line(recorded, LINE_WIDTH, accent, glow=GLOW)
+        paint.dashed(projected, 1.8 * scale, accent, DASH * scale, GAP * scale, PROJECTION_ALPHA)
+    paint.line(estimated, ESTIMATE_WIDTH * scale, accent, ESTIMATE_LINE_ALPHA)
+    paint.line(recorded, LINE_WIDTH * scale, accent, glow=GLOW)
 
     x_now = x_of(d.now, d.start, d.end, width)
-    paint.dashed([(x_now, PAD_TOP - 2), (x_now, base)], 1, muted, 2.5, 3, (140, 140))
+    paint.dashed([(x_now, top - 2 * scale), (x_now, base)], hairline, muted, 2.5 * scale, 3 * scale,
+                 (140, 140))
     if recorded:
-        paint.dot(recorded[-1][0], recorded[-1][1], 3.2, accent, bg, 1.8)
+        paint.dot(recorded[-1][0], recorded[-1][1], 3.2 * scale, accent, bg, 1.8 * scale)
     if pill is not None:
         paint.pill(pill, accent)
     return paint.result()
 
 
 class ForecastChart(tk.Canvas):
-    """The rendered plot with the panel's text over it; flyout on hover."""
+    """The rendered plot with the panel's text over it; flyout on hover.
 
-    def __init__(self, parent, width=348, height=110, accent="#F59E0B", font=None,
-                 grid="#2c2c2e", muted="#7f8899", **kwargs):
+    The flyout is read at a glance while the pointer moves, so `tip_font` (the panel gives it
+    a couple of points larger and bolder than the small print) is its own font; without one
+    the flyout uses `font`. `width` and `height` are design pixels, like every length here.
+    """
+
+    def __init__(self, parent, width=348, height=110, accent="#F59E0B", font=None, tip_font=None,
+                 grid="#2c2c2e", muted="#7f8899", scale=1.0, **kwargs):
+        self._k = scale          # not `scale`: Canvas has a method of that name
+        self._px = Scale(scale).px
+        width, height = self._px(width), self._px(height)
         super().__init__(parent, width=width, height=height, highlightthickness=0, **kwargs)
         self.w, self.h, self.accent, self.font = width, height, accent, font
         self.grid_colour, self.muted = grid, muted
         self._photo = None      # the plot image, kept alive for as long as it is shown
-        # The flyout is read at a glance while the pointer moves, so it runs a
-        # couple of points larger and bolder than the panel's small print.
-        self.tip_font = (font[0], (font[1] if len(font) > 1 else 8) + 2, "bold") if font else None
+        self.tip_font = tip_font or font
         self._data: Optional[ChartData] = None
         self._message = ""
         self._hover: list = []
@@ -338,17 +354,18 @@ class ForecastChart(tk.Canvas):
         if self.w < 2 or self.h < 2:
             return
         d = self._data
-        pill = reset_pill_rect(d, self.w, self.h, *self._label_size(d.reset_label)) if d else None
+        pill = reset_pill_rect(d, self.w, self.h, *self._label_size(d.reset_label), scale=self._k) if d else None
         background = "#%02x%02x%02x" % tuple(v >> 8 for v in self.winfo_rgb(self.cget("bg")))
         self._photo = ImageTk.PhotoImage(render_plot(d, self.w, self.h, self.accent, background,
-                                                     self.grid_colour, self.muted, pill),
+                                                     self.grid_colour, self.muted, pill, self._k),
                                          master=self)
         self.create_image(0, 0, image=self._photo, anchor=tk.NW)
         self._labels(d)
         if d is None:
             if self._message:
                 # Midway between the 100% and 50% gridlines, not across the 50% one.
-                self.create_text(self.w / 2, (y_of(100, 100, self.h) + y_of(50, 100, self.h)) / 2,
+                self.create_text(self.w / 2,
+                                 (y_of(100, 100, self.h, self._k) + y_of(50, 100, self.h, self._k)) / 2,
                                  text=self._message, fill=self.muted, font=self.font)
             return
 
@@ -358,7 +375,7 @@ class ForecastChart(tk.Canvas):
                              fill=background, font=self._bold_font())
         self._estimate_caption(d)
         self._hover = hover_samples(d.recorded, d.projected, d.now, d.start, d.end, d.y_max,
-                                    self.w, self.h)
+                                    self.w, self.h, self._px(HOVER_STEP), self._k)
 
     def _now_label(self, d: ChartData):
         """"Now" beside its rule, on the right: after the gridline labels when the
@@ -367,15 +384,17 @@ class ForecastChart(tk.Canvas):
         font = tkfont.Font(root=self, font=self.font)
         x_now = x_of(d.now, d.start, d.end, self.w)
         width, line = font.measure("Now"), font.metrics("linespace")
-        x = x_now + 4
+        one, three, four = self._px(1), self._px(3), self._px(4)
+        x = x_now + four
         for value, label in d.y_ticks:
-            top = y_of(value, d.y_max, self.h) - 1 - line       # the label's rows: top to y - 1
-            if top < 1 + line and y_of(value, d.y_max, self.h) - 1 > 1:
-                x = max(x, 3 + font.measure(label) + 4)
+            row = y_of(value, d.y_max, self.h, self._k)
+            top = row - one - line                          # the label's rows: top to y - 1
+            if top < one + line and row - one > one:
+                x = max(x, three + font.measure(label) + four)
         if x + width <= self.w:
-            self.create_text(x, 1, text="Now", anchor=tk.NW, fill=self.muted, font=self.font)
+            self.create_text(x, one, text="Now", anchor=tk.NW, fill=self.muted, font=self.font)
         else:                                          # at the right edge: left of the rule
-            self.create_text(x_now - 4, 1, text="Now", anchor=tk.NE, fill=self.muted, font=self.font)
+            self.create_text(x_now - four, one, text="Now", anchor=tk.NE, fill=self.muted, font=self.font)
 
     def _bold_font(self):
         return (self.font[0], self.font[1], "bold") if self.font and len(self.font) > 1 else self.font
@@ -390,36 +409,38 @@ class ForecastChart(tk.Canvas):
         if len(d.estimated) < 2:
             return
         (x0, y0), (x1, y1) = to_pixels(d.estimated[:1] + d.estimated[-1:], d.start, d.end, d.y_max,
-                                       self.w, self.h)
+                                       self.w, self.h, self._k)
         left = max(x0, 0.0)
-        if x1 - left < ESTIMATE_LABEL_MIN_WIDTH:
+        if x1 - left < self._px(ESTIMATE_LABEL_MIN_WIDTH):
             return
-        x = left + 36                                  # clear of the gridline labels
+        x = left + self._px(36)                        # clear of the gridline labels
         y = y0 + (y1 - y0) * (x - x0) / (x1 - x0)
-        if y - 5 >= tkfont.Font(root=self, font=self.font).metrics("linespace"):
-            self.create_text(x, y - 5, text="estimated", anchor=tk.SW, fill=self.muted, font=self.font)
+        gap = self._px(5)
+        if y - gap >= tkfont.Font(root=self, font=self.font).metrics("linespace"):
+            self.create_text(x, y - gap, text="estimated", anchor=tk.SW, fill=self.muted, font=self.font)
         else:                                          # no room above a line near the top
-            self.create_text(x, y + 5, text="estimated", anchor=tk.NW, fill=self.muted, font=self.font)
+            self.create_text(x, y + gap, text="estimated", anchor=tk.NW, fill=self.muted, font=self.font)
 
     def _labels(self, d: Optional[ChartData]):
         """The gridline value labels and a label per axis tick."""
         ticks = d.y_ticks if d else DEFAULT_TICKS
         y_max = d.y_max if d else 100
         for value, label in ticks:
-            y = y_of(value, y_max, self.h)
-            self.create_text(3, y - 1, text=label, anchor=tk.SW, fill=self.muted, font=self.font)
+            y = y_of(value, y_max, self.h, self._k)
+            self.create_text(self._px(3), y - self._px(1), text=label, anchor=tk.SW, fill=self.muted,
+                             font=self.font)
         if d is None:
             return
         axis_font = tkfont.Font(root=self, font=self.font)
         for when, label in d.day_ticks:
             x = x_of(when, d.start, d.end, self.w)
-            if x + 3 + axis_font.measure(label) > self.w:      # cut by the edge: leave it out
+            if x + self._px(3) + axis_font.measure(label) > self.w:      # cut by the edge: leave it out
                 continue
-            self.create_text(x + 3, self.h - 1, text=label, anchor=tk.SW, fill=self.muted,
-                             font=self.font)
+            self.create_text(x + self._px(3), self.h - self._px(1), text=label, anchor=tk.SW,
+                             fill=self.muted, font=self.font)
 
     def _on_motion(self, event):
-        hit = nearest_point(self._hover, event.x, max_dist=HOVER_STEP * 3)
+        hit = nearest_point(self._hover, event.x, max_dist=self._px(HOVER_STEP) * 3)
         self._show_tip(hit)
 
     def _show_tip(self, point: Optional[HoverPoint]):
@@ -433,19 +454,19 @@ class ForecastChart(tk.Canvas):
             return
 
         text = self._data.tip(point.t, point.value, point.projected)
-        font = tkfont.Font(root=self, font=self.tip_font or self.font)
-        pad = 7
+        font = tkfont.Font(root=self, font=self.tip_font)
+        pad, clear, r = self._px(7), self._px(8), self._px(3)
         box_w = font.measure(text) + pad * 2
         box_h = font.metrics("linespace") + pad
         x0 = max(0, min(self.w - box_w, point.x - box_w / 2))
         # Above the point when there is room, else below, so it never covers the line it describes.
-        y0 = point.y - box_h - 8
+        y0 = point.y - box_h - clear
         if y0 < 0:
-            y0 = point.y + 8
-        self.create_oval(point.x - 3, point.y - 3, point.x + 3, point.y + 3,
-                         fill="#ffffff", outline=self.accent, width=2, tags="tip")
+            y0 = point.y + clear
+        self.create_oval(point.x - r, point.y - r, point.x + r, point.y + r,
+                         fill="#ffffff", outline=self.accent, width=self._px(2), tags="tip")
         self.create_rectangle(x0, y0, x0 + box_w, y0 + box_h, fill="#000000",
                               outline="#5a5a5a", tags="tip")
-        self.create_text(x0 + box_w / 2, y0 + box_h / 2, text=text, font=self.tip_font or self.font,
+        self.create_text(x0 + box_w / 2, y0 + box_h / 2, text=text, font=self.tip_font,
                          fill="#ffffff", tags="tip")
 

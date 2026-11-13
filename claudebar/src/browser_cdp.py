@@ -21,7 +21,12 @@ from pathlib import Path
 from typing import Optional
 from urllib.parse import urlparse
 
+import http_json
+
 CONNECT_TIMEOUT = 3.0
+
+#: The only origin whose pages the token is read from.
+PLATFORM_ORIGIN = "https://platform.deepseek.com"
 
 
 def debug_port(profile: Path) -> Optional[int]:
@@ -34,12 +39,20 @@ def debug_port(profile: Path) -> Optional[int]:
 
 
 def _http_json(url: str, timeout: float = CONNECT_TIMEOUT):
-    import urllib.request
     try:
-        with urllib.request.urlopen(url, timeout=timeout) as response:
-            return json.loads(response.read().decode("utf-8"))
+        return http_json.request_json(url, None, timeout)
     except Exception:
         return None
+
+
+def origin_of(url: str) -> Optional[tuple]:
+    """(scheme, host, port) of a URL, with the scheme's default port filled in, or None."""
+    try:
+        parts = urlparse(url)
+        port = parts.port or {"http": 80, "https": 443}.get(parts.scheme)
+    except ValueError:
+        return None
+    return (parts.scheme, parts.hostname, port) if parts.scheme and parts.hostname else None
 
 
 def page_targets(port: int) -> list:
@@ -165,12 +178,20 @@ def unwrap(raw: str) -> Optional[str]:
     return text
 
 
-def token_from_page(profile: Path) -> Optional[str]:
-    """The session token from the live sign-in page, or None while it is absent."""
+def token_from_page(profile: Path, origin: str = PLATFORM_ORIGIN) -> Optional[str]:
+    """The session token from the live sign-in page, or None while it is absent.
+
+    Script runs only in pages of `origin` (the DeepSeek platform by default): the browser
+    can be sent to another site mid-sign-in, and a `userToken` key of some other site's
+    storage is not a DeepSeek token.
+    """
+    wanted = origin_of(origin)
     port = debug_port(profile)
     if not port:
         return None
     for target in page_targets(port):
+        if origin_of(str(target.get("url") or "")) != wanted:
+            continue
         raw = evaluate(target["webSocketDebuggerUrl"],
                        "localStorage.getItem('userToken')")
         token = unwrap(raw) if raw else None

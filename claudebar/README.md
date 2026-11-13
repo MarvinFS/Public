@@ -14,7 +14,7 @@ Below the bars: API-equivalent cost and token counts for today, the last 7 days,
 
 DeepSeek has no rate limits, so its view swaps the bars for the account balance and reports spend with tokens for today, the last 7 days, this month and the previous month, with the same 31-day chart.
 
-Two labels under the limits, Cost and Quota (Spend and Balance on DeepSeek), switch the lower half of the panel. Cost is everything described above. Quota is a forecast of the 5-hour session, the limit that moves within a working day. It shows the share of the session that is left and how fast it is draining, then a chart of the session from its start to its reset (once that reset time has passed, until the next reading arrives, the view says so instead of charting the old session): the recorded quota as a glowing line over a fill that fades downward, and a dashed projection that keeps falling at the measured rate until the reset on the right edge. Underneath it says what the reset adds back, whether the quota lasts until then or runs out first and when, and how long ClaudeBar has been recording. A Codex plan without a session window charts its one long window instead: the free plan's single 30-day window is shown at its real length, stretched to its reset, and titled "30-day". On DeepSeek the same view projects the balance from the last seven days of spend.
+Two labels under the limits, Cost and Quota (Spend and Balance on DeepSeek), switch the lower half of the panel. Cost is everything described above. Quota is a forecast of the 5-hour session, the limit that moves within a working day. It shows how fast the session is draining (the share left is on the limit bar above, and is not repeated), then a chart of the session from its start to its reset (once that reset time has passed, until the next reading arrives, the view says so instead of charting the old session): the recorded quota as a glowing line over a fill that fades downward, and a dashed projection that keeps falling at the measured rate until the reset on the right edge. Underneath it says what the reset adds back, whether the quota lasts until then or runs out first and when, and how long ClaudeBar has been recording. A Codex plan without a session window charts its one long window instead: the free plan's single 30-day window is shown at its real length, stretched to its reset, and titled "30-day". On DeepSeek the same view projects the balance from the last seven days of spend.
 
 ![The quota view on Claude, and on a Codex plan with a single 30-day window](quota-view.jpg)
 
@@ -68,6 +68,8 @@ The app starts in the tray. Left-click the icon to open the panel, right-click f
 .\build.ps1 -Clean     # rebuilds from scratch
 ```
 
+The script first installs `requirements-dev.txt` into `.venv`: the runtime packages from `requirements.txt` plus PyInstaller and the test tools. Install the same file to run the tests with `python -m pytest`.
+
 To use your own icon, put `app_icon.png` (tray and header) and `app_icon.ico` (the exe) in `resources/icons/`.
 
 ## Configuration
@@ -87,11 +89,13 @@ Settings live in `%LOCALAPPDATA%\ClaudeBar\config.json`:
   "deepseek_enabled": true,
   "window_x": null,
   "window_y": null,
-  "panel_view": "cost"
+  "panel_view": "cost",
+  "panel_scale": null,
+  "panel_max_height": null
 }
 ```
 
-`panel_view` is `cost` or `forecast`, the half of the panel you last chose. `refresh_interval` is in seconds, and never less than 30. Past the two thresholds the tray icon gets an amber, then a red, corner badge. `currency` accepts USD, EUR, GBP, RUB, or RON. The engine toggles hide an engine you do not use. `window_x` and `window_y` hold the last dragged panel position.
+`panel_view` is `cost` or `forecast`, the half of the panel you last chose. `refresh_interval` is in seconds, and is kept between 30 and 86400 (one day). Past the two thresholds the tray icon gets an amber, then a red, corner badge. `currency` accepts USD, EUR, GBP, RUB, or RON. The engine toggles hide an engine you do not use. `window_x` and `window_y` hold the last dragged panel position. `panel_scale` is the size you chose for the panel, a factor between 0.7 and 2.5, and `panel_max_height` is the tallest you let it grow, in pixels at a factor of 1.0. Both are `null` until you resize the panel, which means the panel sizes itself (see "Panel size" below). Resizing writes both, so there is little reason to edit them by hand. A value outside its range is ignored.
 
 DeepSeek credentials are never written to `config.json`. The session token is encrypted with Windows DPAPI, which ties it to your Windows account, and stored in `%LOCALAPPDATA%\ClaudeBar\secrets\`. Copying that folder to another machine or user profile yields nothing. If DPAPI is unavailable the token is kept in memory for that session only.
 
@@ -125,7 +129,7 @@ One consequence of reading the platform's own counters: it buckets each day in U
 
 ## Expired tokens
 
-Claude OAuth tokens last about 8 hours. When the token has expired the panel keeps showing the last data, marked with an amber "cached from 2h ago", from `%LOCALAPPDATA%\ClaudeBar\snapshot_cache.json`. To get a fresh token, open Claude Code in any terminal: it refreshes the token on startup. ClaudeBar reads Claude and Codex credentials but never writes or refreshes them; the DeepSeek credentials you enter are the only ones it stores, encrypted as described above.
+Claude OAuth tokens last about 8 hours. When the token has expired the panel keeps showing the last data from `%LOCALAPPDATA%\ClaudeBar\snapshot_cache.json`, with an amber "(cached)" beside the time those figures were last updated. To get a fresh token, open Claude Code in any terminal: it refreshes the token on startup. ClaudeBar reads Claude and Codex credentials but never writes or refreshes them; the DeepSeek credentials you enter are the only ones it stores, encrypted as described above.
 
 ## Troubleshooting
 
@@ -139,7 +143,17 @@ If the DeepSeek view shows a balance but no usage, the platform token is missing
 
 If something else looks wrong, open the log from the tray menu. It says which failure it hit, such as an OAuth token that expired at a given time or a credentials file that is missing, instead of leaving you to guess from a stale panel.
 
-The panel opens near the tray on the primary monitor. Drag it anywhere and it stays there across restarts. If that spot is no longer on any monitor when the app starts, the panel returns to the default position. "Reset window position" in the tray menu does the same on demand.
+The panel opens near the tray on the primary monitor. Drag it anywhere and it stays there across restarts. If you let go of it partly off the screen, it is pulled back inside the part of that monitor the taskbar leaves free. If that spot is no longer on any monitor when the app starts, the panel returns to the default position. "Reset window position" in the tray menu does the same on demand.
+
+## Panel size
+
+The panel sizes itself to the monitor it is on. It is drawn for a screen 1440 pixels high and scales with the height of the monitor, so a 1080p monitor gets 0.75 of that size and a 4K monitor gets 1.5 times. Windows display scaling is already counted in this, so 4K at 200% gets the same panel as 4K at 100%. Before display scaling, the automatic size stays between 0.7 and 2.0 times the size the panel was drawn at. When you drag the panel to a monitor that asks for another size, it takes that size.
+
+To change the size, drag the outer edge of the panel. The pointer turns into a resize cursor over a margin of 8 pixels at the normal size, and dragging anywhere else still moves the panel. A side edge makes everything larger or smaller, between 0.7 and 2.5 times the drawn size and no wider than the monitor allows, while the opposite edge stays where it is. The top or bottom edge sets how tall the panel may get and leaves its size alone. A corner does both.
+
+When the panel is shorter than what it has to show, the less important blocks drop out first and come back in the reverse order as it grows. The order is the source note in the footer, the top-model line, the pace line under each limit bar, the daily chart (or the details under the Quota chart), the second row of figures, the whole Cost or Quota half, and last the Updated line. The header, the limit bars (or the DeepSeek balance) and the Settings, Refresh and Exit buttons always stay. The banked resets block stays while it offers a reset to use or shows the outcome of using one. A panel that would be taller than the monitor drops blocks in the same way.
+
+While the panel has the keyboard focus, Ctrl+plus (or Ctrl+equals) makes everything a tenth larger and Ctrl+minus a tenth smaller. Ctrl with the mouse wheel does the same. Ctrl+0 returns to the automatic size and height, and so does "Reset panel size" in the tray menu. The size you chose is kept across restarts. The Settings and confirmation dialogs grow with the panel and never get smaller than their normal size.
 
 ## License
 

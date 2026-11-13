@@ -5,22 +5,24 @@ from datetime import date, datetime, timedelta
 import currency
 import data_collector as dc
 import deepseek_usage as du
+from tests import test_deepseek_usage as du_tests
 
 
 def fixed_rates(monkeypatch):
-    """Pin exchange rates so conversion assertions are deterministic."""
-    monkeypatch.setattr(currency, "get_exchange_rates",
+    """Pin exchange rates so conversion assertions are deterministic (and no fetch is tried)."""
+    monkeypatch.setattr(dc, "get_exchange_rates",
                         lambda: currency.ExchangeRates(rates=dict(currency.FALLBACK_RATES),
                                                        timestamp=datetime.now(), source="test"))
 
 
 def isolate(monkeypatch, usage=None, summary=None, cached=None, signed_in=True):
     """Replace the network, the credential and the cache."""
+    fixed_rates(monkeypatch)
     token = dc.deepseek_auth.Credential("tok", "saved") if signed_in else None
     monkeypatch.setattr(dc.deepseek_auth, "discover_user_token", lambda: token)
     monkeypatch.setattr(dc, "fetch_usage", lambda token, today: usage or du.UsageData(error="no usage"))
     monkeypatch.setattr(dc, "fetch_summary",
-                        lambda token: summary or du.AccountSummary(error="no summary"))
+                        lambda token, rates=None: summary or du.AccountSummary(error="no summary"))
     monkeypatch.setattr(dc, "save_cache", lambda **kwargs: None)
     monkeypatch.setattr(dc, "load_deepseek_cache", lambda: (cached, None))
 
@@ -49,7 +51,6 @@ class TestSignedOut:
         assert not snap.balance_available
         assert not snap.usage_available
         assert snap.error_message == "Not signed in"
-        assert snap.status_level == "error"
 
     def test_no_token_ignores_a_populated_cache(self, monkeypatch):
         from models import DeepSeekSnapshot
@@ -163,7 +164,6 @@ class TestSessionSummary:
         assert snap.usage_available
         assert snap.total_cost_available
         assert round(snap.total_cost_usd, 2) == 15.42
-        assert snap.status_level == "normal"
 
     def test_an_empty_balance_is_not_usable(self, monkeypatch):
         fixed_rates(monkeypatch)
@@ -189,9 +189,6 @@ class TestSessionSummary:
         snap = dc.DataCollector().collect_deepseek()
         assert snap.usage_available
         assert not snap.balance_available
-        # Usage is the substance, so its presence is the healthy state even
-        # when the summary call failed.
-        assert snap.status_level == "normal"
 
 
 class TestCacheFallback:
@@ -218,6 +215,43 @@ class TestCacheFallback:
         assert snap.usage_available
         assert snap.month_cost_usd == 50.0
         assert snap.is_stale
+
+    def test_a_month_that_failed_leaves_the_cached_usage_standing(self, monkeypatch):
+        """A 429 on the current month used to come out as fresh zeros (the previous month's
+        days made the fetch look complete), shown as today's figures and written over the
+        good cache. Now the cached usage half stays, marked cached with its own time, and
+        the balance beside it is still the fresh one."""
+        from models import DeepSeekSnapshot
+        fixed_rates(monkeypatch)
+        usage_time = datetime.now() - timedelta(minutes=20)
+        cached = DeepSeekSnapshot(usage_available=True, today_cost_usd=5.0, month_cost_usd=50.0,
+                                  daily_costs=[1.0, 2.0, 3.0], usage_fetched_at=usage_time)
+        isolate(monkeypatch, summary=summary(), cached=cached)
+        saved = []
+        monkeypatch.setattr(dc, "save_cache", lambda **kwargs: saved.append(kwargs["deepseek"]))
+
+        today = date.today()
+        previous = today.replace(day=1) - timedelta(days=1)
+
+        def fake_get(url, headers):
+            if f"month={today.month}&" in url:
+                return None, "Rate limited"
+            payload = (du_tests.amount_payload([(previous.strftime("%Y%m%d"), du_tests.DAY_ROWS)])
+                       if "amount" in url
+                       else du_tests.cost_payload([(previous.strftime("%Y%m%d"), du_tests.DAY_COST)]))
+            return payload, None
+
+        monkeypatch.setattr(dc, "fetch_usage", du.fetch_usage)
+        monkeypatch.setattr(du, "_get", fake_get)
+
+        snap = dc.DataCollector().collect_deepseek()
+
+        assert snap.usage_available and snap.today_cost_usd == 5.0 and snap.month_cost_usd == 50.0
+        assert snap.is_stale and snap.stale_since == usage_time
+        assert snap.usage_fetched_at == usage_time
+        assert snap.balance_available and snap.balance_fetched_at == snap.timestamp
+        (written,) = saved
+        assert written.month_cost_usd == 50.0 and written.usage_fetched_at == usage_time
 
     def test_the_cached_previous_month_comes_back_too(self, monkeypatch):
         from models import DeepSeekSnapshot

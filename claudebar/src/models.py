@@ -51,6 +51,15 @@ def reset_clock(resets_at: Optional[datetime], now: Optional[datetime] = None) -
     return True, "just now" if abs(seconds) < 60 else f"{span} ago"
 
 
+def reset_words(resets_at: Optional[datetime], now: Optional[datetime] = None) -> Optional[str]:
+    """The words a usage window stores for its reset when it is collected: "in 3h 20m",
+    or "soon" once the time has passed. None when the reset time is unknown."""
+    clock = reset_clock(resets_at, now)
+    if clock is None:
+        return None
+    return "soon" if clock[0] else clock[1]
+
+
 class Engine(Enum):
     """AI engine/provider selection."""
     CLAUDE = "claude"
@@ -162,9 +171,29 @@ class UsageSnapshot(_UsageStatus):
     stale_since: Optional[datetime] = None
 
     @property
-    def status_level(self) -> str:
-        """Return status level using default thresholds."""
-        return self.get_status_level()
+    def today_total_tokens(self) -> int:
+        return self.today_tokens.total_tokens
+
+    @property
+    def month_total_tokens(self) -> int:
+        return self.month_tokens.total_tokens
+
+    def session_unseen_since(self, now: Optional[datetime] = None) -> Optional[datetime]:
+        """When this cached reading last showed no session running, else None.
+
+        A reading with no reset time and nothing used says none had begun, as of the time it
+        was taken; one whose reset has passed says its session is over, as of the reset.
+        A request after that moment belongs to a session the reading cannot show."""
+        if not self.is_stale:
+            return None
+        reset = self.session_resets_at
+        if reset is None:
+            since = self.stale_since if self.session_percent == 0 else None
+        elif reset.astimezone() <= (now or datetime.now().astimezone()):
+            since = reset
+        else:
+            since = None
+        return since.astimezone() if since else None
 
     def charted_window(self) -> tuple:
         """(is the session, percent used, resets_at, window hours) of the window
@@ -314,15 +343,6 @@ class DeepSeekSnapshot:
         return self.last7_tokens
 
     @property
-    def status_level(self) -> str:
-        """normal with usage, warning with balance only, error with neither."""
-        if self.usage_available:
-            return "normal"
-        if self.balance_available:
-            return "warning"
-        return "error"
-
-    @property
     def balance_message(self) -> str:
         """Plain-language state of the balance, mirroring the platform."""
         if not self.balance_available:
@@ -340,19 +360,3 @@ class CombinedSnapshot:
     deepseek: Optional[DeepSeekSnapshot] = None
     active_engine: Engine = Engine.CLAUDE
     timestamp: datetime = field(default_factory=datetime.now)
-
-    def get_session_percent(self) -> float:
-        """Get session percent for active engine."""
-        if self.active_engine == Engine.CLAUDE and self.claude:
-            return self.claude.session_percent
-        if self.active_engine == Engine.CODEX and self.openai:
-            return self.openai.session_percent
-        return 0.0
-
-    def get_weekly_percent(self) -> float:
-        """Get weekly percent for active engine."""
-        if self.active_engine == Engine.CLAUDE and self.claude:
-            return self.claude.weekly_percent
-        if self.active_engine == Engine.CODEX and self.openai:
-            return self.openai.weekly_percent
-        return 0.0

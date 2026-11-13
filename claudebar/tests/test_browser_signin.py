@@ -1,5 +1,9 @@
 """Reading the DeepSeek session token out of ClaudeBar's own browser profile."""
 
+from pathlib import Path
+
+import pytest
+
 import browser_signin as bs
 
 
@@ -95,7 +99,7 @@ class TestWaitForToken:
         assert calls["n"] < 10  # it gave up long before the timeout
 
 
-class TestBrowserDiscovery:
+class TestBrowserLookupAndProfile:
     def test_find_browser_returns_a_real_path_or_none(self):
         found = bs.find_browser()
         if found is not None:
@@ -230,12 +234,16 @@ class TestBrowserDiscovery:
     own profile. What matters is finding any Chromium engine, because only
     Chromium's localStorage is the LevelDB shape this app can read."""
 
-    def test_a_browser_is_found_on_this_machine(self):
+    def test_the_first_candidate_that_exists_is_the_browser(self, tmp_path, monkeypatch):
+        """Whatever is installed on the machine running the test is beside the point:
+        the candidates are replaced by files made here."""
         import browser_signin as bs
-        found = bs.find_browser()
-        assert found is not None, "no Chromium browser found to test against"
-        from pathlib import Path
-        assert Path(found).exists()
+        first, second = tmp_path / "first.exe", tmp_path / "second.exe"
+        first.write_text("")
+        second.write_text("")
+        monkeypatch.setattr(bs, "_candidate_paths",
+                            lambda: [str(tmp_path / "missing.exe"), str(first), str(second)])
+        assert bs.find_browser() == str(first)
 
     def test_edge_is_preferred_when_present(self):
         """Edge ships with Windows, so it is the most reliable choice and must
@@ -582,26 +590,19 @@ class TestTheDeepSeekBalanceLine:
     a caption appears only when the balance cannot pay for calls.
     """
 
-    @staticmethod
-    def _panel():
-        import tkinter as tk
-        import pytest
-        # One Tk root for every panel test. A second interpreter in the same
-        # process intermittently failed to load Tcl's own init scripts, which
-        # skipped the test instead of running it.
-        if tk._default_root is None:
-            try:
-                tk.Tk().withdraw()
-            except tk.TclError:
-                pytest.skip("no display for a Tk window")
-
-        from config import Config
+    @pytest.fixture(autouse=True)
+    def _no_background_load(self, tk_root, monkeypatch):
         import ui_window
         # _create_window kicks off a background thread that shells out to the
         # Claude CLI and polls the network. Left running it outlives the test and
         # lands in the next one - including during collection, which it can abort.
         # Neither is anything to do with what this test is checking.
-        ui_window.ClaudeBarWindow._load_initial_data = lambda self: None
+        monkeypatch.setattr(ui_window.ClaudeBarWindow, "_load_initial_data", lambda self: None)
+
+    @staticmethod
+    def _panel():
+        from config import Config
+        import ui_window
         panel = ui_window.ClaudeBarWindow(
             on_refresh=lambda: None, on_settings=lambda: None, on_exit=lambda: None,
             config=Config())
@@ -674,3 +675,60 @@ class TestTheWorkerStopsWhenTold:
         assert saved == []
         assert dialog._signin_result == ("fail", "Cancelled")
 
+
+
+class TestWhichProcessesBelongToTheProfile:
+    """The profile is matched as a whole argument value, not as a piece of the command line: a
+    sibling folder (browser2) or a path inside another argument is not ours."""
+
+    PROFILE = r"C:\Users\Pat Doe\AppData\Local\ClaudeBar\browser"
+
+    @pytest.fixture
+    def running(self, monkeypatch, tmp_path):
+        """Fake browser processes: pid -> (exe, command line)."""
+        table = {}
+        monkeypatch.setattr(bs.sys, "platform", "win32")
+        monkeypatch.setattr(bs, "_iter_processes", lambda: iter([(pid, exe) for pid, (exe, _) in table.items()]))
+        monkeypatch.setattr(bs, "_command_line", lambda pid: table[pid][1])
+        monkeypatch.setattr(bs, "firefox_profile_dir", lambda: tmp_path / "firefox")
+        return table
+
+    def found(self, running, command_line, exe="msedge.exe"):
+        running.clear()
+        running[100] = (exe, command_line)
+        return bs.pids_using_profile(Path(self.PROFILE))
+
+    def test_the_profile_as_the_user_data_dir_matches_in_both_ways_a_path_with_spaces_is_quoted(self, running):
+        ours = r'"C:\Program Files\Edge\msedge.exe" --app=http://x "--user-data-dir=C:\Users\Pat Doe\AppData\Local\ClaudeBar\browser"'
+        child = r'"C:\Program Files\Edge\msedge.exe" --type=renderer --user-data-dir="C:\Users\Pat Doe\AppData\Local\ClaudeBar\browser" --lang=en'
+        assert self.found(running, ours) == [100]       # as subprocess quotes the whole argument
+        assert self.found(running, child) == [100]      # as Chromium quotes the value for its children
+
+    def test_a_path_without_spaces_matches_as_it_stands(self, running):
+        profile = r"C:\Users\Pat\AppData\Local\ClaudeBar\browser"
+        running[100] = ("msedge.exe", rf"msedge.exe --user-data-dir={profile} --remote-debugging-port=0")
+        assert bs.pids_using_profile(Path(profile)) == [100]
+
+    def test_a_sibling_folder_does_not_match(self, running):
+        assert self.found(running, r'msedge.exe "--user-data-dir=C:\Users\Pat Doe\AppData\Local\ClaudeBar\browser2"') == []
+        assert self.found(running, r'msedge.exe "--user-data-dir=C:\Users\Pat Doe\AppData\Local\ClaudeBar\browser-old"') == []
+
+    def test_a_folder_inside_the_profile_is_not_the_profile(self, running):
+        assert self.found(running, r'msedge.exe "--disk-cache-dir=C:\Users\Pat Doe\AppData\Local\ClaudeBar\browser\Cache"') == []
+
+    def test_the_path_inside_another_argument_is_not_a_match(self, running):
+        line = r'msedge.exe "--app=http://x/?p=C:\Users\Pat Doe\AppData\Local\ClaudeBar\browser" --user-data-dir=C:\other'
+        assert self.found(running, line) == []
+
+    def test_case_and_a_trailing_separator_make_no_difference(self, running):
+        assert self.found(running, r'chrome.exe "--user-data-dir=c:\users\pat doe\appdata\local\claudebar\BROWSER\\"') == [100]
+
+    def test_firefox_names_its_profile_in_a_separate_argument(self, running, tmp_path):
+        profile = tmp_path / "firefox"
+        assert self.found(running, rf'"C:\Firefox\firefox.exe" --no-remote --profile "{profile}" about:blank',
+                          exe="firefox.exe") == [100]
+        assert self.found(running, rf'"C:\Firefox\firefox.exe" --no-remote --profile "{profile}2" about:blank',
+                          exe="firefox.exe") == []
+
+    def test_a_process_that_is_not_a_browser_is_never_a_match(self, running):
+        assert self.found(running, rf'notepad.exe "--user-data-dir={self.PROFILE}"', exe="notepad.exe") == []

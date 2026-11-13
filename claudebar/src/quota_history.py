@@ -22,6 +22,7 @@ UTF-8 are read as replacement characters and break only the line they are in.
 import json
 import logging
 import math
+import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import NamedTuple, Optional
@@ -35,6 +36,12 @@ RETENTION = timedelta(days=10)
 PRUNE_EVERY = timedelta(days=1)
 
 _last_prune: Optional[datetime] = None   # when this process last pruned the file
+
+# The records of the whole file, parsed, for the file as it was when (path, size, mtime) were
+# taken: the panel asks one to three times per redraw and the file grows by a line per refresh.
+# What is held here is never handed out, only copies of slices of it.
+_parsed: Optional[tuple] = None          # (signature, {provider: [Record, oldest first]})
+_parsed_lock = threading.Lock()
 
 
 class Record(NamedTuple):
@@ -115,15 +122,41 @@ def append(provider: str, value: float, resets_at: Optional[datetime] = None,
             f.write(json.dumps(record, separators=(",", ":")) + "\n")
     except OSError as e:
         logger.warning("Quota history not written: %s", type(e).__name__)
+    finally:
+        _forget_parsed()        # the file is not what was parsed, whether or not the write got through
+
+
+def _forget_parsed() -> None:
+    global _parsed
+    with _parsed_lock:
+        _parsed = None
+
+
+def _all_records() -> dict:
+    """Every record of the file by provider, oldest first. Raises OSError for no file."""
+    global _parsed
+    path = history_path()
+    st = path.stat()
+    signature = (str(path), st.st_size, st.st_mtime_ns)
+    with _parsed_lock:
+        if _parsed is not None and _parsed[0] == signature:
+            return _parsed[1]
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            parsed = (_parse_line(line) for line in f.read().splitlines())
+            by_provider: dict = {}
+            for provider, record in (x for x in parsed if x):
+                by_provider.setdefault(provider, []).append(record)
+        for records in by_provider.values():
+            records.sort(key=lambda r: r.t)
+        _parsed = (signature, by_provider)
+        return by_provider
 
 
 def load(provider: str, since: datetime) -> list:
     """The provider's records from `since` on, oldest first."""
     since = as_utc(since)
     try:
-        with open(history_path(), "r", encoding="utf-8", errors="replace") as f:
-            parsed = (_parse_line(line) for line in f.read().splitlines())
-            records = [r for p, r in (x for x in parsed if x) if p == provider and r.t >= since]
+        records = _all_records().get(provider, ())
     except OSError:
         return []
-    return sorted(records, key=lambda r: r.t)
+    return [r for r in records if r.t >= since]

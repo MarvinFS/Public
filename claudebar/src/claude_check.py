@@ -23,7 +23,6 @@ class ClaudeStatus:
     organization: Optional[str] = None
     email: Optional[str] = None
     plan: Optional[str] = None
-    version: Optional[str] = None
     error: Optional[str] = None
 
 
@@ -42,7 +41,11 @@ def check_claude_status_via_cli(cli_path: Optional[str] = None) -> Optional[Clau
         env.pop("CLAUDECODE", None)
         result = subprocess.run(
             [cli_path, "auth", "status"],
-            capture_output=True, text=True, timeout=10,
+            # UTF-8, not the system code page (text=True): an unassigned byte killed
+            # subprocess's reader thread (the traceback went to a stderr a windowed exe
+            # lacks) and the call came back with empty output, so the CLI's status was
+            # silently dropped.
+            capture_output=True, encoding="utf-8", errors="replace", timeout=10,
             env=env,
             creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0,
         )
@@ -52,6 +55,9 @@ def check_claude_status_via_cli(cli_path: Optional[str] = None) -> Optional[Clau
             return None
 
         data = json.loads(result.stdout)
+        if not isinstance(data, dict):        # valid JSON, but not the object the CLI prints
+            logger.warning("claude auth status printed JSON that is not an object")
+            return None
         status = ClaudeStatus(
             installed=True,
             cli_path=cli_path,
@@ -90,6 +96,9 @@ def check_credentials() -> tuple[bool, Optional[dict], Optional[str]]:
         with open(creds_path, "r", encoding="utf-8") as f:
             creds = json.load(f)
 
+        if not isinstance(creds, dict):
+            return False, None, "Error reading credentials: the file is not a JSON object"
+
         if creds.get("apiKey"):
             return True, creds, None
 
@@ -110,7 +119,7 @@ def check_credentials() -> tuple[bool, Optional[dict], Optional[str]]:
                 return False, creds, "Token expired"
 
         return True, creds, None
-    except (json.JSONDecodeError, IOError) as e:
+    except (json.JSONDecodeError, UnicodeDecodeError, IOError) as e:
         return False, None, f"Error reading credentials: {str(e)}"
 
 

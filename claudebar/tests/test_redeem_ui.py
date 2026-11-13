@@ -7,7 +7,6 @@ stub and the redeem runner is a recorder: no request is ever made.
 """
 
 import threading
-import tkinter as tk
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
@@ -79,19 +78,6 @@ class Runner:
         if self.gate is not None:
             self.gate.wait(5)
         return self.outcome
-
-
-@pytest.fixture(scope="module")
-def tk_root():
-    """One hidden Tk root for the module: creating and destroying a root per test
-    makes Tcl's init fail intermittently ("tcl_findLibrary")."""
-    try:
-        root = tk.Tk()
-    except tk.TclError as e:
-        pytest.skip(f"no display for Tk: {e}")
-    root.withdraw()
-    yield root
-    root.destroy()
 
 
 @pytest.fixture
@@ -424,7 +410,7 @@ class TestTheUpdateLoopSurvivesAFailure:
 
         panel._update_tick()
 
-        assert scheduled == [50]                              # the next tick is still booked
+        assert scheduled == [ui_window._TICK_HIDDEN_MS]       # the next tick is still booked (this panel is not shown)
         assert panel._redeem_flow.state == "done"             # and the result was still applied
 
 

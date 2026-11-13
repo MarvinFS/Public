@@ -10,18 +10,23 @@ The password never passes through this app, which is the whole point: only the
 session token is persisted, and it expires on its own. Everything after
 sign-in is plain HTTP with that token, so no browser stays open.
 
-The browser keeps its own profile under the ClaudeBar config directory, so the
-session survives restarts and the user's everyday browser is never touched.
+The browser runs against its own profile under the ClaudeBar config directory, so
+the user's everyday browser is never touched. That profile keeps the session token
+in plaintext (LevelDB or SQLite), while the stored copy is DPAPI-encrypted, so
+`end_signin` deletes the profile as soon as the sign-in is over, however it ended.
 """
 
 import json
+import logging
 import os
 import re
 import shutil
 import sqlite3
 import subprocess
 import sys
+import threading
 import time
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -29,7 +34,9 @@ import browser_cdp
 
 from config import get_config_dir
 
-SIGNIN_URL = "https://platform.deepseek.com/sign_in"
+logger = logging.getLogger("claudebar")
+
+SIGNIN_URL = f"{browser_cdp.PLATFORM_ORIGIN}/sign_in"
 
 # Where Chromium keeps web storage inside a profile
 STORAGE_GLOBS = ("*/Local Storage/leveldb", "Local Storage/leveldb")
@@ -145,6 +152,14 @@ def launch(url: str = SIGNIN_URL) -> Optional[subprocess.Popen]:
         _engine = "chromium"
         profile = profile_dir()
         profile.mkdir(parents=True, exist_ok=True)
+        # A port file left by an earlier run names a port that is dead by now, or taken
+        # by something else: a browser that was force-closed cannot remove it. The
+        # browser writes a fresh one as it starts, and nothing may read the old one
+        # before then.
+        try:
+            (profile / "DevToolsActivePort").unlink(missing_ok=True)
+        except OSError:
+            pass
         # Debugging is switched on so the token can be read from the live page.
         # Waiting for it to reach disk instead means waiting for Chromium to
         # flush its storage, which measured about a minute after the user had
@@ -579,6 +594,45 @@ def _command_line(pid: int) -> str:
         kernel32.CloseHandle(handle)
 
 
+def _arguments(command_line: str) -> list:
+    """The arguments of a Windows command line, split as Windows itself splits it (quotes,
+    backslashes before quotes)."""
+    import ctypes
+    from ctypes import wintypes
+
+    if not command_line.strip():
+        return []       # CommandLineToArgvW answers an empty line with this process's own path
+    shell32 = ctypes.WinDLL("shell32", use_last_error=True)
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    shell32.CommandLineToArgvW.restype = ctypes.POINTER(wintypes.LPWSTR)
+    shell32.CommandLineToArgvW.argtypes = [wintypes.LPCWSTR, ctypes.POINTER(ctypes.c_int)]
+    kernel32.LocalFree.argtypes = [ctypes.c_void_p]
+    count = ctypes.c_int(0)
+    argv = shell32.CommandLineToArgvW(command_line, ctypes.byref(count))
+    if not argv:
+        return []
+    try:
+        return [argv[i] for i in range(count.value)]
+    finally:
+        kernel32.LocalFree(ctypes.cast(argv, ctypes.c_void_p))
+
+
+def _same_path(a: str, b: str) -> bool:
+    return bool(a) and bool(b) and os.path.normcase(os.path.normpath(a)) == os.path.normcase(os.path.normpath(b))
+
+
+def _names_profile(command_line: str, profile: str) -> bool:
+    """Whether the command line has `profile` as an argument's value: `--user-data-dir=<path>`
+    for Chromium, the path after `--profile` for Firefox. Whole values only, so a sibling folder
+    (browser2) or a path inside another argument is not it; case and a trailing separator do
+    not matter."""
+    for argument in _arguments(command_line):
+        value = argument.split("=", 1)[1] if argument.startswith("--") and "=" in argument else argument
+        if _same_path(value, profile):
+            return True
+    return False
+
+
 def pids_using_profile(profile: Optional[Path] = None) -> list:
     """Browser PIDs whose command line names our profile directory.
 
@@ -589,11 +643,13 @@ def pids_using_profile(profile: Optional[Path] = None) -> list:
     if sys.platform != "win32":
         return []
     names = tuple(name.lower() for name in BROWSER_EXE_NAMES + FIREFOX_EXE_NAMES)
+    targets = (str(profile or profile_dir()), str(firefox_profile_dir()))
     found = set()
-    for target in (str(profile or profile_dir()).lower(),
-                   str(firefox_profile_dir()).lower()):
-        found.update(pid for pid, exe in _iter_processes()
-                     if exe in names and target in _command_line(pid).lower())
+    for pid, exe in _iter_processes():
+        if exe in names:
+            line = _command_line(pid)
+            if any(_names_profile(line, target) for target in targets):
+                found.add(pid)
     return sorted(found)
 
 
@@ -612,8 +668,11 @@ def close(process: Optional[subprocess.Popen] = None) -> int:
     stopped = 0
     for pid in pids:
         try:
+            # No console window: this is a windowed app, and a console child of one
+            # opens (and flashes) a window of its own.
             subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"],
-                           capture_output=True, timeout=20)
+                           capture_output=True, timeout=20,
+                           creationflags=subprocess.CREATE_NO_WINDOW)
             stopped += 1
         except (OSError, subprocess.SubprocessError):
             pass
@@ -679,3 +738,69 @@ def forget() -> bool:
     if is_our_profile(firefox):
         shutil.rmtree(firefox, ignore_errors=True)
     return not profile.exists() and not firefox.exists()
+
+
+#: How often end_signin tries to delete a profile whose files the browser has not let go of yet.
+_DELETE_ATTEMPTS = 8
+_DELETE_PAUSE = 0.4
+#: The same when the app is exiting (abandon_signin), which must not wait for the browser.
+_EXIT_DELETE_ATTEMPTS = 2
+
+# One sign-in at a time in the whole process. Every sign-in runs its browser on the same profile
+# directory, so one that was cancelled and is still on its way out (its worker wakes from a 2 s
+# sleep or a 3 s DevTools probe after its dialog has closed) would close the browser of the next
+# one and delete its profile. The next one waits for the first to be finished, on its own thread.
+_session_lock = threading.Lock()
+_in_session = False
+
+
+@contextmanager
+def session():
+    """Hold the process's one sign-in, from the launch of its browser to the end of its cleanup.
+
+    Waits for an earlier sign-in to have closed its browser and deleted its profile, so it
+    belongs on the sign-in's worker thread and never on the Tk thread."""
+    global _in_session
+    with _session_lock:
+        _in_session = True
+        try:
+            yield
+        finally:
+            _in_session = False
+
+
+def end_signin(process: Optional[subprocess.Popen] = None, attempts: int = _DELETE_ATTEMPTS) -> None:
+    """The sign-in is over, however it ended: close the browser ClaudeBar launched and
+    delete the profile it ran in.
+
+    The profile holds the session token in plaintext (LevelDB or SQLite). Once the token
+    is stored with DPAPI, or the sign-in gave up, nothing needs it, so it must not sit
+    on disk. Closing and deleting go through `close` and `forget`, which match only
+    ClaudeBar's own profile directories, so a browser the user started is never touched.
+    Windows keeps a killed browser's files locked for a moment, hence the retries.
+
+    Runs on the sign-in worker thread (and at Exit, see abandon_signin) and never raises: it
+    is the worker's last step.
+    """
+    try:
+        close(process)
+        for attempt in range(attempts):
+            if forget():
+                return
+            if attempt + 1 < attempts:
+                time.sleep(_DELETE_PAUSE)
+        logger.warning("DeepSeek sign-in: the browser profile could not be fully deleted")
+    except Exception:                      # noqa: BLE001 - the last step must not break the worker
+        logger.exception("DeepSeek sign-in: closing the browser failed")
+
+
+def abandon_signin() -> None:
+    """The app is exiting: close the browser of a sign-in that is still running and delete its
+    profile.
+
+    The sign-in's worker is a daemon thread, so it ends with the process before it reaches its
+    own cleanup, and the browser would stay open with the session token in plaintext in its
+    profile. A no-op, and instant, when no sign-in is running; it does not wait for the worker
+    (which may be a minutes-long poll) and keeps its retries short. Never raises."""
+    if _in_session:
+        end_signin(attempts=_EXIT_DELETE_ATTEMPTS)

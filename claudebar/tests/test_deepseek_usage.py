@@ -3,6 +3,8 @@
 import json
 from datetime import date, datetime
 
+import pytest
+
 import currency
 import deepseek_usage as d
 
@@ -218,6 +220,59 @@ class TestFetchUsage:
         monkeypatch.setattr(d, "_get", lambda url, headers: ({"code": 40003, "data": None}, None))
         assert not d.fetch_usage("token", today=date(2026, 9, 20)).available
 
+    # How one month's two calls answer, for the tests below.
+    EMPTY = {"code": 0, "msg": "", "data": {"biz_data": {}}}        # answered, nothing in it
+    EXPIRED = {"code": 40003, "data": None}                          # answered: session rejected
+
+    @staticmethod
+    def months(monkeypatch, **answers):
+        """Both calls of a month answer alike: a payload dict, or an error text for a call that
+        did not complete. September is the current month (today is the 20th), August the previous."""
+        rows = {"amount": lambda day: amount_payload([(day, DAY_ROWS)]),
+                "cost": lambda day: cost_payload([(day, DAY_COST)])}
+
+        def fake_get(url, headers):
+            answer = answers["sep" if "month=9" in url else "aug"]
+            if answer == "ok":
+                kind = "amount" if "amount" in url else "cost"
+                return rows[kind]("20260912" if "month=9" in url else "20260820"), None
+            if isinstance(answer, str):
+                return None, answer
+            return answer, None
+
+        monkeypatch.setattr(d, "_get", fake_get)
+
+    @pytest.mark.parametrize("sep, aug", [("Rate limited", "ok"), ("ok", "HTTP 500"),
+                                          ("ok", EXPIRED), (EXPIRED, "ok")])
+    def test_a_month_that_failed_is_not_a_complete_reading(self, monkeypatch, sep, aug):
+        """The figures of the months that did answer would read as the whole: with the current
+        month missing, today and this month came out as a fresh zero."""
+        self.months(monkeypatch, sep=sep, aug=aug)
+        usage = d.fetch_usage("token", today=date(2026, 9, 20))
+        assert not usage.available
+        assert usage.error and usage.days == []
+
+    def test_the_reason_given_is_the_failure_not_an_empty_months_answer(self, monkeypatch):
+        """The current month answered with nothing and the previous one failed: what the panel
+        is told is the failure."""
+        self.months(monkeypatch, sep=self.EMPTY, aug="HTTP 500")
+        usage = d.fetch_usage("token", today=date(2026, 9, 20))
+        assert not usage.available and usage.error == "HTTP 500"
+
+    @pytest.mark.parametrize("sep, aug, month", [("ok", EMPTY, "2026-09"), (EMPTY, "ok", "2026-08")])
+    def test_a_month_that_answered_with_nothing_is_empty_not_failed(self, monkeypatch, sep, aug, month):
+        """A new month has no spend yet, and an account may have none in the previous one: that is
+        an answer, and the other month's days stand."""
+        self.months(monkeypatch, sep=sep, aug=aug)
+        usage = d.fetch_usage("token", today=date(2026, 9, 20))
+        assert usage.available
+        assert {day.date[:7] for day in usage.days} == {month}
+
+    def test_months_that_all_answer_with_nothing_are_an_unexpected_response(self, monkeypatch):
+        self.months(monkeypatch, sep=self.EMPTY, aug=self.EMPTY)
+        usage = d.fetch_usage("token", today=date(2026, 9, 20))
+        assert not usage.available and usage.error == "Unexpected usage response"
+
 
 SUMMARY = {"code": 0, "msg": "", "data": {"biz_code": 0, "biz_data": {
     "normal_wallets": [{"currency": "USD", "balance": "14.5807473736000000", "token_estimation": "0"}],
@@ -265,14 +320,13 @@ class TestAccountSummary:
 
     def test_a_cny_summary_is_converted(self, monkeypatch):
         # Pin the rates: the live table would make the expected value drift.
-        monkeypatch.setattr(currency, "get_exchange_rates",
-                            lambda: currency.ExchangeRates(rates=dict(currency.FALLBACK_RATES),
-                                                           timestamp=datetime.now(), source="test"))
+        rates = currency.ExchangeRates(rates=dict(currency.FALLBACK_RATES),
+                                       timestamp=datetime.now(), source="test")
         payload = json.loads(json.dumps(SUMMARY))
         payload["data"]["biz_data"]["normal_wallets"] = [{"currency": "CNY", "balance": "71.0"}]
         payload["data"]["biz_data"]["bonus_wallets"] = []
         payload["data"]["biz_data"]["total_costs"] = [{"currency": "CNY", "amount": "71.0"}]
         monkeypatch.setattr(d, "_get", lambda url, headers: (payload, None))
-        s = d.fetch_summary("token")
+        s = d.fetch_summary("token", rates)
         assert round(s.topped_up, 3) == 10.0      # 71 / 7.10
         assert round(s.total_cost, 3) == 10.0

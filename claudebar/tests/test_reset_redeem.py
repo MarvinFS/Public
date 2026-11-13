@@ -480,8 +480,7 @@ class TestFlow:
 
 class TestConfirmText:
     def test_claude(self):
-        lines = rr.confirm_lines(CLAUDE_CLAIM := CLAIM_CLAUDE, "session 12%, weekly 39%", NOW,
-                                 tz=UTC)
+        lines = rr.confirm_lines(CLAIM_CLAUDE, "session 12%, weekly 39%", NOW, tz=UTC)
         assert lines[0] == "Opus launch reset"
         assert "Expires Oct 22, 16:00 (in 10 d)" in lines
         assert "Clears the 5-hour limit and the weekly limit" in lines

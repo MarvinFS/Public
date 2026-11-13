@@ -1,17 +1,21 @@
 """Runtime price catalog from models.dev, with the bundled tables as fallback."""
 
 import json
-import urllib.request
 from datetime import datetime, timedelta
 from typing import Optional
 
 import codex_pricing
+import http_json
 import pricing
 from config import atomic_write_text, get_config_dir
+from version import USER_AGENT
 
 URL = "https://models.dev/api.json"
 CACHE_TTL = timedelta(hours=24)
 PROVIDERS = ("anthropic", "openai")
+
+# models.dev being down must cost one 10 s timeout per ten minutes, not one per refresh.
+_fetch_failures = http_json.FailureMemory()
 
 
 def _cache_path():
@@ -31,11 +35,14 @@ def _load_cached() -> Optional[dict]:
 
 def _fetch() -> Optional[dict]:
     """Fetch and cache only the two provider cost maps; None on any failure
-    (an existing, expired cache file is left in place)."""
+    (an existing, expired cache file is left in place). A failure is remembered and
+    nothing is asked for ten minutes after it."""
+    if _fetch_failures.blocked():
+        return None
     try:
-        req = urllib.request.Request(URL, headers={"User-Agent": "ClaudeBar/1.0"})
-        with urllib.request.urlopen(req, timeout=10) as response:
-            api = json.loads(response.read().decode("utf-8"))
+        # Public and credential-free, so it may follow a redirect.
+        api = http_json.request_json(URL, {"User-Agent": USER_AGENT}, timeout=10,
+                                     follow_redirects=True)
         data = {
             provider: {mid: {"cost": m.get("cost", {})}
                        for mid, m in api[provider]["models"].items() if isinstance(m, dict)}
@@ -46,6 +53,7 @@ def _fetch() -> Optional[dict]:
         atomic_write_text(_cache_path(), json.dumps(data))
         return data
     except Exception:
+        _fetch_failures.failed()
         return None
 
 

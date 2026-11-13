@@ -110,6 +110,45 @@ def test_redacts_tokens():
         assert "[REDACTED]" in out
 
 
+@pytest.mark.parametrize("token", [
+    "abc+def/ghi==",                      # base64: '+', '/' and the '=' padding
+    "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.sig_nature-x~y",   # base64url JWT with '.', '_', '-', '~'
+])
+def test_a_bearer_token_is_redacted_to_its_last_character(token):
+    """The pattern stopped at the first '+', '/' or '=', leaving the tail of the token in the log."""
+    formatter = RedactingFormatter('%(message)s')
+    for scheme in ("Bearer", "bearer"):
+        out = formatter.format(_record(f"Authorization: {scheme} {token} sent to the API"))
+        assert out == "Authorization: Bearer [REDACTED] sent to the API"
+
+
+@pytest.mark.parametrize("message, secrets", [
+    ("Cookie: userToken=abc123; sid=xyz789", ["abc123", "xyz789"]),
+    ("Set-Cookie: session=s3cr3t; Path=/; HttpOnly", ["s3cr3t"]),
+    ("headers {'Cookie': 'sid=q1w2e3', 'Accept': 'json'}", ["q1w2e3"]),
+])
+def test_cookie_header_values_are_redacted(message, secrets):
+    out = RedactingFormatter('%(message)s').format(_record(message))
+    for secret in secrets:
+        assert secret not in out
+    assert "[REDACTED]" in out
+
+
+@pytest.mark.parametrize("name", ["token", "access_token", "refresh_token", "client_secret", "userToken"])
+def test_key_value_secrets_are_redacted(name):
+    """The form a URL query or a form body carries them in. The value stops at a separator, so
+    the rest of the line stays readable."""
+    out = RedactingFormatter('%(message)s').format(
+        _record(f"POST /oauth/token?grant=refresh&{name}=a1B2+c3/d4%3D5==&scope=usage failed"))
+    assert "a1B2" not in out and "d4%3D5" not in out
+    assert out == f"POST /oauth/token?grant=refresh&{name}=[REDACTED]&scope=usage failed"
+
+
+def test_a_count_named_like_a_token_is_left_alone():
+    out = RedactingFormatter('%(message)s').format(_record("max_tokens=4096 tokens=12 token_count=3"))
+    assert out == "max_tokens=4096 tokens=12 token_count=3"
+
+
 def test_setup_logging_hides_debug_without_the_flag(tmp_path):
     logger = setup_logging(debug=False, log_dir=tmp_path)
     try:

@@ -121,6 +121,66 @@ def test_same_response_copied_into_a_second_file_counts_once(tmp_path):
     assert tokens.output_tokens == 1_128
 
 
+@pytest.mark.parametrize("final_file_first", [True, False])
+def test_a_mid_stream_copy_in_another_file_never_beats_the_final_line(tmp_path, monkeypatch, final_file_first):
+    """Files are visited in directory order, not time order. A resumed transcript that carries
+    only the first block of a response (a placeholder output_tokens) must not replace the
+    final line another file holds, whichever of the two is visited last."""
+    import log_parser
+    complete = write_session(tmp_path, [
+        assistant("msg_1", "req_1", "thinking", output_tokens=1),
+        assistant("msg_1", "req_1", "tool_use", output_tokens=1_128),
+    ], "complete.jsonl")
+    write_session(tmp_path, [assistant("msg_1", "req_1", "thinking", output_tokens=1)], "resumed.jsonl")
+    files = [complete / "a-project" / "complete.jsonl", complete / "a-project" / "resumed.jsonl"]
+    monkeypatch.setattr(log_parser, "find_jsonl_files",
+                        lambda projects_dir=None: iter(files if final_file_first else files[::-1]))
+
+    _, tokens, _ = aggregate_usage(tmp_path)
+
+    assert tokens.output_tokens == 1_128
+
+
+def test_equal_claims_keep_the_later_line(tmp_path):
+    """The tie goes to the line seen last, as it always did, so the timestamp is the later one."""
+    early = assistant("msg_1", "req_1", "text")
+    late = assistant("msg_1", "req_1", "text")
+    early["timestamp"], late["timestamp"] = "2026-09-06T12:00:00.000Z", "2026-09-06T12:00:05.000Z"
+    write_session(tmp_path, [early, late])
+
+    from log_parser import collect_entries, parse_timestamp
+    ((_, timestamp),) = collect_entries(tmp_path).values()
+
+    assert timestamp == parse_timestamp("2026-09-06T12:00:05.000Z")
+
+
+@pytest.mark.parametrize("stamp", [None, "", "not a date"])
+def test_a_line_with_no_date_counts_on_no_day(tmp_path, stamp):
+    """It used to be stamped "now", which put it in today's spend again on every refresh."""
+    from datetime import date
+    from log_parser import collect_entries, daily_costs, extract_usage_from_entry
+
+    undated = assistant("msg_1", "req_1", "text")
+    if stamp is None:
+        del undated["timestamp"]
+    else:
+        undated["timestamp"] = stamp
+    dated = assistant("msg_2", "req_2", "text")
+    dated["timestamp"] = "2026-09-06T12:00:00.000Z"
+    write_session(tmp_path, [undated, dated])
+
+    assert extract_usage_from_entry(undated) is None
+
+    entries = collect_entries(tmp_path)
+    today = date.today()
+    _, today_tokens, today_cost = aggregate_usage(entries=entries, start_date=today, end_date=today)
+    assert today_tokens.output_tokens == 0 and today_cost == 0.0
+    assert sum(daily_costs(entries, 31, today)) == 0.0
+    # ...while the dated line beside it still counts on its own day.
+    _, tokens, _ = aggregate_usage(entries=entries, start_date=date(2026, 9, 6), end_date=date(2026, 9, 6))
+    assert tokens.output_tokens == 1_128
+
+
 def test_current_models_are_priced_from_the_table_not_a_fallback():
     """Every model in real use must resolve to its own entry."""
     for model in ("claude-opus-5", "claude-fable-5", "claude-fable-5-1",

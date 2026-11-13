@@ -11,15 +11,15 @@ from models import (UsageSnapshot, OpenAISnapshot, DeepSeekSnapshot, CombinedSna
                     WEEKLY_WINDOW_HOURS)
 from log_parser import collect_entries, aggregate_usage, daily_costs
 from oauth_usage import fetch_oauth_usage, OAuthUsageData
-from openai_usage import fetch_openai_usage, is_codex_configured
+from openai_usage import fetch_openai_usage
 from codex_log_parser import CodexTokenUsage, get_codex_daily_usage
-from config import get_claude_projects_dir
+from config import Config, get_claude_projects_dir
 import model_catalog
 import deepseek_auth
 import claude_cli_snapshot
 import quota_history
 from deepseek_usage import fetch_usage, fetch_summary, last_n_days, month_days, previous_month_days
-from currency import to_usd
+from currency import ExchangeRates, get_exchange_rates, to_usd
 from forecast import as_utc
 from snapshot_cache import save_cache, load_cache, load_deepseek_cache
 
@@ -30,8 +30,65 @@ logger = logging.getLogger("claudebar")
 OAUTH_REMINDER_INTERVAL = timedelta(hours=1)
 
 
-def _remaining(percent_used: float) -> float:
-    return min(max(100.0 - percent_used, 0.0), 100.0)
+def _record_quota(key: str, percent_used: float, resets_at: Optional[datetime], at: datetime) -> None:
+    """Add one reading of a quota window to the history, as the percent still left.
+
+    Only a branch that parsed a live response may call this, never a cache fallback:
+    a replayed figure would be charted as if it were taken now."""
+    quota_history.append(key, min(max(100.0 - percent_used, 0.0), 100.0), resets_at, at)
+
+
+# The figures a failed live reading takes from the cache, per engine. Extra usage and
+# banked resets are cached values too: a reset is never offered from a cached reading.
+_CLAUDE_CACHED = ("session_percent", "session_reset", "session_resets_at",
+                  "weekly_percent", "weekly_reset", "weekly_resets_at",
+                  "extra_enabled", "extra_percent", "extra_used", "extra_limit", "extra_currency",
+                  "banked")
+_CODEX_CACHED = ("session_percent", "session_reset", "session_available", "session_resets_at",
+                 "weekly_percent", "weekly_reset", "weekly_resets_at",
+                 "session_window_hours", "weekly_window_hours", "banked",
+                 "credits_remaining", "plan_type")
+# DeepSeek's two halves fail independently, so each has its own list.
+_DEEPSEEK_BALANCE_CACHED = ("balance_available", "balance_usable", "balance_total",
+                            "balance_topped_up", "balance_granted", "balance_currency",
+                            "balance_fetched_at")
+_DEEPSEEK_USAGE_CACHED = ("usage_available", "usage_currency", "today_cost_usd",
+                          "today_tokens", "month_cost_usd", "month_tokens",
+                          "last7_cost_usd", "last7_tokens", "daily_costs",
+                          "prev_month_cost_usd", "prev_month_tokens",
+                          "total_cost_usd", "total_cost_available",
+                          "daily_tokens", "daily_requests", "daily_dates",
+                          "models_used", "usage_fetched_at")
+
+
+def _carry_cached(snapshot, cached, names: tuple) -> None:
+    """Copy the named figures of the cached snapshot over the live one."""
+    for name in names:
+        setattr(snapshot, name, getattr(cached, name))
+
+
+def _fall_back_to_cache(snapshot, cached, names: tuple) -> None:
+    """Show the cached figures for a reading that failed, marked stale as of that
+    engine's own last reading: `stale_since` is the cached snapshot's, never the third
+    value of load_cache(), which is the later of the two engines' times."""
+    _carry_cached(snapshot, cached, names)
+    snapshot.is_stale = True
+    snapshot.stale_since = cached.stale_since
+
+
+class _LazyRates:
+    """One refresh's exchange rates, looked up the first time a conversion reads `.rates` and
+    kept for the rest of the refresh. `to_usd` never reads them for an amount in USD, so an
+    account that reports USD touches neither the rates file nor the network."""
+
+    def __init__(self) -> None:
+        self._table: Optional[ExchangeRates] = None
+
+    @property
+    def rates(self) -> dict:
+        if self._table is None:
+            self._table = get_exchange_rates()
+        return self._table.rates
 
 
 def _window_hours(window, default: float) -> float:
@@ -62,12 +119,12 @@ class DataCollector:
 
     def __init__(self, projects_dir: Optional[Path] = None,
                  on_oauth_failure: Optional[callable] = None,
-                 on_oauth_success: Optional[callable] = None):
+                 on_oauth_success: Optional[callable] = None,
+                 config: Optional[Config] = None):
         self.projects_dir = projects_dir or get_claude_projects_dir()
-        self._last_snapshot: Optional[UsageSnapshot] = None
-        self._last_openai_snapshot: Optional[OpenAISnapshot] = None
-        self._last_deepseek_snapshot: Optional[DeepSeekSnapshot] = None
-        self._last_combined: Optional[CombinedSnapshot] = None
+        # The engine switches are read from here at every refresh, never copied: the Settings
+        # dialog changes this one object in place. None means every engine is on.
+        self._config = config
         self._active_engine: Engine = Engine.CLAUDE
         self._on_oauth_failure = on_oauth_failure
         self._on_oauth_success = on_oauth_success
@@ -103,9 +160,8 @@ class DataCollector:
                 snapshot.session_resets_at = oauth_data.session.resets_at
                 # A live reading of the session the quota view charts; a response
                 # without one must not be recorded as a full quota.
-                quota_history.append(quota_history.window_key("claude", True),
-                                     _remaining(snapshot.session_percent),
-                                     snapshot.session_resets_at, snapshot.timestamp)
+                _record_quota(quota_history.window_key("claude", True), snapshot.session_percent,
+                              snapshot.session_resets_at, snapshot.timestamp)
             if oauth_data.weekly:
                 snapshot.weekly_percent = oauth_data.weekly.percent
                 snapshot.weekly_reset = oauth_data.weekly.reset_str
@@ -131,22 +187,8 @@ class DataCollector:
 
             cached_claude, _, _ = load_cache()
             if cached_claude:
-                # Use cached OAuth data (session/weekly/extra percentages)
-                snapshot.session_percent = cached_claude.session_percent
-                snapshot.session_reset = cached_claude.session_reset
-                snapshot.session_resets_at = cached_claude.session_resets_at
-                snapshot.weekly_percent = cached_claude.weekly_percent
-                snapshot.weekly_reset = cached_claude.weekly_reset
-                snapshot.weekly_resets_at = cached_claude.weekly_resets_at
-                snapshot.extra_enabled = cached_claude.extra_enabled
-                snapshot.extra_percent = cached_claude.extra_percent
-                snapshot.extra_used = cached_claude.extra_used
-                snapshot.extra_limit = cached_claude.extra_limit
-                snapshot.extra_currency = cached_claude.extra_currency
-                snapshot.banked = cached_claude.banked
-                # Mark as stale
-                snapshot.is_stale = True
-                snapshot.stale_since = cached_claude.stale_since
+                # Use cached OAuth data (session/weekly/extra percentages), marked stale
+                _fall_back_to_cache(snapshot, cached_claude, _CLAUDE_CACHED)
             else:
                 # No cache and OAuth unavailable - surface it rather than render
                 # a silent all-zeros usage panel (the line-121 guard would suppress it).
@@ -179,8 +221,6 @@ class DataCollector:
 
         if errors and not snapshot.cli_available and not snapshot.logs_available:
             snapshot.error_message = "; ".join(errors)
-
-        self._last_snapshot = snapshot
 
         # Save to cache on successful OAuth fetch
         if not oauth_failed:
@@ -233,7 +273,7 @@ class DataCollector:
         if any(r.t == reading.t for r in quota_history.load(key, reading.t)):
             return
         session = reading.usage.session
-        quota_history.append(key, _remaining(session.percent), session.resets_at, reading.t)
+        _record_quota(key, session.percent, session.resets_at, reading.t)
 
     def _fetch_usage_limits(self, errors: list) -> OAuthUsageData:
         """Fetch usage limits from the OAuth API (caller falls back to cache)."""
@@ -282,11 +322,6 @@ class DataCollector:
                            format_duration(self._oauth_failed_since),
                            reason)
 
-    @property
-    def last_snapshot(self) -> Optional[UsageSnapshot]:
-        """Get the most recent snapshot without refreshing."""
-        return self._last_snapshot
-
     def collect_openai(self) -> OpenAISnapshot:
         """Collect fresh usage data from OpenAI/Codex."""
         snapshot = OpenAISnapshot(timestamp=datetime.now())
@@ -308,8 +343,8 @@ class DataCollector:
                 snapshot.banked = openai_data.banked
                 session, used, resets_at, _ = snapshot.charted_window()
                 if openai_data.five_hour if session else openai_data.weekly:
-                    quota_history.append(quota_history.window_key("codex", session),
-                                         _remaining(used), resets_at, snapshot.timestamp)
+                    _record_quota(quota_history.window_key("codex", session), used, resets_at,
+                                  snapshot.timestamp)
                 snapshot.credits_remaining = openai_data.credits_remaining
                 snapshot.plan_type = openai_data.plan_type
                 snapshot.available = True
@@ -327,20 +362,7 @@ class DataCollector:
         if api_failed:
             _, cached_openai, _ = load_cache()
             if cached_openai:
-                snapshot.session_percent = cached_openai.session_percent
-                snapshot.session_reset = cached_openai.session_reset
-                snapshot.session_available = cached_openai.session_available
-                snapshot.session_resets_at = cached_openai.session_resets_at
-                snapshot.weekly_percent = cached_openai.weekly_percent
-                snapshot.weekly_reset = cached_openai.weekly_reset
-                snapshot.weekly_resets_at = cached_openai.weekly_resets_at
-                snapshot.session_window_hours = cached_openai.session_window_hours
-                snapshot.weekly_window_hours = cached_openai.weekly_window_hours
-                snapshot.banked = cached_openai.banked
-                snapshot.credits_remaining = cached_openai.credits_remaining
-                snapshot.plan_type = cached_openai.plan_type
-                snapshot.is_stale = True
-                snapshot.stale_since = cached_openai.stale_since
+                _fall_back_to_cache(snapshot, cached_openai, _CODEX_CACHED)
 
         # Fetch token usage and costs from local JSONL logs: the daily series
         # ends today, so today, the month and the last 31 days are slices of it.
@@ -366,18 +388,11 @@ class DataCollector:
         except Exception:
             pass  # Token counts are optional, don't fail if logs unavailable
 
-        self._last_openai_snapshot = snapshot
-
         # Save to cache on successful API fetch
         if not api_failed:
             save_cache(openai=snapshot)
 
         return snapshot
-
-    @property
-    def last_openai_snapshot(self) -> Optional[OpenAISnapshot]:
-        """Get the most recent OpenAI snapshot without refreshing."""
-        return self._last_openai_snapshot
 
     def collect_deepseek(self) -> DeepSeekSnapshot:
         """Collect DeepSeek balance and spend from the signed-in session.
@@ -398,12 +413,15 @@ class DataCollector:
             # exactly what someone sees after signing out.
             snapshot.error_message = "Not signed in"
             snapshot.usage_error = "Not signed in"
-            self._last_deepseek_snapshot = snapshot
             return snapshot
+
+        # One rate table per refresh, resolved on this thread the first time an amount that is
+        # not in USD needs it and passed down, so no conversion goes to the network on its own.
+        rates = _LazyRates()
 
         usage = fetch_usage(token.value, today)
         if usage.available:
-            self._apply_usage(snapshot, usage, today)
+            self._apply_usage(snapshot, usage, today, rates)
             snapshot.usage_fetched_at = snapshot.timestamp
             usage_fresh = True
         else:
@@ -411,7 +429,7 @@ class DataCollector:
 
         # The session summary is the only source of the balance and the
         # lifetime total, so a signed-in session supplies everything.
-        summary = fetch_summary(token.value)
+        summary = fetch_summary(token.value, rates)
         if summary.available:
             snapshot.balance_available = True
             snapshot.balance_usable = summary.total > 0
@@ -434,24 +452,11 @@ class DataCollector:
             carried = []
             if cached:
                 if not balance_fresh and cached.balance_available:
-                    snapshot.balance_available = True
-                    snapshot.balance_usable = cached.balance_usable
-                    snapshot.balance_total = cached.balance_total
-                    snapshot.balance_topped_up = cached.balance_topped_up
-                    snapshot.balance_granted = cached.balance_granted
-                    snapshot.balance_currency = cached.balance_currency
-                    snapshot.balance_fetched_at = cached.balance_fetched_at
+                    _carry_cached(snapshot, cached, _DEEPSEEK_BALANCE_CACHED)
                     snapshot.error_message = None
                     carried.append(cached.balance_fetched_at)
                 if not usage_fresh and cached.usage_available:
-                    for name in ("usage_available", "usage_currency", "today_cost_usd",
-                                 "today_tokens", "month_cost_usd", "month_tokens",
-                                 "last7_cost_usd", "last7_tokens", "daily_costs",
-                                 "prev_month_cost_usd", "prev_month_tokens",
-                                 "total_cost_usd", "total_cost_available",
-                                 "daily_tokens", "daily_requests", "daily_dates",
-                                 "models_used", "usage_fetched_at"):
-                        setattr(snapshot, name, getattr(cached, name))
+                    _carry_cached(snapshot, cached, _DEEPSEEK_USAGE_CACHED)
                     snapshot.usage_error = None
                     carried.append(cached.usage_fetched_at)
             # Anything shown from the cache is stale, whether or not the other
@@ -460,22 +465,20 @@ class DataCollector:
                 snapshot.is_stale = True
                 snapshot.stale_since = min((at for at in carried if at), default=None)
 
-        self._last_deepseek_snapshot = snapshot
-
         # Only a snapshot carrying something fresh is worth persisting
         if balance_fresh or usage_fresh:
             save_cache(deepseek=snapshot)
 
         return snapshot
 
-    def _apply_usage(self, snapshot: DeepSeekSnapshot, usage, today) -> None:
+    def _apply_usage(self, snapshot: DeepSeekSnapshot, usage, today, rates=None) -> None:
         """Fold parsed platform usage into the snapshot.
 
         Costs stay in USD: when the platform reports another currency (CNY for
         some accounts) the whole set is scaled once at this boundary.
         """
         currency = (usage.currency or "USD").upper()
-        factor = to_usd(1.0, currency) if currency != "USD" else 1.0
+        factor = to_usd(1.0, currency, rates) if currency != "USD" else 1.0
 
         days = last_n_days(usage.days, today, DAILY_HISTORY_DAYS)
         week = days[-7:]
@@ -508,46 +511,67 @@ class DataCollector:
             for m in usage.models
         ]
 
-    @property
-    def last_deepseek_snapshot(self) -> Optional[DeepSeekSnapshot]:
-        """Get the most recent DeepSeek snapshot without refreshing."""
-        return self._last_deepseek_snapshot
+    @staticmethod
+    def _isolated(name: str, collect, cached, unavailable):
+        """One provider's snapshot from `collect()`. If that raises, the traceback is
+        logged and the provider shows its cached snapshot (the loader marks it stale),
+        else `unavailable()`, so one provider's failure leaves the others updating."""
+        try:
+            return collect()
+        except Exception:
+            logger.exception("%s refresh failed", name)
+            return cached() or unavailable()
+
+    def _engine_on(self, flag: str) -> bool:
+        """Whether Settings has the engine switched on."""
+        return getattr(self._config, flag, True)
 
     def collect_combined(self) -> CombinedSnapshot:
-        """Collect data from Claude, OpenAI/Codex and DeepSeek."""
-        # Refresh price tables first so both parsers below use the same rates.
-        self._pricing_source = "models.dev" if model_catalog.apply() else "bundled"
-        claude_snapshot = self.collect()
-        openai_snapshot = self.collect_openai()
-        deepseek_snapshot = self.collect_deepseek()
+        """Collect data from Claude, OpenAI/Codex and DeepSeek, each on its own.
 
-        combined = CombinedSnapshot(
+        An engine switched off in Settings is not collected at all: no request, no log
+        parse, no cache write, no history line. Its snapshot is None, which every
+        consumer already reads as "nothing to show"."""
+        claude_on = self._engine_on("claude_enabled")
+        codex_on = self._engine_on("codex_enabled")
+        deepseek_on = self._engine_on("deepseek_enabled")
+
+        # Refresh price tables first so both parsers below use the same rates. Only the two
+        # engines that read logs price anything.
+        if claude_on or codex_on:
+            try:
+                self._pricing_source = "models.dev" if model_catalog.apply() else "bundled"
+            except Exception:
+                logger.exception("Price table refresh failed, using the bundled prices")
+                self._pricing_source = "bundled"
+
+        # The panel is told in words, never with the exception's text: it can hold a URL.
+        failed = "Refresh failed, see the log"
+        claude_snapshot = self._isolated(
+            "Claude", self.collect, lambda: load_cache()[0],
+            lambda: UsageSnapshot(timestamp=datetime.now(), cli_available=False,
+                                  logs_available=False, error_message=failed)) if claude_on else None
+        openai_snapshot = self._isolated(
+            "Codex", self.collect_openai, lambda: load_cache()[1],
+            lambda: OpenAISnapshot(timestamp=datetime.now(), error_message=failed)) if codex_on else None
+        deepseek_snapshot = self._isolated(
+            "DeepSeek", self.collect_deepseek, lambda: load_deepseek_cache()[0],
+            lambda: DeepSeekSnapshot(timestamp=datetime.now(), error_message=failed,
+                                     usage_error=failed)) if deepseek_on else None
+
+        return CombinedSnapshot(
             claude=claude_snapshot,
             openai=openai_snapshot,
             deepseek=deepseek_snapshot,
             active_engine=self._active_engine,
             timestamp=datetime.now(),
         )
-        self._last_combined = combined
-        return combined
-
-    @property
-    def last_combined(self) -> Optional[CombinedSnapshot]:
-        """Get the most recent combined snapshot without refreshing."""
-        return self._last_combined
 
     def set_active_engine(self, engine: Engine) -> None:
         """Set the active engine for display."""
         self._active_engine = engine
-        if self._last_combined:
-            self._last_combined.active_engine = engine
 
     @property
     def active_engine(self) -> Engine:
         """Get the currently active engine."""
         return self._active_engine
-
-    @staticmethod
-    def is_openai_available() -> bool:
-        """Check if OpenAI/Codex is configured."""
-        return is_codex_configured()

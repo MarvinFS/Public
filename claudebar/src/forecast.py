@@ -12,7 +12,7 @@ dollars and no reset.
 import math
 from bisect import bisect_right
 from dataclasses import dataclass, field
-from datetime import date, datetime, time, timedelta, timezone
+from datetime import datetime, time, timedelta, timezone
 from typing import Optional
 
 FULL = 100.0

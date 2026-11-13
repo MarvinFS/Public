@@ -13,6 +13,8 @@ import urllib.error
 from datetime import datetime, timezone
 from unittest.mock import patch
 
+import pytest
+
 import oauth_usage
 
 USAGE = {
@@ -23,6 +25,22 @@ GRANT = {"id": "opus55-launch-promax-20260921", "resets_total": 1, "resets_left"
          "ends_at": "2026-10-22T16:00:00+00:00", "clears": ["five_hour"],
          "paused": False, "usable_now": True, "use_requires_limit": False}
 CEDAR = {"eligible": True, "grants": [GRANT], "next_grant_id": GRANT["id"], "at_limit": False}
+
+# The instant the fixtures above were recorded around, the one test_banked_resets uses.
+# The parser reads the clock itself, so a grant that "ends" on a literal date would turn
+# expired the day the real clock passed it.
+NOW = datetime(2026, 10, 12, 18, 30, tzinfo=timezone.utc)
+
+
+class _FrozenDatetime(datetime):
+    @classmethod
+    def now(cls, tz=None):
+        return NOW.astimezone(tz) if tz else NOW.astimezone().replace(tzinfo=None)
+
+
+@pytest.fixture(autouse=True)
+def _frozen_clock(monkeypatch):
+    monkeypatch.setattr(oauth_usage, "datetime", _FrozenDatetime)
 
 
 class _Resp:
@@ -51,7 +69,7 @@ class FakeUrlopen:
         self.answers = list(answers)
         self.requests = []
 
-    def __call__(self, request, timeout=None):
+    def __call__(self, request, timeout=None, follow_redirects=False):
         self.requests.append(request)
         answer = self.answers.pop(0)
         if isinstance(answer, Exception):
@@ -61,7 +79,7 @@ class FakeUrlopen:
 
 def fetch(*answers):
     fake = FakeUrlopen(*answers)
-    with patch("urllib.request.urlopen", fake):
+    with patch("http_json.open_url", fake):
         data = oauth_usage.fetch_oauth_usage(access_token="token")
     return data, fake
 

@@ -3,11 +3,12 @@
 from dataclasses import dataclass
 from typing import Optional
 import json
-import urllib.request
 from datetime import datetime, timedelta
 from pathlib import Path
 
+import http_json
 from config import atomic_write_text, get_config_dir
+from version import USER_AGENT
 
 
 # Supported currencies
@@ -48,29 +49,38 @@ def get_rates_cache_path() -> Path:
     return get_config_dir() / "exchange_rates.json"
 
 
-def load_cached_rates() -> Optional[ExchangeRates]:
-    """Load exchange rates from cache."""
-    cache_path = get_rates_cache_path()
-    if not cache_path.exists():
-        return None
+# Rates this old are fetched again when they are needed.
+RATES_MAX_AGE = timedelta(hours=24)
 
+
+def _read_rates_cache() -> Optional[ExchangeRates]:
+    """The rates in the cache file, however old; None when there are none.
+
+    The cache is a convenience behind a refresh, so no file may stop one: a sharing violation
+    or a missing file (OSError), bad JSON or UTF-8 (ValueError), valid JSON of the wrong shape
+    (a list where an object belongs, a number where the time goes: TypeError, AttributeError,
+    KeyError) all count as no cache."""
     try:
-        with open(cache_path, "r", encoding="utf-8") as f:
+        with open(get_rates_cache_path(), "r", encoding="utf-8") as f:
             data = json.load(f)
 
+        rates = data["rates"]
         timestamp = datetime.fromisoformat(data["timestamp"])
-
-        # Cache valid for 24 hours
-        if datetime.now() - timestamp > timedelta(hours=24):
+        if (not isinstance(rates, dict)
+                or not all(isinstance(r, (int, float)) and not isinstance(r, bool) for r in rates.values())
+                or timestamp.tzinfo is not None):       # save_rates_cache writes a naive local time
             return None
-
-        return ExchangeRates(
-            rates=data["rates"],
-            timestamp=timestamp,
-            source=data.get("source", "cache"),
-        )
-    except (json.JSONDecodeError, KeyError, ValueError):
+        return ExchangeRates(rates=rates, timestamp=timestamp, source=data.get("source", "cache"))
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
         return None
+
+
+def load_cached_rates() -> Optional[ExchangeRates]:
+    """Load exchange rates from cache, if they are no older than RATES_MAX_AGE."""
+    cached = _read_rates_cache()
+    if cached is None or datetime.now() - cached.timestamp > RATES_MAX_AGE:
+        return None
+    return cached
 
 
 def save_rates_cache(rates: ExchangeRates) -> None:
@@ -85,15 +95,25 @@ def save_rates_cache(rates: ExchangeRates) -> None:
         pass
 
 
+# A failed download is remembered, so a host that is down costs one timeout per ten
+# minutes and not one per refresh.
+_fetch_failures = http_json.FailureMemory()
+
+
 def fetch_exchange_rates() -> Optional[ExchangeRates]:
-    """Fetch current exchange rates from a free API."""
+    """Fetch current exchange rates from a free API.
+
+    Blocks for up to its timeout, so only a background thread may call it (the panel's
+    loader and the refresh thread); everything the Tk thread calls uses local_exchange_rates.
+    """
+    if _fetch_failures.blocked():
+        return None
     try:
         # Use exchangerate-api.com free tier (no API key needed for USD base)
         url = "https://open.er-api.com/v6/latest/USD"
-        req = urllib.request.Request(url, headers={"User-Agent": "ClaudeBar/1.0"})
-
-        with urllib.request.urlopen(req, timeout=5) as response:
-            data = json.loads(response.read().decode("utf-8"))
+        # Public and credential-free, so it may follow a redirect.
+        data = http_json.request_json(url, {"User-Agent": USER_AGENT}, timeout=5,
+                                      follow_redirects=True)
 
         if data.get("result") == "success":
             all_rates = data.get("rates", {})
@@ -115,27 +135,30 @@ def fetch_exchange_rates() -> Optional[ExchangeRates]:
     except Exception:
         pass
 
+    _fetch_failures.failed()
     return None
 
 
-def get_exchange_rates() -> ExchangeRates:
-    """Get exchange rates (from cache, API, or fallback)."""
-    # Try cache first
-    cached = load_cached_rates()
-    if cached:
-        return cached
-
-    # Try fetching from API
-    fetched = fetch_exchange_rates()
-    if fetched:
-        return fetched
-
-    # Use fallback rates
+def _fallback_rates() -> ExchangeRates:
     return ExchangeRates(
         rates=FALLBACK_RATES.copy(),
         timestamp=datetime.now(),
         source="fallback",
     )
+
+
+def local_exchange_rates() -> ExchangeRates:
+    """Rates from the cache file, else the bundled table. Never touches the network, so
+    it is what the Tk thread and every conversion without rates of its own use. A cache past
+    its age still counts: real rates a day old are closer than the bundled ones."""
+    return _read_rates_cache() or _fallback_rates()
+
+
+def get_exchange_rates() -> ExchangeRates:
+    """Get exchange rates (from cache, API, or fallback). May fetch, so background
+    threads only. When the cache has expired and the download fails, the expired cache
+    is used, not the bundled table."""
+    return load_cached_rates() or fetch_exchange_rates() or _read_rates_cache() or _fallback_rates()
 
 
 def convert_usd(amount_usd: float, currency: str, rates: Optional[ExchangeRates] = None) -> float:
@@ -144,7 +167,7 @@ def convert_usd(amount_usd: float, currency: str, rates: Optional[ExchangeRates]
         return amount_usd
 
     if rates is None:
-        rates = get_exchange_rates()
+        rates = local_exchange_rates()
 
     rate = rates.rates.get(currency, 1.0)
     return amount_usd * rate
@@ -162,7 +185,7 @@ def to_usd(amount: float, currency: str, rates: Optional[ExchangeRates] = None) 
         return amount
 
     if rates is None:
-        rates = get_exchange_rates()
+        rates = local_exchange_rates()
 
     rate = rates.rates.get(code)
     if not rate:  # unknown currency: leave the figure unconverted rather than zero it

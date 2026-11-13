@@ -27,11 +27,20 @@ MAX_BYTES_PER_DAY = 1_000_000
 RETENTION_DAYS = 14
 
 SENSITIVE_PATTERNS = [
-    (r'Bearer [A-Za-z0-9._-]+', 'Bearer [REDACTED]'),
+    # A bearer token is base64 or base64url (RFC 6750), so '+', '/', '~' and the
+    # '=' padding belong to it; stopping at the first of them left the tail in the log.
+    (r'(?i)Bearer\s+[A-Za-z0-9._~+/=-]+', 'Bearer [REDACTED]'),
     (r'accessToken":\s*"[^"]+', 'accessToken": "[REDACTED]'),
     (r'refreshToken":\s*"[^"]+', 'refreshToken": "[REDACTED]'),
     (r'access_token":\s*"[^"]+', 'access_token": "[REDACTED]'),
     (r'refresh_token":\s*"[^"]+', 'refresh_token": "[REDACTED]'),
+    # A cookie header holds the session itself; its value runs to the end of the line
+    # (the optional quote is a header dict printed with repr).
+    (r'(?i)\b((?:Set-)?Cookie["\']?\s*:)[^\r\n]*', r'\1 [REDACTED]'),
+    # The key=value form of a URL query or a form body (token, access_token,
+    # refresh_token, client_secret, userToken...). The value ends at a separator, and
+    # the name must end in token or secret, so max_tokens=4096 stays readable.
+    (r'(?i)\b([\w-]*(?:token|secret))=[^\s&;,"\']+', r'\1=[REDACTED]'),
 ]
 
 

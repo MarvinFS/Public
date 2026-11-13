@@ -5,15 +5,16 @@ OAuth tokens expire. Shows cached data with staleness indicators.
 """
 
 import json
-from dataclasses import dataclass, asdict
+import math
+from dataclasses import MISSING, dataclass, asdict, fields, is_dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Optional, get_args, get_origin
 
 import banked_resets
+from banked_resets import BankedResets
 from config import atomic_write_text, get_config_dir
-from models import (UsageSnapshot, OpenAISnapshot, DeepSeekSnapshot, TokenUsage, ModelUsage,
-                    SESSION_WINDOW_HOURS, WEEKLY_WINDOW_HOURS)
+from models import UsageSnapshot, OpenAISnapshot, DeepSeekSnapshot, TokenUsage, ModelUsage
 
 
 def get_cache_path() -> Path:
@@ -50,7 +51,7 @@ def _to_dict(snapshot) -> dict:
 
     The loader recomputes is_stale/stale_since from the cache timestamps, so
     they are never persisted. Datetimes are handled by _json_default at dump
-    time; the loaders read every other field defensively with .get().
+    time; _from_dict reads every field back defensively.
     """
     data = asdict(snapshot)
     data.pop("is_stale", None)
@@ -58,148 +59,77 @@ def _to_dict(snapshot) -> dict:
     return data
 
 
+def _parse_iso(s: str) -> Optional[datetime]:
+    try:
+        return datetime.fromisoformat(s) if s else None
+    except (ValueError, TypeError):
+        return None
+
+
 def _hours(value, default: float) -> float:
     """A window length from the cache, or the default when it is missing or odd."""
     if isinstance(value, bool) or not isinstance(value, (int, float)) or not value > 0:
         return default
-    return float(value)
+    try:
+        hours = float(value)
+    except OverflowError:       # an integer too large for a float
+        return default
+    return hours if math.isfinite(hours) else default
 
 
-def _dict_to_usage_snapshot(data: dict, is_stale: bool = False, stale_since: Optional[datetime] = None) -> UsageSnapshot:
-    """Convert dict back to UsageSnapshot."""
-    today_tokens = TokenUsage(
-        input_tokens=data.get("today_tokens", {}).get("input_tokens", 0),
-        output_tokens=data.get("today_tokens", {}).get("output_tokens", 0),
-        cache_read_input_tokens=data.get("today_tokens", {}).get("cache_read_input_tokens", 0),
-        cache_creation_input_tokens=data.get("today_tokens", {}).get("cache_creation_input_tokens", 0),
-    )
-    month_tokens = TokenUsage(
-        input_tokens=data.get("month_tokens", {}).get("input_tokens", 0),
-        output_tokens=data.get("month_tokens", {}).get("output_tokens", 0),
-        cache_read_input_tokens=data.get("month_tokens", {}).get("cache_read_input_tokens", 0),
-        cache_creation_input_tokens=data.get("month_tokens", {}).get("cache_creation_input_tokens", 0),
-    )
-    models_used = [
-        ModelUsage(
-            model=m.get("model", ""),
-            cost_usd=m.get("cost_usd", 0.0),
-            message_count=m.get("message_count", 0),
-        )
-        for m in data.get("models_used", [])
-    ]
+# How a field's JSON becomes its value, by the type the dataclass declares. The
+# snapshot's own timestamp is the one time that must parse (a bad one makes the
+# whole file unreadable); any other time that does not parse is simply None.
+# Keyed here by the real types, so replacing this module's `datetime` (the
+# verification model does) cannot change which reader a field gets.
+_READERS = {
+    datetime: lambda value: datetime.fromisoformat(value),
+    Optional[datetime]: _parse_iso,
+    Optional[BankedResets]: banked_resets.from_dict,
+}
 
-    snapshot = UsageSnapshot(
-        timestamp=datetime.fromisoformat(data.get("timestamp", datetime.now().isoformat())),
-        session_percent=data.get("session_percent", 0.0),
-        session_reset=data.get("session_reset"),
-        session_resets_at=_parse_iso(data.get("session_resets_at")),
-        weekly_percent=data.get("weekly_percent", 0.0),
-        weekly_reset=data.get("weekly_reset"),
-        weekly_resets_at=_parse_iso(data.get("weekly_resets_at")),
-        extra_enabled=data.get("extra_enabled", False),
-        extra_percent=data.get("extra_percent", 0.0),
-        extra_used=data.get("extra_used", 0.0),
-        extra_limit=data.get("extra_limit", 0.0),
-        extra_currency=data.get("extra_currency", "usd"),
-        today_cost_usd=data.get("today_cost_usd", 0.0),
-        month_cost_usd=data.get("month_cost_usd", 0.0),
-        last31_cost_usd=data.get("last31_cost_usd", 0.0),
-        last31_tokens=data.get("last31_tokens", 0),
-        daily_costs=list(data.get("daily_costs") or []),
-        pricing_source=data.get("pricing_source", "bundled"),
-        today_tokens=today_tokens,
-        month_tokens=month_tokens,
-        models_used=models_used,
-        cli_available=data.get("cli_available", True),
-        logs_available=data.get("logs_available", True),
-        error_message=data.get("error_message"),
-        banked=banked_resets.from_dict(data.get("banked")),
-        is_stale=is_stale,
-        stale_since=stale_since,
-    )
-    return snapshot
+# Window lengths: a stored value that is not a positive number is the default.
+_WINDOW_HOURS = ("session_window_hours", "weekly_window_hours")
+
+# Written by asdict() but never read back: no cached reading shows them (the cost
+# they priced is already in the figures), so a load leaves them at their defaults.
+_NOT_RESTORED = {TokenUsage: ("cache_creation_1h_input_tokens",), ModelUsage: ("tokens",)}
 
 
-def _dict_to_openai_snapshot(data: dict, is_stale: bool = False, stale_since: Optional[datetime] = None) -> OpenAISnapshot:
-    """Convert dict back to OpenAISnapshot."""
-    snapshot = OpenAISnapshot(
-        timestamp=datetime.fromisoformat(data.get("timestamp", datetime.now().isoformat())),
-        session_percent=data.get("session_percent", 0.0),
-        session_reset=data.get("session_reset"),
-        session_available=data.get("session_available", True),
-        session_resets_at=_parse_iso(data.get("session_resets_at")),
-        weekly_percent=data.get("weekly_percent", 0.0),
-        weekly_reset=data.get("weekly_reset"),
-        weekly_resets_at=_parse_iso(data.get("weekly_resets_at")),
-        session_window_hours=_hours(data.get("session_window_hours"), SESSION_WINDOW_HOURS),
-        weekly_window_hours=_hours(data.get("weekly_window_hours"), WEEKLY_WINDOW_HOURS),
-        banked=banked_resets.from_dict(data.get("banked")),
-        today_input_tokens=data.get("today_input_tokens", 0),
-        today_output_tokens=data.get("today_output_tokens", 0),
-        today_cached_tokens=data.get("today_cached_tokens", 0),
-        today_reasoning_tokens=data.get("today_reasoning_tokens", 0),
-        month_input_tokens=data.get("month_input_tokens", 0),
-        month_output_tokens=data.get("month_output_tokens", 0),
-        today_cost_usd=data.get("today_cost_usd", 0.0),
-        month_cost_usd=data.get("month_cost_usd", 0.0),
-        last31_cost_usd=data.get("last31_cost_usd", 0.0),
-        last31_tokens=data.get("last31_tokens", 0),
-        daily_costs=list(data.get("daily_costs") or []),
-        pricing_source=data.get("pricing_source", "bundled"),
-        plan_type=data.get("plan_type"),
-        credits_remaining=data.get("credits_remaining"),
-        available=data.get("available", False),
-        error_message=data.get("error_message"),
-        is_stale=is_stale,
-        stale_since=stale_since,
-    )
-    return snapshot
+def _read(f, value):
+    """One field's value from the JSON stored for it, by the field's declared type."""
+    if f.name in _WINDOW_HOURS:
+        return _hours(value, f.default)
+    reader = _READERS.get(f.type)
+    if reader:
+        return reader(value)
+    if is_dataclass(f.type):
+        return _from_dict(f.type, value)
+    if get_origin(f.type) is list:
+        (item,) = get_args(f.type)
+        if is_dataclass(item):
+            return [_from_dict(item, entry) for entry in value if isinstance(entry, dict)]
+        return list(value or [])
+    return value
 
 
-def _dict_to_deepseek_snapshot(data: dict, is_stale: bool = False,
-                               stale_since: Optional[datetime] = None) -> DeepSeekSnapshot:
-    """Convert dict back to DeepSeekSnapshot."""
-    models_used = [
-        ModelUsage(
-            model=m.get("model", ""),
-            cost_usd=m.get("cost_usd", 0.0),
-            message_count=m.get("message_count", 0),
-        )
-        for m in data.get("models_used", [])
-        if isinstance(m, dict)
-    ]
-    return DeepSeekSnapshot(
-        timestamp=datetime.fromisoformat(data.get("timestamp", datetime.now().isoformat())),
-        balance_available=data.get("balance_available", False),
-        balance_usable=data.get("balance_usable", False),
-        balance_total=data.get("balance_total", 0.0),
-        balance_topped_up=data.get("balance_topped_up", 0.0),
-        balance_granted=data.get("balance_granted", 0.0),
-        balance_currency=data.get("balance_currency", "USD"),
-        total_cost_usd=data.get("total_cost_usd", 0.0),
-        total_cost_available=data.get("total_cost_available", False),
-        usage_available=data.get("usage_available", False),
-        usage_currency=data.get("usage_currency", "USD"),
-        today_cost_usd=data.get("today_cost_usd", 0.0),
-        today_tokens=data.get("today_tokens", 0),
-        month_cost_usd=data.get("month_cost_usd", 0.0),
-        month_tokens=data.get("month_tokens", 0),
-        last7_cost_usd=data.get("last7_cost_usd", 0.0),
-        last7_tokens=data.get("last7_tokens", 0),
-        prev_month_cost_usd=data.get("prev_month_cost_usd", 0.0),
-        prev_month_tokens=data.get("prev_month_tokens", 0),
-        daily_costs=list(data.get("daily_costs") or []),
-        daily_tokens=list(data.get("daily_tokens") or []),
-        daily_requests=list(data.get("daily_requests") or []),
-        daily_dates=list(data.get("daily_dates") or []),
-        models_used=models_used,
-        error_message=data.get("error_message"),
-        usage_error=data.get("usage_error"),
-        balance_fetched_at=_parse_iso(data.get("balance_fetched_at")),
-        usage_fetched_at=_parse_iso(data.get("usage_fetched_at")),
-        is_stale=is_stale,
-        stale_since=stale_since,
-    )
+def _from_dict(cls, data: dict, **given):
+    """Rebuild dataclass `cls` from the JSON asdict() wrote for it.
+
+    Keys that are not fields are ignored and a field with no key keeps its
+    default, so a file from an older or a newer build still loads. `given` are
+    fields the caller sets itself instead of reading (the staleness fields).
+    """
+    values = dict(given)
+    for f in fields(cls):
+        if f.name in given or f.name in _NOT_RESTORED.get(cls, ()):
+            continue
+        stored = data.get(f.name, MISSING)
+        if stored is not MISSING:
+            values[f.name] = _read(f, stored)
+        elif f.default is MISSING and f.default_factory is MISSING:
+            values[f.name] = f.type()   # a required field (a model's name) reads as empty
+    return cls(**values)
 
 
 def save_cache(claude: Optional[UsageSnapshot] = None, openai: Optional[OpenAISnapshot] = None,
@@ -211,16 +141,19 @@ def save_cache(claude: Optional[UsageSnapshot] = None, openai: Optional[OpenAISn
     stale Codex data look fresh (and vice versa).
     """
     cache_path = get_cache_path()
-    cache_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Read existing cache to avoid overwriting the other engine's data
+    # Read existing cache to avoid overwriting the other engine's data. Whatever is
+    # on disk may be anything (a ValueError is bad JSON and bad UTF-8 alike, and
+    # valid JSON need not be an object): then there is nothing to merge.
     existing = {}
     try:
         if cache_path.exists():
             with open(cache_path, "r", encoding="utf-8") as f:
                 existing = json.load(f)
-    except (json.JSONDecodeError, OSError):
+    except (OSError, ValueError):
         pass
+    if not isinstance(existing, dict):
+        existing = {}
 
     now_iso = datetime.now().isoformat()
     legacy = existing.get("cached_at", "")
@@ -243,11 +176,42 @@ def save_cache(claude: Optional[UsageSnapshot] = None, openai: Optional[OpenAISn
         pass  # Silently fail on cache write errors
 
 
-def _parse_iso(s: str) -> Optional[datetime]:
+def _read_cache(build, empty):
+    """What `build` makes of the cache file's JSON, or `empty` when the file is
+    missing, cannot be opened, or is not shaped like a cache.
+
+    The cache is a convenience behind a refresh that failed, so no file may stop the
+    refresh: a sharing violation (OSError), bad JSON or UTF-8 (ValueError), valid JSON
+    of the wrong shape (a list where an object belongs: AttributeError, TypeError)."""
+    cache_path = get_cache_path()
+    if not cache_path.exists():
+        return empty
+
     try:
-        return datetime.fromisoformat(s) if s else None
-    except (ValueError, TypeError):
-        return None
+        with open(cache_path, "r", encoding="utf-8") as f:
+            return build(json.load(f))
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return empty
+
+
+def _claude_and_openai(data: dict) -> tuple:
+    legacy_at = _parse_iso(data.get("cached_at", ""))
+    claude_at = _parse_iso(data.get("claude_cached_at", "")) or legacy_at
+    openai_at = _parse_iso(data.get("openai_cached_at", "")) or legacy_at
+
+    claude = None
+    if data.get("claude"):
+        claude = _from_dict(UsageSnapshot, data["claude"], is_stale=True, stale_since=claude_at)
+
+    openai = None
+    if data.get("openai"):
+        openai = _from_dict(OpenAISnapshot, data["openai"], is_stale=True, stale_since=openai_at)
+
+    # Most recent of the two for the legacy single-marker return slot
+    candidates = [t for t in (claude_at, openai_at) if t is not None]
+    cached_at = max(candidates) if candidates else legacy_at
+
+    return claude, openai, cached_at
 
 
 def load_cache() -> tuple[Optional[UsageSnapshot], Optional[OpenAISnapshot], Optional[datetime]]:
@@ -262,35 +226,29 @@ def load_cache() -> tuple[Optional[UsageSnapshot], Optional[OpenAISnapshot], Opt
         `cached_at` is the most recent of the two per-engine timestamps,
         kept for callers that want a single "anything updated" marker.
     """
-    cache_path = get_cache_path()
+    return _read_cache(_claude_and_openai, (None, None, None))
 
-    if not cache_path.exists():
-        return None, None, None
 
-    try:
-        with open(cache_path, "r", encoding="utf-8") as f:
-            data = json.load(f)
+def _deepseek(data: dict) -> tuple:
+    if not data.get("deepseek"):
+        return None, None
 
-        legacy_at = _parse_iso(data.get("cached_at", ""))
-        claude_at = _parse_iso(data.get("claude_cached_at", "")) or legacy_at
-        openai_at = _parse_iso(data.get("openai_cached_at", "")) or legacy_at
-
-        claude = None
-        if data.get("claude"):
-            claude = _dict_to_usage_snapshot(data["claude"], is_stale=True, stale_since=claude_at)
-
-        openai = None
-        if data.get("openai"):
-            openai = _dict_to_openai_snapshot(data["openai"], is_stale=True, stale_since=openai_at)
-
-        # Most recent of the two for the legacy single-marker return slot
-        candidates = [t for t in (claude_at, openai_at) if t is not None]
-        cached_at = max(candidates) if candidates else legacy_at
-
-        return claude, openai, cached_at
-
-    except (json.JSONDecodeError, KeyError, TypeError, ValueError):
-        return None, None, None
+    cached_at = (_parse_iso(data.get("deepseek_cached_at", ""))
+                 or _parse_iso(data.get("cached_at", "")))
+    snapshot = _from_dict(DeepSeekSnapshot, data["deepseek"], is_stale=True)
+    # The entry is written whenever either half is fresh, so its own time can
+    # be newer than a half carried in it. Each half keeps its own fetch time
+    # (a cache from before that falls back to the entry's), and the entry is
+    # as old as its oldest half.
+    snapshot.balance_fetched_at = snapshot.balance_fetched_at or cached_at
+    snapshot.usage_fetched_at = snapshot.usage_fetched_at or cached_at
+    halves = [at for at, on in ((snapshot.balance_fetched_at, snapshot.balance_available),
+                                (snapshot.usage_fetched_at, snapshot.usage_available))
+              if on and at]
+    if halves:
+        cached_at = min(halves)
+    snapshot.stale_since = cached_at
+    return snapshot, cached_at
 
 
 def load_deepseek_cache() -> tuple[Optional[DeepSeekSnapshot], Optional[datetime]]:
@@ -299,56 +257,4 @@ def load_deepseek_cache() -> tuple[Optional[DeepSeekSnapshot], Optional[datetime
     Separate from load_cache() so the existing three-value contract (and its
     callers) stay untouched.
     """
-    cache_path = get_cache_path()
-    if not cache_path.exists():
-        return None, None
-
-    try:
-        with open(cache_path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-
-        if not data.get("deepseek"):
-            return None, None
-
-        cached_at = (_parse_iso(data.get("deepseek_cached_at", ""))
-                     or _parse_iso(data.get("cached_at", "")))
-        snapshot = _dict_to_deepseek_snapshot(data["deepseek"], is_stale=True)
-        # The entry is written whenever either half is fresh, so its own time can
-        # be newer than a half carried in it. Each half keeps its own fetch time
-        # (a cache from before that falls back to the entry's), and the entry is
-        # as old as its oldest half.
-        snapshot.balance_fetched_at = snapshot.balance_fetched_at or cached_at
-        snapshot.usage_fetched_at = snapshot.usage_fetched_at or cached_at
-        halves = [at for at, on in ((snapshot.balance_fetched_at, snapshot.balance_available),
-                                    (snapshot.usage_fetched_at, snapshot.usage_available))
-                  if on and at]
-        if halves:
-            cached_at = min(halves)
-        snapshot.stale_since = cached_at
-        return snapshot, cached_at
-    except (json.JSONDecodeError, KeyError, TypeError, ValueError):
-        return None, None
-
-
-def get_staleness_text(stale_since: Optional[datetime]) -> str:
-    """Get human-readable staleness text."""
-    if not stale_since:
-        return ""
-
-    now = datetime.now()
-    diff = now - stale_since
-
-    total_seconds = int(diff.total_seconds())
-    if total_seconds < 60:
-        return "just now"
-
-    minutes = total_seconds // 60
-    hours = minutes // 60
-    days = hours // 24
-
-    if days > 0:
-        return f"{days}d ago"
-    elif hours > 0:
-        return f"{hours}h ago"
-    else:
-        return f"{minutes}m ago"
+    return _read_cache(_deepseek, (None, None))

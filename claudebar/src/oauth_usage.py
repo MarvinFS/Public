@@ -4,13 +4,14 @@ import json
 import logging
 import time
 import urllib.error
-import urllib.request
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Optional
 from pathlib import Path
 
+import http_json
 from banked_resets import BankedResets, CLAUDE, parse_claude_banked
+from models import reset_words
 from validation import safe_get_float
 
 logger = logging.getLogger("claudebar")
@@ -32,7 +33,6 @@ class UsageWindow:
     """Usage window with utilization and reset time."""
     utilization: float  # API returns percentage directly (0-100)
     resets_at: Optional[datetime] = None
-    raw_reset_text: Optional[str] = None  # Direct text from CLI PTY parsing
 
     @property
     def percent(self) -> float:
@@ -44,28 +44,7 @@ class UsageWindow:
     @property
     def reset_str(self) -> Optional[str]:
         """Get human-readable reset time."""
-        if self.raw_reset_text:
-            return self.raw_reset_text
-        if not self.resets_at:
-            return None
-
-        now = datetime.now(self.resets_at.tzinfo) if self.resets_at.tzinfo else datetime.now()
-        diff = self.resets_at - now
-
-        if diff.total_seconds() <= 0:
-            return "soon"
-
-        hours = int(diff.total_seconds() // 3600)
-        minutes = int((diff.total_seconds() % 3600) // 60)
-
-        if hours >= 24:
-            days = hours // 24
-            hours = hours % 24
-            return f"in {days}d {hours}h"
-        elif hours > 0:
-            return f"in {hours}h {minutes}m"
-        else:
-            return f"in {minutes}m"
+        return reset_words(self.resets_at)
 
 
 @dataclass
@@ -89,7 +68,6 @@ class OAuthUsageData:
     session: Optional[UsageWindow] = None  # five_hour
     weekly: Optional[UsageWindow] = None   # seven_day
     extra: Optional[ExtraUsage] = None
-    plan_type: Optional[str] = None  # subscription tier
     banked: Optional[BankedResets] = None  # saved one-time resets, when the response has them
     error: Optional[str] = None
 
@@ -102,39 +80,6 @@ class OAuthUsageData:
 def get_credentials_path() -> Path:
     """Get path to Claude credentials file."""
     return Path.home() / ".claude" / ".credentials.json"
-
-
-def load_credentials() -> tuple[Optional[str], Optional[float]]:
-    """Load OAuth credentials from file.
-
-    Returns:
-        Tuple of (access_token, expires_at_ms). expires_at_ms is epoch
-        milliseconds when present and numeric, else None.
-    """
-    creds_path = get_credentials_path()
-
-    if not creds_path.exists():
-        return None, None
-
-    try:
-        with open(creds_path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-
-        oauth = data.get("claudeAiOauth")
-        if not isinstance(oauth, dict):
-            oauth = {}
-
-        access_token = oauth.get("accessToken")
-
-        # Only treat expiresAt as expiry when it is a real number (a JSON bool is
-        # an int subclass in Python, so exclude it); tolerate None/string/missing.
-        expires_at = oauth.get("expiresAt")
-        if isinstance(expires_at, bool) or not isinstance(expires_at, (int, float)):
-            expires_at = None
-
-        return access_token, expires_at
-    except (json.JSONDecodeError, OSError, TypeError):
-        return None, None
 
 
 # Skew before expiry: don't hand out a token that could die mid-request.
@@ -165,7 +110,7 @@ def access_token_or_reason() -> tuple[Optional[str], Optional[str]]:
         return None, "credentials file holds no Claude OAuth token"
 
     # A JSON bool is an int subclass, so a non-numeric expiresAt means "no
-    # expiry" rather than a bogus date - the same rule load_credentials uses.
+    # expiry" rather than a bogus date.
     expires_at_ms = oauth.get("expiresAt")
     if isinstance(expires_at_ms, bool) or not isinstance(expires_at_ms, (int, float)):
         expires_at_ms = None
@@ -178,20 +123,9 @@ def access_token_or_reason() -> tuple[Optional[str], Optional[str]]:
     return oauth["accessToken"], None
 
 
-def load_access_token() -> Optional[str]:
-    """Return the current OAuth access token, or None if absent/expired.
-
-    ClaudeBar is a passive reader - Claude Code owns token refresh on the shared
-    credentials file. We re-read fresh each call and skip a token within SKEW_MS
-    of expiry; on a token gap the caller falls back to cached usage data.
-    """
-    access_token, _ = access_token_or_reason()
-    return access_token
-
-
 def parse_reset_time(resets_at_str: Optional[str]) -> Optional[datetime]:
     """Parse ISO8601 reset time string."""
-    if not resets_at_str:
+    if not resets_at_str or not isinstance(resets_at_str, str):
         return None
 
     try:
@@ -215,37 +149,32 @@ def claude_headers(access_token: str, user_agent: str = CLAUDE_CLI_USER_AGENT) -
 
 
 def _get_usage_json(url: str, access_token: str, user_agent: str) -> dict:
-    req = urllib.request.Request(url, headers=claude_headers(access_token, user_agent), method="GET")
-    with urllib.request.urlopen(req, timeout=10) as response:
-        return json.loads(response.read().decode("utf-8"))
+    return http_json.request_json(url, claude_headers(access_token, user_agent), timeout=10)
+
+
+def _window(raw) -> Optional[UsageWindow]:
+    """One window of the reply, or None. The API sends null for a window the plan has
+    none of, and a window can carry a null utilization: neither is a reading, and a None
+    percent would raise wherever it is formatted."""
+    if not isinstance(raw, dict):
+        return None
+    utilization = raw.get("utilization", 0.0)
+    if isinstance(utilization, bool) or not isinstance(utilization, (int, float)):
+        return None
+    return UsageWindow(utilization=utilization, resets_at=parse_reset_time(raw.get("resets_at")))
 
 
 def parse_usage_response(data: dict, banked_failed: bool = False) -> OAuthUsageData:
     """The usage reply as windows, extra usage and banked resets. The same JSON arrives from
     the endpoint and from the Claude CLI's saved copy of it, so both read it here."""
-    # Parse session (five_hour)
-    session = None
-    if "five_hour" in data:
-        fh = data["five_hour"]
-        session = UsageWindow(
-            utilization=fh.get("utilization", 0.0),
-            resets_at=parse_reset_time(fh.get("resets_at")),
-        )
-
-    # Parse weekly (seven_day)
-    weekly = None
-    if "seven_day" in data:
-        sd = data["seven_day"]
-        weekly = UsageWindow(
-            utilization=sd.get("utilization", 0.0),
-            resets_at=parse_reset_time(sd.get("resets_at")),
-        )
+    session = _window(data.get("five_hour"))
+    weekly = _window(data.get("seven_day"))
 
     # Parse extra usage
     # API returns monthly_limit and used_credits in CENTS, divide by 100
     extra = None
-    if "extra_usage" in data:
-        eu = data["extra_usage"]
+    eu = data.get("extra_usage")
+    if isinstance(eu, dict):
         extra = ExtraUsage(
             enabled=eu.get("is_enabled") or False,
             monthly_limit=safe_get_float(eu, "monthly_limit") / 100.0,  # cents → currency
@@ -253,14 +182,6 @@ def parse_usage_response(data: dict, banked_failed: bool = False) -> OAuthUsageD
             utilization=safe_get_float(eu, "utilization"),              # API returns percentage
             currency=eu.get("currency") or "usd",
         )
-
-    # Extract plan type from various possible fields
-    plan_type = (
-        data.get("plan_type") or
-        data.get("plan") or
-        data.get("subscription_type") or
-        data.get("tier")
-    )
 
     if banked_failed:
         banked = BankedResets(provider=CLAUDE, state="failed")
@@ -271,12 +192,15 @@ def parse_usage_response(data: dict, banked_failed: bool = False) -> OAuthUsageD
         session=session,
         weekly=weekly,
         extra=extra,
-        plan_type=plan_type,
         banked=banked,
+        # Every window null is a reply that says nothing: say so, so the log reads
+        # "OAuth: <reason>" and not "OAuth: None".
+        error=None if session is not None or weekly is not None
+        else "The usage reply holds no session or weekly window",
     )
 
 
-def fetch_oauth_usage(access_token: Optional[str] = None, debug: bool = False) -> OAuthUsageData:
+def fetch_oauth_usage(access_token: Optional[str] = None) -> OAuthUsageData:
     """Fetch usage data from Anthropic OAuth API.
 
     One request, which also asks for the banked resets. A 400 or 403 repeats it
@@ -300,14 +224,6 @@ def fetch_oauth_usage(access_token: Optional[str] = None, debug: bool = False) -
             logger.debug("Usage call with banked resets answered HTTP %d, repeating it plain", e.code)
             data = _get_usage_json(USAGE_URL, access_token, LEGACY_USER_AGENT)
             banked_failed = True
-
-        # Debug logging to verify API response format
-        if debug:
-            print(f"DEBUG OAuth API response: {json.dumps(data, indent=2)}")
-            if "five_hour" in data:
-                print(f"DEBUG five_hour.utilization = {data['five_hour'].get('utilization')}")
-            if "seven_day" in data:
-                print(f"DEBUG seven_day.utilization = {data['seven_day'].get('utilization')}")
 
         return parse_usage_response(data, banked_failed)
 

@@ -143,9 +143,9 @@ class TestCollector:
 
     def test_banked_resets_stay_cached_so_none_is_offered_from_it(self, refused, cli_config):
         write_config(cli_config)
-        cached = refused.collect().banked
-        assert cached is not None and cached.available == 1
-        assert refused.last_snapshot.is_stale  # the panel never offers a reset from stale data
+        snap = refused.collect()
+        assert snap.banked is not None and snap.banked.available == 1
+        assert snap.is_stale  # the panel never offers a reset from stale data
 
     def test_extra_usage_stays_the_cached_value(self, refused, cli_config):
         write_config(cli_config)  # the file says extra usage is on at 18 percent

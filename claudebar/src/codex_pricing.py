@@ -1,5 +1,7 @@
 """Codex/OpenAI model pricing for cost calculations."""
 
+from pricing import longest_prefix
+
 # A request whose input exceeds this is billed on the "long" tier for every
 # component (OpenAI: input/cached/cache-write 2x, output 1.5x).
 LONG_CONTEXT_INPUT_TOKENS = 272_000
@@ -83,12 +85,8 @@ def get_model_pricing(model: str) -> dict:
     if model in CODEX_PRICING:
         return CODEX_PRICING[model]
 
-    # Longest prefix wins, so "gpt-5.1-codex-2026-01-01" does not match "gpt-5".
-    for known_model in sorted(CODEX_PRICING, key=len, reverse=True):
-        if model.startswith(known_model):
-            return CODEX_PRICING[known_model]
-
-    return CODEX_PRICING["default"]
+    by_prefix = longest_prefix(CODEX_PRICING, model)
+    return CODEX_PRICING["default"] if by_prefix is None else by_prefix
 
 
 def calculate_cost(

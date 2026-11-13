@@ -12,9 +12,7 @@ silently overridden.
 
 import json
 import os
-import re
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Optional
 
 import secret_store

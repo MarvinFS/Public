@@ -11,14 +11,14 @@ tolerant: unknown shapes degrade to "usage unavailable" rather than raising.
 """
 
 import json
+import threading
 import urllib.error
-import urllib.request
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 from typing import Optional
 
-from currency import to_usd
+import http_json
+from currency import ExchangeRates, to_usd
 from models import DAILY_HISTORY_DAYS
 
 USAGE_AMOUNT_URL = "https://platform.deepseek.com/api/v0/usage/amount"
@@ -134,10 +134,8 @@ def envelope_auth_error(payload) -> bool:
 
 def _get(url: str, headers: dict) -> tuple[Optional[dict], Optional[str]]:
     """GET JSON. Returns (payload, error)."""
-    request = urllib.request.Request(url, headers=headers, method="GET")
     try:
-        with urllib.request.urlopen(request, timeout=TIMEOUT) as response:
-            return json.loads(response.read().decode("utf-8")), None
+        return http_json.request_json(url, headers, timeout=TIMEOUT), None
     except urllib.error.HTTPError as e:
         if e.code in (401, 403):
             return None, "Session expired"
@@ -152,8 +150,11 @@ def _get(url: str, headers: dict) -> tuple[Optional[dict], Optional[str]]:
         return None, str(e)
 
 
-def fetch_summary(user_token: str) -> AccountSummary:
+def fetch_summary(user_token: str, rates: Optional[ExchangeRates] = None) -> AccountSummary:
     """Balance and lifetime spend for a platform session token.
+
+    `rates` is the exchange table for amounts reported in another currency; the caller
+    resolves it once per refresh, so this never goes to the network for it.
 
     Undocumented like the other platform endpoints, but worth reading: it is
     the only source that gives both a balance and the all-time total, so a
@@ -198,9 +199,9 @@ def fetch_summary(user_token: str) -> AccountSummary:
     return AccountSummary(
         available=True,
         currency=currency,
-        topped_up=to_usd(topped_up, currency),
-        granted=to_usd(granted, currency),
-        total_cost=to_usd(total_cost, currency),
+        topped_up=to_usd(topped_up, currency, rates),
+        granted=to_usd(granted, currency, rates),
+        total_cost=to_usd(total_cost, currency, rates),
         total_cost_available=cost_known,
     )
 
@@ -323,11 +324,21 @@ def fetch_month(user_token: str, year: int, month: int) -> tuple[Optional[dict],
     amount_url = f"{USAGE_AMOUNT_URL}?month={month}&year={year}"
     cost_url = f"{USAGE_COST_URL}?month={month}&year={year}"
 
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        amount_future = pool.submit(_get, amount_url, headers)
-        cost_future = pool.submit(_get, cost_url, headers)
-        amount_payload, amount_error = amount_future.result()
-        cost_payload, cost_error = cost_future.result()
+    # Two daemon threads, not a ThreadPoolExecutor: its workers are not daemons and the
+    # interpreter joins them at exit, so Exit during a fetch would wait out the HTTP
+    # timeout before the process could end.
+    answers = [(None, "Request failed")] * 2       # what a worker that died leaves behind
+
+    def fetch(slot: int, url: str) -> None:
+        answers[slot] = _get(url, headers)
+
+    workers = [threading.Thread(target=fetch, args=(slot, url), daemon=True)
+               for slot, url in enumerate((amount_url, cost_url))]
+    for worker in workers:
+        worker.start()
+    for worker in workers:
+        worker.join()
+    (amount_payload, amount_error), (cost_payload, cost_error) = answers
 
     return amount_payload, cost_payload, (amount_error or cost_error)
 
@@ -354,17 +365,23 @@ def fetch_usage(user_token: str, today: Optional[date] = None) -> UsageData:
 
     merged = UsageData(available=True)
     errors: list[str] = []
+    failure: Optional[str] = None   # why a month did not come back: its days are missing, not empty
     seen_models: dict[str, ModelTotal] = {}
 
     for year, month in months:
         amount_payload, cost_payload, error = fetch_month(user_token, year, month)
         if error:
             errors.append(error)
+            failure = failure or error
             continue
         parsed = parse_usage(amount_payload or {}, cost_payload or {})
         if not parsed.available:
             if parsed.error:
                 errors.append(parsed.error)
+            # A month that answered with nothing (a new month, or none spent in the
+            # previous one) is empty. A rejected session is a failure.
+            if envelope_auth_error(amount_payload) or envelope_auth_error(cost_payload):
+                failure = failure or parsed.error
             continue
         merged.days.extend(parsed.days)
         merged.currency = parsed.currency or merged.currency
@@ -381,8 +398,11 @@ def fetch_usage(user_token: str, today: Optional[date] = None) -> UsageData:
             else:
                 seen_models[model.model] = ModelTotal(model.model, model.cost, model.tokens)
 
-    if not merged.days:
-        return UsageData(error=errors[0] if errors else "No usage reported")
+    # With a month missing, the days that did come back are not the whole picture: if it
+    # is the current month, today and the month read as a fresh zero. Not a reading at
+    # all, so the caller keeps the last complete one.
+    if failure or not merged.days:
+        return UsageData(error=failure or (errors[0] if errors else "No usage reported"))
 
     merged.days.sort(key=lambda d: d.date)
     merged.models = sorted(seen_models.values(), key=lambda m: m.cost, reverse=True)

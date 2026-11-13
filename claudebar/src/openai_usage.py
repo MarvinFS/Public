@@ -1,17 +1,19 @@
 """Fetch OpenAI/Codex usage data via OAuth API."""
 
 import base64
+import http.client
 import json
 import os
 import logging
 import urllib.error
-import urllib.request
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 from pathlib import Path
 
+import http_json
 from banked_resets import BankedResets, parse_codex_banked
+from models import reset_words
 
 logger = logging.getLogger("claudebar")
 
@@ -48,26 +50,7 @@ class OpenAIUsageWindow:
     @property
     def reset_str(self) -> Optional[str]:
         """Get human-readable reset time."""
-        if not self.resets_at:
-            return None
-
-        now = datetime.now(self.resets_at.tzinfo) if self.resets_at.tzinfo else datetime.now()
-        diff = self.resets_at - now
-
-        if diff.total_seconds() <= 0:
-            return "soon"
-
-        hours = int(diff.total_seconds() // 3600)
-        minutes = int((diff.total_seconds() % 3600) // 60)
-
-        if hours >= 24:
-            days = hours // 24
-            hours = hours % 24
-            return f"in {days}d {hours}h"
-        elif hours > 0:
-            return f"in {hours}h {minutes}m"
-        else:
-            return f"in {minutes}m"
+        return reset_words(self.resets_at)
 
 
 @dataclass
@@ -195,14 +178,14 @@ def fetch_reset_credits(access_token: str, account_id: Optional[str] = None) -> 
     The usage call already gave the count, so a failure here costs only the
     titles and expiries and is not worth an error."""
     try:
-        req = urllib.request.Request(RESET_CREDITS_URL, method="GET",
-                                     headers=chatgpt_headers(access_token, account_id))
-        with urllib.request.urlopen(req, timeout=10) as response:
-            body = json.loads(response.read().decode("utf-8"))
+        body = http_json.request_json(RESET_CREDITS_URL, chatgpt_headers(access_token, account_id),
+                                      timeout=10)
         return body if isinstance(body, dict) else None
     except urllib.error.HTTPError as e:
         logger.debug("Reset credit details answered HTTP %d", e.code)
-    except (urllib.error.URLError, OSError, ValueError) as e:
+    except (urllib.error.URLError, OSError, ValueError, http.client.HTTPException) as e:
+        # HTTPException is not an OSError: a body cut short is IncompleteRead, a garbled
+        # status line BadStatusLine.
         logger.debug("Reset credit details unavailable: %s", type(e).__name__)
     return None
 
@@ -251,10 +234,7 @@ def fetch_openai_usage(access_token: Optional[str] = None) -> OpenAIUsageData:
         return OpenAIUsageData(error="No Codex OAuth token. Run 'codex login' first.")
 
     try:
-        req = urllib.request.Request(USAGE_URL, headers=chatgpt_headers(access_token), method="GET")
-
-        with urllib.request.urlopen(req, timeout=10) as response:
-            data = json.loads(response.read().decode("utf-8"))
+        data = http_json.request_json(USAGE_URL, chatgpt_headers(access_token), timeout=10)
 
         # Parse plan type
         plan_type = data.get("plan_type")
@@ -310,8 +290,3 @@ def fetch_openai_usage(access_token: Optional[str] = None) -> OpenAIUsageData:
         return OpenAIUsageData(error="Invalid JSON response from OpenAI")
     except Exception as e:
         return OpenAIUsageData(error=str(e))
-
-
-def is_codex_configured() -> bool:
-    """Check if Codex CLI is configured with OAuth tokens."""
-    return load_codex_token() is not None

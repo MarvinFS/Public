@@ -53,7 +53,7 @@ class TestWindowTitle:
 class TestRateText:
     @pytest.mark.parametrize("rate,text", [
         (0.9, "~0.9%/h"), (3.3, "~3.3%/h"), (12.4, "~12%/h"), (10.0, "~10%/h"),
-        (0.0238, "~0.02%/h"), (0.1, "~0.1%/h"), (0.0, "no recent use")])
+        (0.0238, "~0.02%/h"), (0.1, "~0.1%/h"), (0.0, "No recent use")])
     def test_rates(self, rate, text):
         assert ft.rate_text(rate) == text
 
@@ -62,7 +62,7 @@ class TestRunOutText:
     @pytest.mark.parametrize("hours,text", [
         (0.4, "Runs out in 0h 24m"), (1.5, "Runs out in 1h 30m"), (23.99, "Runs out in 23h 59m"),
         (76.0, "Runs out in 3d 4h"), (46.5, "Runs out in 1d 22h"), (0.0, "Runs out in 0h 0m")])
-    def test_the_words_the_limit_bar_and_the_quota_row_share(self, hours, text):
+    def test_the_words_of_the_limit_bar(self, hours, text):
         assert ft.runout_text(hours) == text
 
     def test_a_row_that_never_runs_out_says_never(self):
@@ -85,11 +85,21 @@ class TestStamp:
 
 
 class TestQuotaHeader:
-    def test_the_remaining_percent_and_the_rate(self):
-        assert ft.quota_header(quota()) == ("76% left", "~1.0%/h")
+    """The limit bar above says how much is left; the view's headline is the rate, and the small
+    words beside it name the window it was measured on."""
 
-    def test_it_matches_the_limit_bar_rounding(self):
-        assert ft.quota_header(quota(used=38.6))[0] == "61% left"        # 100 - 38.6 = 61.4
+    def test_the_rate_and_the_window(self):
+        assert ft.quota_header(quota(), 5, True) == ("~1.0%/h", "5-hour session")
+
+    def test_a_long_window_is_a_window_and_not_a_session(self):
+        assert ft.quota_header(quota(), 168, False) == ("~1.0%/h", "Weekly window")
+        assert ft.quota_header(quota(), 720, False) == ("~1.0%/h", "30-day window")
+
+    def test_no_drain_says_so_and_still_names_the_window(self):
+        assert ft.quota_header(quota(per_hour=0.0), 5, True) == ("No recent use", "5-hour session")
+
+    def test_the_percent_left_is_not_in_it(self):
+        assert all("left" not in text for text in ft.quota_header(quota(used=38.6), 5, True))
 
 
 class TestQuotaRows:
@@ -97,18 +107,28 @@ class TestQuotaRows:
         f = quota(used=24.0, reset_in=34, per_hour=1.0)                  # 76 -> 42 at the reset
         assert rows(f)[0] == ("Next reset", "+58% · Tue 22:00", "normal")
 
-    def test_a_quota_that_lasts_says_how_much_is_unused(self):
+    def test_a_quota_that_lasts_says_how_much_is_unused_and_not_that_it_lasts(self):
         f = quota(used=12.0, reset_in=40, per_hour=0.5)                  # 88 - 20 = 68 left
-        assert ("At this rate", "Lasts until reset · ~68% unused", "ok") in rows(f)
+        assert ("At this rate", "~68% unused at reset", "ok") in rows(f)
+        assert all("Lasts" not in value for _, value, _ in rows(f))      # the limit bar says it
 
-    def test_a_quota_that_runs_out_says_when(self):
+    def test_a_quota_that_runs_out_says_when_as_a_clock_time(self):
         f = quota(used=24.0, reset_in=100, per_hour=1.0)                 # dry at +76 h
-        assert ("At this rate", "Runs out in 3d 4h · Thu 16:00", "warn") in rows(f)
+        assert ("At this rate", "Runs out Thu 16:00", "warn") in rows(f)
+
+    def test_the_run_out_is_a_date_beyond_a_week(self):
+        f = quota(used=24.0, reset_in=None, per_hour=0.2)                # dry at +380 h
+        assert ("At this rate", "Runs out Oct 28 08:00", "warn") in rows(f)
+
+    def test_no_row_counts_down_to_the_run_out(self):
+        """"Runs out in 3d 4h" is the limit bar's: the row gives the clock time only."""
+        f = quota(used=24.0, reset_in=100, per_hour=1.0)
+        assert all(" in " not in value for _, value, _ in rows(f, claude_banked()))
 
     def test_a_banked_reset_that_would_restore_it_is_mentioned(self):
         f = quota(used=24.0, reset_in=100, per_hour=1.0)
         out = rows(f, claude_banked())
-        i = out.index(("At this rate", "Runs out in 3d 4h · Thu 16:00", "warn"))
+        i = out.index(("At this rate", "Runs out Thu 16:00", "warn"))
         assert out[i + 1] == ("", "A banked reset would restore it", "muted")
 
     def test_a_banked_reset_that_expires_first_is_not_promised(self):
@@ -120,27 +140,14 @@ class TestQuotaRows:
         f = quota(used=12.0, reset_in=40, per_hour=0.5)
         assert all("would restore" not in value for _, value, _ in rows(f, claude_banked()))
 
-    def test_the_banked_row(self):
-        out = rows(quota(), claude_banked())
-        assert ("Banked", "1 available, expires Oct 22", "normal") in out
-
-    def test_the_banked_row_turns_amber_within_a_week(self):
-        out = rows(quota(), claude_banked(expires="2026-10-15T00:00:00+00:00"))
-        assert ("Banked", "1 available, expires Oct 15", "warn") in out
-
-    def test_nothing_banked_has_no_row(self):
-        empty = br.parse_codex_banked({"available_count": 0}, {}, NOW)
-        for banked in (None, empty):
-            assert all(label != "Banked" for label, _, _ in rows(quota(), banked))
-
-    def test_a_banked_count_with_no_known_expiry(self):
-        banked = br.parse_codex_banked({"available_count": 3}, None, NOW)
-        assert ("Banked", "3 available", "normal") in rows(quota(), banked)
-
-    def test_the_banked_row_is_in_the_zone_asked_for(self):
-        banked = claude_banked(expires="2026-10-22T23:30:00+00:00")
-        assert ("Banked", "1 available, expires Oct 23", "normal") in rows(
-            quota(), banked, tz=timezone(h(3)))
+    def test_the_banked_count_and_expiry_belong_to_the_banked_block(self):
+        """Claude and Codex both show "3 available · next expires ..." above the tabs."""
+        codex = br.parse_codex_banked({"available_count": 3}, None, NOW)
+        for banked in (claude_banked(), codex):
+            for f in (quota(), quota(used=24.0, reset_in=100, per_hour=1.0)):
+                out = rows(f, banked)
+                assert all(label != "Banked" for label, _, _ in out)
+                assert all("available" not in value and "expires" not in value for _, value, _ in out)
 
     def test_recording_since_while_the_history_is_young(self):
         f = quota(hours=24)
@@ -157,7 +164,7 @@ class TestQuotaRows:
         f = quota(used=24.0, reset_in=None, per_hour=1.0)
         labels = [label for label, _, _ in rows(f)]
         assert "Next reset" not in labels
-        assert ("At this rate", "Runs out in 3d 4h · Thu 16:00", "warn") in rows(f)
+        assert ("At this rate", "Runs out Thu 16:00", "warn") in rows(f)
 
     def test_without_a_reset_time_and_no_drain_there_is_nothing_to_say(self):
         f = quota(used=24.0, reset_in=None, per_hour=0.0)
@@ -167,47 +174,54 @@ class TestQuotaRows:
         f = fc.forecast_quota([], 4.0, NOW + h(23 * 24), 720, NOW)
         out = rows(f)
         assert out[0][0] == "Next reset" and out[0][1].endswith("Nov 4 12:00")
-        assert ("At this rate", "Lasts until reset · ~83% unused", "ok") in out
+        assert ("At this rate", "~83% unused at reset", "ok") in out
 
 
 class TestBalance:
+    """The balance block above says what is left; the view's headline is the spend rate."""
+
     def balance(self, bal=12.40, costs=None, samples_=()):
         return fc.forecast_balance(list(samples_), bal, costs if costs is not None else [0.4] * 31,
                                    NOW)
 
-    def test_header(self):
-        assert ft.balance_header(self.balance(), money, money) == ("$12.40 left", "~$0.40/day")
+    def test_header_is_the_rate_and_what_it_averages(self):
+        assert ft.balance_header(self.balance(), money) == ("~$0.40/day", "last 7 days")
+
+    def test_the_balance_is_not_in_the_header(self):
+        assert all("left" not in text and "$12.40" not in text
+                   for text in ft.balance_header(self.balance(), money))
+
+    def test_no_spend_in_the_header(self):
+        f = self.balance(12.40, [0.0] * 31)
+        assert ft.balance_header(f, money) == ("No spend", "last 7 days")
 
     def test_the_run_out_with_its_date_and_days(self):
         f = self.balance(12.40, [0.4] * 31)
-        assert ft.balance_rows(f, NOW, UTC, money)[0] == ("Runs out", "~Nov 12 (31 days)", "normal")
+        assert ft.balance_rows(f, NOW, UTC) == [("Runs out", "~Nov 12 (31 days)", "normal")]
 
     def test_one_day_is_singular(self):
         f = self.balance(0.4, [0.4] * 31)
-        assert ft.balance_rows(f, NOW, UTC, money)[0] == ("Runs out", "~Oct 13 (1 day)", "normal")
+        assert ft.balance_rows(f, NOW, UTC) == [("Runs out", "~Oct 13 (1 day)", "normal")]
 
     def test_under_a_day_says_today_or_tomorrow_is_not_invented(self):
         f = self.balance(0.1, [0.4] * 31)
-        assert ft.balance_rows(f, NOW, UTC, money)[0] == ("Runs out", "~Oct 12 (<1 day)", "normal")
+        assert ft.balance_rows(f, NOW, UTC) == [("Runs out", "~Oct 12 (<1 day)", "normal")]
 
-    def test_the_spend_rate_row(self):
+    def test_the_spend_rate_is_the_headline_and_has_no_row(self):
         f = self.balance(12.40, [0.4] * 31)
-        assert ft.balance_rows(f, NOW, UTC, money)[1] == (
-            "Spend rate", "$0.40/day, last 7 days", "normal")
+        assert all(label != "Spend rate" for label, _, _ in ft.balance_rows(f, NOW, UTC))
 
     def test_more_than_a_year_is_not_a_date(self):
         f = self.balance(100.0, [0.01] * 31)
-        assert ft.balance_rows(f, NOW, UTC, money)[0] == (
-            "At this rate", "Lasts over a year", "ok")
+        assert ft.balance_rows(f, NOW, UTC) == [("At this rate", "Lasts over a year", "ok")]
 
     def test_a_balance_that_outlasts_any_date_says_over_a_year(self):
         f = self.balance(1e9, [1e-9] * 7)
-        assert ft.balance_rows(f, NOW, UTC, money)[0] == ("At this rate", "Lasts over a year", "ok")
+        assert ft.balance_rows(f, NOW, UTC) == [("At this rate", "Lasts over a year", "ok")]
 
-    def test_no_spend_at_all(self):
+    def test_no_spend_at_all_leaves_no_rows(self):
         f = self.balance(12.40, [0.0] * 31)
-        assert ft.balance_rows(f, NOW, UTC, money) == [
-            ("Spend rate", "none in the last 7 days", "muted")]
+        assert ft.balance_rows(f, NOW, UTC) == []
 
 
 class TestTipText:

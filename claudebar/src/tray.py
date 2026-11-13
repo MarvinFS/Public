@@ -3,6 +3,7 @@
 import logging
 import os
 import queue
+import sys
 import threading
 from typing import Callable, Optional
 
@@ -20,12 +21,45 @@ logger = logging.getLogger("claudebar")
 try:
     from ui_window import ClaudeBarWindow
     HAS_UI_WINDOW = True
-except ImportError:
+    _UI_IMPORT_ERROR: Optional[ImportError] = None
+except ImportError as e:
+    # main.py imports this module before it sets up logging, so a log call here goes
+    # nowhere. The error is kept and TrayManager logs it once the log exists.
     HAS_UI_WINDOW = False
+    _UI_IMPORT_ERROR = e
 
 
 # Lock for thread-safe tray updates
 _tray_lock = threading.Lock()
+
+# GetGUIThreadInfo flags: the thread is in menu mode, with a popup menu showing.
+_GUI_INMENUMODE = 0x00000004
+_GUI_POPUPMENUMODE = 0x00000010
+
+
+def _in_menu_mode(thread_id: Optional[int]) -> bool:
+    """Whether the thread is showing a menu right now. False when that cannot be told:
+    a menu rebuild must not wait for an answer that is not coming."""
+    if sys.platform != "win32" or not thread_id:
+        return False
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        class GUITHREADINFO(ctypes.Structure):
+            _fields_ = [("cbSize", wintypes.DWORD), ("flags", wintypes.DWORD),
+                        ("hwndActive", wintypes.HWND), ("hwndFocus", wintypes.HWND),
+                        ("hwndCapture", wintypes.HWND), ("hwndMenuOwner", wintypes.HWND),
+                        ("hwndMoveSize", wintypes.HWND), ("hwndCaret", wintypes.HWND),
+                        ("rcCaret", wintypes.RECT)]
+
+        info = GUITHREADINFO()
+        info.cbSize = ctypes.sizeof(info)
+        if not ctypes.windll.user32.GetGUIThreadInfo(thread_id, ctypes.byref(info)):
+            return False
+        return bool(info.flags & (_GUI_INMENUMODE | _GUI_POPUPMENUMODE))
+    except (AttributeError, OSError, ValueError):
+        return False
 
 
 # Custom app icon path
@@ -65,6 +99,7 @@ class TrayManager:
         on_engine_change: Optional[Callable[[Engine], None]] = None,
         config: Optional[Config] = None,
         use_premium_ui: bool = True,
+        on_settings_saved: Optional[Callable[[], None]] = None,
     ):
         self.on_refresh = on_refresh
         self.on_exit = on_exit
@@ -72,6 +107,11 @@ class TrayManager:
         self.on_engine_change = on_engine_change
         self._config = config or Config()
         self._use_premium_ui = use_premium_ui and HAS_UI_WINDOW
+        if use_premium_ui and not HAS_UI_WINDOW:
+            # An icon with no panel behind it is what a packaging miss looks like.
+            logger.error("The details panel is unavailable, the tray shows its icon only",
+                         exc_info=(type(_UI_IMPORT_ERROR), _UI_IMPORT_ERROR,
+                                   _UI_IMPORT_ERROR.__traceback__))
 
         self._icon: Optional[pystray.Icon] = None
         self._snapshot: Optional[UsageSnapshot] = None
@@ -84,6 +124,8 @@ class TrayManager:
         # that touch the panel are queued, and main.py's check_running tick
         # runs them (verification/PanelThreads.tla, P1).
         self._pending: queue.Queue = queue.Queue()
+        self._menu_queued = False       # a menu rebuild is waiting in _pending (under _tray_lock)
+        self._tray_thread_id: Optional[int] = None   # pystray's message-loop thread, once started
 
         # Initialize premium UI if enabled
         if self._use_premium_ui:
@@ -92,6 +134,7 @@ class TrayManager:
                 on_settings=self._on_ui_settings,
                 on_exit=self._on_ui_exit,
                 on_engine_change=self._on_ui_engine_change,
+                on_settings_saved=on_settings_saved,
                 config=self._config,
             )
 
@@ -172,6 +215,7 @@ class TrayManager:
         items.append(pystray.MenuItem("Refresh", self._on_refresh_click))
         if self._ui_window:
             items.append(pystray.MenuItem("Reset window position", self._on_reset_position))
+            items.append(pystray.MenuItem("Reset panel size", self._on_reset_size))
 
         if self.on_settings:
             items.append(pystray.MenuItem("Settings", self._on_settings_click))
@@ -199,7 +243,9 @@ class TrayManager:
 
     def run_pending(self) -> None:
         """Run the queued tray callbacks. Main thread only."""
-        while True:
+        # Only what was queued before this tick: a callback that puts itself back (the
+        # menu rebuild, while the menu is open) waits for the next tick, not a spin.
+        for _ in range(self._pending.qsize()):
             try:
                 fn, args = self._pending.get_nowait()
             except queue.Empty:
@@ -224,6 +270,10 @@ class TrayManager:
     def _on_reset_position(self, icon, item):
         """Put the details window back at its default spot near the tray."""
         self._on_main(lambda: self._ui_window and self._ui_window.reset_position())
+
+    def _on_reset_size(self, icon, item):
+        """Put the details window back at its automatic scale and height."""
+        self._on_main(lambda: self._ui_window and self._ui_window.reset_size())
 
     def _on_settings_click(self, icon, item):
         """Handle settings menu click."""
@@ -253,30 +303,45 @@ class TrayManager:
         if self.on_engine_change:
             self.on_engine_change(engine)
 
+    def _status_snapshot(self) -> Optional[UsageSnapshot]:
+        """What the icon and the tooltip are drawn from: Claude's snapshot.
+
+        A refresh that did not collect Claude (switched off in Settings) carries none, and
+        no snapshot would read as "Loading" for good: a bare one stands in, so the icon is
+        neutral and the tooltip still has the other engines and the time."""
+        if self._snapshot is not None:
+            return self._snapshot
+        if self._combined is not None:
+            return UsageSnapshot(timestamp=self._combined.timestamp, cli_available=False,
+                                 logs_available=False)
+        return None
+
     def _get_icon_image(self) -> Image.Image:
         """Get the appropriate icon image for current state."""
-        if self._snapshot is None:
+        snapshot = self._status_snapshot()
+        if snapshot is None:
             return create_icon("error")
 
-        status = self._snapshot.get_status_level(
+        status = snapshot.get_status_level(
             self._config.warning_threshold,
             self._config.critical_threshold
         )
-        percent = self._snapshot.max_percent
+        percent = snapshot.max_percent
 
         return create_icon(status, percent if percent > 0 else None)
 
     def _get_tooltip(self) -> str:
         """Get tooltip text for current state."""
-        if self._snapshot is None:
+        snapshot = self._status_snapshot()
+        if snapshot is None:
             return "ClaudeBar - Loading..."
 
         lines = ["ClaudeBar"]
 
         # Claude stats
-        if self._snapshot.logs_available:
-            lines.append(f"Today: ${self._snapshot.today_cost_usd:.2f}")
-            lines.append(f"Month: ${self._snapshot.month_cost_usd:.2f}")
+        if snapshot.logs_available:
+            lines.append(f"Today: ${snapshot.today_cost_usd:.2f}")
+            lines.append(f"Month: ${snapshot.month_cost_usd:.2f}")
 
         # OpenAI stats
         if self._combined and self._combined.openai and self._combined.openai.available:
@@ -293,9 +358,40 @@ class TrayManager:
         if deepseek and deepseek.usage_available:
             lines.append(f"DeepSeek today: ${deepseek.today_cost_usd:.2f}")
 
-        lines.append(f"Updated: {self._snapshot.timestamp.strftime('%H:%M')}")
+        lines.append(f"Updated: {snapshot.timestamp.strftime('%H:%M')}")
 
         return "\n".join(lines)
+
+    def _request_menu(self) -> None:
+        """Have the menu rebuilt on the main thread, once however many updates come first.
+        Caller holds _tray_lock.
+
+        pystray's Win32 backend replaces the menu by destroying the old handle and building
+        a new one on whichever thread assigns `icon.menu`, with no lock against its own
+        message loop, which may be inside TrackPopupMenuEx on that very handle (measured:
+        the destroy succeeds and the open menu carries on over a dead handle). So the
+        refresh thread does not assign it: it queues the assignment, like every other
+        pystray-facing action here (verification/PanelThreads.tla, P1), and the main
+        thread makes it only while the tray's menu is closed.
+        """
+        if not self._menu_queued:
+            self._menu_queued = True
+            self._on_main(self._apply_menu)
+
+    def _apply_menu(self) -> None:
+        """Rebuild the menu from the latest snapshots. Main thread only (run_pending)."""
+        with _tray_lock:
+            if _in_menu_mode(self._tray_thread_id):
+                # The user has the menu open: wait for a later tick, with the rebuild
+                # still counted as queued so no second one piles up behind it.
+                self._on_main(self._apply_menu)
+                return
+            self._menu_queued = False
+            try:
+                if self._icon is not None:
+                    self._icon.menu = self._create_menu()
+            except (AttributeError, RuntimeError):
+                pass  # Icon was destroyed during update
 
     def update(self, snapshot: UsageSnapshot) -> None:
         """Update the tray with new data (thread-safe)."""
@@ -306,7 +402,7 @@ class TrayManager:
                 if self._icon is not None:
                     self._icon.icon = self._get_icon_image()
                     self._icon.title = self._get_tooltip()
-                    self._icon.menu = self._create_menu()
+                    self._request_menu()
             except (AttributeError, RuntimeError):
                 pass  # Icon was destroyed during update
 
@@ -329,7 +425,7 @@ class TrayManager:
                 if self._icon is not None:
                     self._icon.icon = self._get_icon_image()
                     self._icon.title = self._get_tooltip()
-                    self._icon.menu = self._create_menu()
+                    self._request_menu()
             except (AttributeError, RuntimeError):
                 pass  # Icon was destroyed during update
 
@@ -342,19 +438,27 @@ class TrayManager:
         if self._running:
             return
 
-        # Setup icon with click handler
-        self._icon = pystray.Icon(
-            name="claudebar",
-            icon=self._get_icon_image(),
-            title=self._get_tooltip(),
-            menu=self._create_menu(),
-        )
+        try:
+            # Setup icon with click handler
+            self._icon = pystray.Icon(
+                name="claudebar",
+                icon=self._get_icon_image(),
+                title=self._get_tooltip(),
+                menu=self._create_menu(),
+            )
 
-        # A left click runs the menu's default item, Show Details. pystray has
-        # no separate activate hook; an on_activate attribute was never called.
+            # A left click runs the menu's default item, Show Details. pystray has
+            # no separate activate hook; an on_activate attribute was never called.
 
-        self._running = True
-        self._icon.run()
+            self._running = True
+            self._tray_thread_id = threading.get_native_id()
+            self._icon.run()
+        except Exception:
+            # Without its icon the app is a process nobody can reach, and the windowed
+            # exe shows no error. Log it and leave by the Exit button's own path, queued
+            # because that path touches Tk and this is not the main thread.
+            logger.exception("The tray icon failed, shutting down")
+            self._on_main(self._on_ui_exit)
 
     def start_detached(self) -> threading.Thread:
         """Start the tray icon in a background thread."""

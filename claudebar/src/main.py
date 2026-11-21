@@ -177,8 +177,7 @@ class ClaudeBar:
         # the flag set and returns; the holder then collects once more, so a
         # request made mid-collect is served by a collect that starts after it.
         # The outer check runs again after release, for a request that set the
-        # flag between the holder's last check and its release
-        # (verification/PanelThreads.tla, seed-norecheck).
+        # flag between the holder's last check and its release.
         self._refresh_again = True
         while self._refresh_again and self._refresh_lock.acquire(blocking=False):
             try:

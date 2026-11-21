@@ -126,7 +126,7 @@ class TrayManager:
         # thread, and a Tk call made from here waits for it - while the main
         # thread may be waiting for a lock this thread holds. So the callbacks
         # that touch the panel are queued, and main.py's check_running tick
-        # runs them (verification/PanelThreads.tla, P1).
+        # runs them.
         self._pending: queue.Queue = queue.Queue()
         self._menu_queued = False       # a menu rebuild is waiting in _pending (under _tray_lock)
         self._tray_thread_id: Optional[int] = None   # pystray's message-loop thread, once started
@@ -409,7 +409,7 @@ class TrayManager:
         message loop, which may be inside TrackPopupMenuEx on that very handle (measured:
         the destroy succeeds and the open menu carries on over a dead handle). So the
         refresh thread does not assign it: it queues the assignment, like every other
-        pystray-facing action here (verification/PanelThreads.tla, P1), and the main
+        pystray-facing action here, and the main
         thread makes it only while the tray's menu is closed.
         """
         if not self._menu_queued:

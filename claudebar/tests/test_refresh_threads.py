@@ -1,7 +1,7 @@
-"""Refresh requests and the panel's engine across threads (verification P2, P3).
+"""Refresh requests and the panel's engine across threads.
 
-The TLA+ model in verification/PanelThreads.tla found both; these reproduce
-them against the real ClaudeBar._refresh and ClaudeBarWindow.update_combined.
+Covers concurrent ClaudeBar._refresh calls and ClaudeBarWindow.update_combined
+engine-switching races.
 """
 
 import threading

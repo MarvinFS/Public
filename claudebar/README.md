@@ -28,7 +28,8 @@ The Quota tab (Balance on DeepSeek) charts burn rate and remaining quota against
 Download from [Releases](https://github.com/MarvinFS/Public/releases):
 
 - Windows 10/11: run the signed `ClaudeBar-Setup-*.exe` installer, or run from source (`pip install -r requirements.txt && python src/main.py`, Python 3.11+).
-- Linux (glibc 2.36+: Ubuntu 24.04, Debian 12, Rocky 10, and newer): download the self-contained `ClaudeBar` executable (`chmod +x ClaudeBar && ./ClaudeBar`), `.deb`, `.rpm`, or AppImage. All Linux assets are GPG-signed with `SHA256SUMS` and provenance attached.
+- Linux (glibc 2.36+: Ubuntu 24.04, Debian 12, Rocky 10, and newer): download the self-contained `ClaudeBar` executable (`chmod +x ClaudeBar && ./ClaudeBar`), `.deb`, `.rpm`, or AppImage.
+- Verify any release download against `SHA256SUMS` and `SHA256SUMS.asc` using [claudebar-release.asc](claudebar-release.asc) (`gpg --import claudebar-release.asc && gpg --verify SHA256SUMS.asc SHA256SUMS && sha256sum -c --ignore-missing SHA256SUMS`). The `.rpm` header is also GPG-signed (`rpm -K`).
 
 Left-click the tray icon to open the panel, drag edges or corners to resize, use `Ctrl+plus`, `Ctrl+minus`, `Ctrl+wheel`, or `Ctrl+0` to zoom/reset, and press Escape to close.
 

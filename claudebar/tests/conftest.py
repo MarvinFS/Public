@@ -113,6 +113,10 @@ def _isolated_appdata(tmp_path, monkeypatch):
     monkeypatch.setattr(claude_cli_snapshot, "config_path", lambda: tmp_path / "claude_home" / ".claude.json")
     import log_parser
     monkeypatch.setattr(log_parser, "get_claude_projects_dir", lambda: tmp_path / "claude_home" / "projects")
+    import antigravity_auth
+    monkeypatch.setattr(antigravity_auth, "refresh_claudebar_token", lambda timeout=15.0, profile_dir=None: None)
+    import antigravity_usage
+    monkeypatch.setattr(antigravity_usage, "get_conversation_dirs", lambda home=None: [])
 
 
 @pytest.fixture(autouse=True)
@@ -151,13 +155,16 @@ def pictures(monkeypatch):
 def _fresh_log_caches():
     """The log parsers keep what they read of a file between calls. Forget it around every
     test, so a test never sees what another one wrote under a path of its own."""
+    import antigravity_usage
     import codex_log_parser
     import log_parser
     log_parser.reset_cache()
     codex_log_parser.reset_cache()
+    antigravity_usage.reset_runtime_state()
     yield
     log_parser.reset_cache()
     codex_log_parser.reset_cache()
+    antigravity_usage.reset_runtime_state()
 
 
 @pytest.fixture(autouse=True)

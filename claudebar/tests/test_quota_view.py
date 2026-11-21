@@ -425,6 +425,30 @@ class TestTheRunOutOnTheLimitBar:
         # in, 50% used) would say 10 days.
         assert bars(panel, "weekly")["note"] == "Runs out in 2d 21h"
 
+    def test_early_window_burst_does_not_show_bogus_runout_warning(self, panel):
+        # 1 h into a fresh 7-day weekly window with 5% used extrapolates linearly to ~20 h;
+        # hold back the red run-out note until MIN_RATE_SPAN_HOURS (6 h) have elapsed.
+        now = datetime.now(UTC)
+        snap = claude(h(4), used=20.0)
+        snap.weekly_percent = 5.0
+        snap.weekly_resets_at = now + h(167)         # 1 h elapsed (< 6 h)
+        show(panel, claude=snap)
+        assert bars(panel, "weekly")["note"] == ""
+
+        # Zero usage in the same fresh window still confirms it lasts until reset.
+        snap_idle = claude(h(4), used=0.0)
+        snap_idle.weekly_percent = 0.0
+        snap_idle.weekly_resets_at = now + h(167)
+        show(panel, claude=snap_idle)
+        assert bars(panel, "weekly")["note"] == "Lasts until reset"
+
+        # Past 6 h elapsed, the run-out warning returns normally.
+        snap_later = claude(h(4), used=20.0)
+        snap_later.weekly_percent = 20.0
+        snap_later.weekly_resets_at = now + h(160)   # 8 h elapsed (>= 6 h)
+        show(panel, claude=snap_later)
+        assert bars(panel, "weekly")["note"].startswith("Runs out in ")
+
 
 class TestWhatTheHeaderSaysAboutOldFigures:
     """One time: when the figures were last updated. Old ones say so beside it, instead of

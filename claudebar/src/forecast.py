@@ -68,6 +68,12 @@ def _scale(window_hours: float) -> float:
     return min(window_hours / WEEK_HOURS, 1.0)
 
 
+def min_rate_span_hours(window_hours: float) -> float:
+    """Minimum elapsed hours before a rate-based run-out warning is trustworthy:
+    6 hours for a week, scaled down for shorter windows (~11 min for a 5-hour session)."""
+    return MIN_RATE_SPAN_HOURS * _scale(window_hours)
+
+
 def window_rate(percent_used: float, resets_at: Optional[datetime], window_hours: float,
                 now: datetime) -> float:
     """Percent per hour spent so far in this window: the fallback rate, on the

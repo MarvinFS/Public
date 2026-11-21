@@ -17,10 +17,11 @@ def test_debug_flag_is_read_after_the_program_name():
 
 
 def test_engines_list_follows_the_config():
-    assert describe_engines(Config()) == "claude, codex, deepseek"
-    assert describe_engines(Config(codex_enabled=False)) == "claude, deepseek"
+    assert describe_engines(Config()) == "claude, codex, deepseek, antigravity"
+    assert describe_engines(Config(codex_enabled=False)) == "claude, deepseek, antigravity"
     assert describe_engines(
-        Config(claude_enabled=False, codex_enabled=False, deepseek_enabled=False)
+        Config(claude_enabled=False, codex_enabled=False,
+               deepseek_enabled=False, antigravity_enabled=False)
     ) == "none"
 
 

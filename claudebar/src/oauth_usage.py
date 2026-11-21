@@ -2,16 +2,18 @@
 
 import json
 import logging
+import math
+import re
 import time
 import urllib.error
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Optional
 from pathlib import Path
 
 import http_json
 from banked_resets import BankedResets, CLAUDE, parse_claude_banked
-from models import reset_words
+from models import QuotaBucket, WEEKLY_WINDOW_HOURS, reset_words
 from validation import safe_get_float
 
 logger = logging.getLogger("claudebar")
@@ -69,6 +71,7 @@ class OAuthUsageData:
     weekly: Optional[UsageWindow] = None   # seven_day
     extra: Optional[ExtraUsage] = None
     banked: Optional[BankedResets] = None  # saved one-time resets, when the response has them
+    extra_buckets: list[QuotaBucket] = field(default_factory=list)
     error: Optional[str] = None
 
     @property
@@ -164,11 +167,54 @@ def _window(raw) -> Optional[UsageWindow]:
     return UsageWindow(utilization=utilization, resets_at=parse_reset_time(raw.get("resets_at")))
 
 
+def _scoped_buckets(limits) -> list[QuotaBucket]:
+    """Parse model-scoped weekly rows from the `limits[]` array.
+
+    Live `/api/oauth/usage` replies carry model-specific allowances as
+    `kind == "weekly_scoped"` entries with numeric `percent`, `resets_at`, and
+    `scope.model.display_name`. Entries with a null or non-dict `scope`, or a
+    missing/non-string `display_name`, are skipped cleanly.
+    """
+    if not isinstance(limits, list):
+        return []
+    buckets: list[QuotaBucket] = []
+    seen: set[str] = set()
+    for entry in limits:
+        if not isinstance(entry, dict) or entry.get("kind") != "weekly_scoped":
+            continue
+        percent = entry.get("percent")
+        if isinstance(percent, bool) or not isinstance(percent, (int, float)) or not math.isfinite(percent):
+            continue
+        scope = entry.get("scope")
+        model = scope.get("model") if isinstance(scope, dict) else None
+        raw_name = model.get("display_name") if isinstance(model, dict) else None
+        if not isinstance(raw_name, str) or not raw_name.strip():
+            continue
+        display_name = raw_name.strip()
+        slug = re.sub(r"[^a-z0-9]+", "_", display_name.lower()).strip("_") or "scoped"
+        bucket_id = f"weekly_scoped_{slug}"
+        if bucket_id in seen:
+            continue
+        seen.add(bucket_id)
+        resets_at = parse_reset_time(entry.get("resets_at"))
+        buckets.append(QuotaBucket(
+            bucket_id=bucket_id,
+            label=f"Weekly \u00b7 {display_name}",
+            window="weekly",
+            used_percent=min(max(float(percent), 0.0), 100.0),
+            resets_at=resets_at,
+            reset_str=reset_words(resets_at),
+            window_hours=WEEKLY_WINDOW_HOURS,
+        ))
+    return buckets
+
+
 def parse_usage_response(data: dict, banked_failed: bool = False) -> OAuthUsageData:
     """The usage reply as windows, extra usage and banked resets. The same JSON arrives from
     the endpoint and from the Claude CLI's saved copy of it, so both read it here."""
     session = _window(data.get("five_hour"))
     weekly = _window(data.get("seven_day"))
+    extra_buckets = _scoped_buckets(data.get("limits"))
 
     # Parse extra usage
     # API returns monthly_limit and used_credits in CENTS, divide by 100
@@ -193,6 +239,7 @@ def parse_usage_response(data: dict, banked_failed: bool = False) -> OAuthUsageD
         weekly=weekly,
         extra=extra,
         banked=banked,
+        extra_buckets=extra_buckets,
         # Every window null is a reply that says nothing: say so, so the log reads
         # "OAuth: <reason>" and not "OAuth: None".
         error=None if session is not None or weekly is not None

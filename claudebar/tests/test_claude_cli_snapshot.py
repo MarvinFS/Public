@@ -193,3 +193,17 @@ class TestCollector:
         monkeypatch.setattr(ccs, "read", broken)
         snap = refused.collect()
         assert snap.session_percent == 12 and snap.is_stale
+
+    def test_scoped_limits_are_preserved_and_expired_ones_dropped(self, refused, cli_config):
+        active_reset = (NOW + timedelta(days=5)).isoformat()
+        expired_reset = (NOW - timedelta(minutes=2)).isoformat()
+        write_config(cli_config, limits=[
+            {"kind": "weekly_scoped", "percent": 8, "resets_at": active_reset,
+             "scope": {"model": {"id": None, "display_name": "Fable"}, "surface": None}},
+            {"kind": "weekly_scoped", "percent": 40, "resets_at": expired_reset,
+             "scope": {"model": {"id": None, "display_name": "ExpiredModel"}, "surface": None}},
+        ])
+        snap = refused.collect()
+        assert len(snap.extra_buckets) == 1
+        assert snap.extra_buckets[0].label == "Weekly \u00b7 Fable"
+        assert snap.extra_buckets[0].used_percent == 8.0

@@ -70,3 +70,33 @@ def test_a_plan_with_no_session_charts_its_long_window():
     codex = OpenAISnapshot(timestamp=reset, session_available=False, weekly_percent=4,
                            weekly_resets_at=reset, weekly_window_hours=720)
     assert codex.charted_window() == (False, 4, reset, 720)
+
+
+def test_usage_request_includes_chatgpt_account_id_header():
+    seen = {}
+    payload = json.dumps({
+        "plan_type": "plus",
+        "rate_limit": {"primary_window": {"used_percent": 10, "limit_window_seconds": 18000,
+                                          "reset_at": 1789225516}},
+    }).encode()
+
+    class _Resp:
+        def read(self):
+            return payload
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    def fake_open(req, timeout=10, follow_redirects=False):
+        seen.update({k.lower(): v for k, v in req.header_items()})
+        return _Resp()
+
+    with patch("openai_usage.load_codex_account_id", return_value="acct-workspace-1"), \
+         patch("http_json.open_url", side_effect=fake_open):
+        data = fetch_openai_usage(access_token="token")
+
+    assert data.is_valid
+    assert seen.get("chatgpt-account-id") == "acct-workspace-1"

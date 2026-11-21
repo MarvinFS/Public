@@ -4,6 +4,7 @@ import json
 from datetime import datetime, timedelta
 from typing import Optional
 
+import antigravity_usage
 import codex_pricing
 import http_json
 import pricing
@@ -12,7 +13,7 @@ from version import USER_AGENT
 
 URL = "https://models.dev/api.json"
 CACHE_TTL = timedelta(hours=24)
-PROVIDERS = ("anthropic", "openai")
+PROVIDERS = ("anthropic", "openai", "google")
 
 # models.dev being down must cost one 10 s timeout per ten minutes, not one per refresh.
 _fetch_failures = http_json.FailureMemory()
@@ -64,4 +65,5 @@ def apply() -> bool:
         return False
     pricing.load_catalog(data.get("anthropic", {}))
     codex_pricing.load_catalog(data.get("openai", {}))
+    antigravity_usage.load_catalog(data.get("google", {}))
     return True

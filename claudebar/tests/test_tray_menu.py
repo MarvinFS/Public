@@ -150,3 +150,39 @@ def test_with_claude_switched_off_the_icon_is_neutral_and_the_tooltip_is_not_loa
 
 def test_before_the_first_refresh_the_tray_still_says_loading(manager):
     assert manager._get_tooltip() == "ClaudeBar - Loading..."
+
+
+def test_antigravity_appears_in_tray_menu_and_tooltip(manager):
+    from models import AntigravitySnapshot, TokenUsage
+    ag = AntigravitySnapshot(
+        available=True,
+        session_available=True,
+        session_percent=74.8,
+        weekly_percent=71.9,
+        today_tokens=TokenUsage(input_tokens=1_200_000),
+    )
+    manager.update_combined(CombinedSnapshot(claude=None, antigravity=ag))
+    manager.run_pending()
+    assert "Google: 75%/72%" in manager._icon.title
+    (_, texts), = manager._icon.menu_assignments
+    assert "Google" in texts
+    assert any("Gemini 5h: 75% used" in t for t in texts)
+    assert any("Gemini Weekly: 72% used" in t for t in texts)
+
+
+def test_tooltip_with_all_four_engines_fits_win32_sztip_limit(manager):
+    """Win32 NOTIFYICONDATAW.szTip is 128 WCHARs (127 chars + NUL); pystray raises ValueError above it."""
+    from models import AntigravitySnapshot, DeepSeekSnapshot, UsageSnapshot
+    combined = CombinedSnapshot(
+        claude=UsageSnapshot(logs_available=True, today_cost_usd=1234.56, month_cost_usd=98765.43),
+        openai=OpenAISnapshot(available=True, session_available=True, session_percent=100.0, weekly_percent=100.0),
+        deepseek=DeepSeekSnapshot(balance_available=True, balance_total=1234.56,
+                                  usage_available=True, today_cost_usd=99.99),
+        antigravity=AntigravitySnapshot(available=True, session_available=True,
+                                        session_percent=100.0, weekly_percent=100.0),
+    )
+    manager.update_combined(combined)
+    tip = manager._get_tooltip()
+    assert len(tip) <= 127
+    assert "Google: 100%/100%" in tip
+    assert "OpenAI: 100%/100%" in tip

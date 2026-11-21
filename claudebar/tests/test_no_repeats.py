@@ -14,7 +14,7 @@ import banked_resets as br
 import quota_history
 import ui_window
 from config import Config
-from models import CombinedSnapshot, DeepSeekSnapshot, Engine, OpenAISnapshot, UsageSnapshot
+from models import CombinedSnapshot, DeepSeekSnapshot, Engine, OpenAISnapshot, QuotaBucket, UsageSnapshot
 from tests.test_panel_scale import STANDARD
 from ui_scale import DROP_ORDER
 
@@ -79,6 +79,10 @@ def top_texts(panel) -> list:
     for bar in panel._limits.values():
         if bar["frame"].winfo_manager():
             texts += [bar[cell].cget("text") for cell in ("reset", "left", "note", "pace")]
+    if panel._extra_bucket_frame.winfo_manager():
+        for row in panel._extra_bucket_rows:
+            if row["frame"].winfo_manager():
+                texts += [row["name"].cget("text"), row["reset"].cget("text"), row["pct"].cget("text")]
     if panel._banked_frame.winfo_manager():
         texts.append(panel._banked_line.cget("text"))
     if panel._balance_frame.winfo_manager():
@@ -229,6 +233,30 @@ class TestTheQuotaTabSaysWhatTheBlocksAboveDoNot:
                              weekly_resets_at=now + h(60), is_stale=True, stale_since=datetime.now())
         show(panel, Engine.CLAUDE, claude=snap)
         assert tab_texts(panel) == ["\u2014"]
+
+    def test_secondary_bucket_suppresses_countdown_when_matching_primary_and_shows_when_distinct(self, panel):
+        now = datetime.now(UTC)
+        weekly_reset = now + h(100)
+        distinct_reset = now + h(50)
+        same_bucket = QuotaBucket("weekly_scoped_fable", "Weekly \u00b7 Fable", "weekly", 8.0,
+                                  resets_at=weekly_reset, window_hours=168.0)
+        distinct_bucket = QuotaBucket("weekly_scoped_sonnet", "Weekly \u00b7 Sonnet", "weekly", 25.0,
+                                      resets_at=distinct_reset, window_hours=168.0)
+        untouched_bucket = QuotaBucket("weekly_scoped_opus", "Weekly \u00b7 Opus", "weekly", 0.0,
+                                       resets_at=distinct_reset, window_hours=168.0)
+        snap = UsageSnapshot(timestamp=datetime.now(), session_percent=20.0, session_resets_at=now + h(3),
+                             weekly_percent=40.0, weekly_resets_at=weekly_reset,
+                             extra_buckets=[same_bucket, distinct_bucket, untouched_bucket])
+        show(panel, Engine.CLAUDE, claude=snap)
+        rows = panel._extra_bucket_rows
+        assert rows[0]["name"].cget("text") == "Weekly \u00b7 Fable"
+        assert rows[0]["reset"].cget("text") == ""           # same reset as Weekly bar -> not repeated
+        assert rows[0]["pct"].cget("text") == "92%"
+        assert rows[1]["name"].cget("text") == "Weekly \u00b7 Sonnet"
+        assert rows[1]["reset"].cget("text") != ""           # distinct active reset -> shown
+        assert rows[1]["pct"].cget("text") == "75%"
+        assert rows[2]["reset"].cget("text") == ""           # untouched (0% used) -> no countdown
+        assert rows[2]["pct"].cget("text") == "100%"
 
 
 class TestATabWithNoDetailRows:

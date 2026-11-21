@@ -234,3 +234,21 @@ def test_the_daily_series_keeps_the_turns_after_a_bad_byte(tmp_path):
 
     series = get_codex_daily_usage(tmp_path, days=3, end=datetime(2026, 11, 11, 12))
     assert series[-1].input_tokens == 800
+
+
+def test_usage_and_models_aggregates_month_models_sorted_by_cost(tmp_path):
+    from datetime import datetime
+    from codex_log_parser import get_codex_usage_and_models
+
+    day = tmp_path / "2026" / "11" / "11"
+    day.mkdir(parents=True)
+    write_session(day, [
+        {"type": "turn_context", "payload": {"model": "gpt-5.4"}},
+        {**token_count(10_000, 0, 2_000), "timestamp": "2026-11-11T10:00:00Z"},
+        {"type": "turn_context", "payload": {"model": "gpt-5-mini"}},
+        {**token_count(5_000, 0, 500), "timestamp": "2026-11-11T10:05:00Z"},
+    ])
+    series, models = get_codex_usage_and_models(tmp_path, days=5, end=datetime(2026, 11, 11, 12))
+    assert series[-1].input_tokens == 15_000
+    assert [m.model for m in models] == ["gpt-5.4", "gpt-5-mini"]
+    assert models[0].cost_usd > models[1].cost_usd > 0

@@ -6,13 +6,14 @@ from typing import Optional
 
 import logging
 
-from models import (UsageSnapshot, OpenAISnapshot, DeepSeekSnapshot, CombinedSnapshot,
-                    Engine, ModelUsage, DAILY_HISTORY_DAYS, SESSION_WINDOW_HOURS,
-                    WEEKLY_WINDOW_HOURS)
+from models import (UsageSnapshot, OpenAISnapshot, DeepSeekSnapshot, AntigravitySnapshot,
+                    CombinedSnapshot, Engine, ModelUsage, DAILY_HISTORY_DAYS,
+                    SESSION_WINDOW_HOURS, WEEKLY_WINDOW_HOURS)
 from log_parser import collect_entries, aggregate_usage, daily_costs
 from oauth_usage import fetch_oauth_usage, OAuthUsageData
 from openai_usage import fetch_openai_usage
-from codex_log_parser import CodexTokenUsage, get_codex_daily_usage
+from antigravity_usage import fetch_antigravity_usage, get_antigravity_local_usage
+from codex_log_parser import CodexTokenUsage, get_codex_daily_usage, get_codex_usage_and_models
 from config import Config, get_claude_projects_dir
 import model_catalog
 import deepseek_auth
@@ -21,7 +22,7 @@ import quota_history
 from deepseek_usage import fetch_usage, fetch_summary, last_n_days, month_days, previous_month_days
 from currency import ExchangeRates, get_exchange_rates, to_usd
 from forecast import as_utc
-from snapshot_cache import save_cache, load_cache, load_deepseek_cache
+from snapshot_cache import save_cache, load_cache, load_deepseek_cache, load_antigravity_cache
 
 logger = logging.getLogger("claudebar")
 
@@ -43,11 +44,15 @@ def _record_quota(key: str, percent_used: float, resets_at: Optional[datetime], 
 _CLAUDE_CACHED = ("session_percent", "session_reset", "session_resets_at",
                   "weekly_percent", "weekly_reset", "weekly_resets_at",
                   "extra_enabled", "extra_percent", "extra_used", "extra_limit", "extra_currency",
-                  "banked")
+                  "banked", "extra_buckets")
 _CODEX_CACHED = ("session_percent", "session_reset", "session_available", "session_resets_at",
                  "weekly_percent", "weekly_reset", "weekly_resets_at",
                  "session_window_hours", "weekly_window_hours", "banked",
                  "credits_remaining", "plan_type")
+_ANTIGRAVITY_CACHED = ("session_percent", "session_reset", "session_available", "session_resets_at",
+                       "weekly_percent", "weekly_reset", "weekly_resets_at",
+                       "session_window_hours", "weekly_window_hours",
+                       "extra_buckets", "plan_type", "email")
 # DeepSeek's two halves fail independently, so each has its own list.
 _DEEPSEEK_BALANCE_CACHED = ("balance_available", "balance_usable", "balance_total",
                             "balance_topped_up", "balance_granted", "balance_currency",
@@ -173,6 +178,7 @@ class DataCollector:
                 snapshot.extra_limit = oauth_data.extra.monthly_limit
                 snapshot.extra_currency = oauth_data.extra.currency
             snapshot.banked = oauth_data.banked
+            snapshot.extra_buckets = oauth_data.extra_buckets
             snapshot.cli_available = True
         else:
             snapshot.cli_available = False
@@ -253,6 +259,7 @@ class DataCollector:
                 snapshot.weekly_percent = usage.weekly.percent
                 snapshot.weekly_reset = usage.weekly.reset_str
                 snapshot.weekly_resets_at = usage.weekly.resets_at
+            snapshot.extra_buckets = usage.extra_buckets
             snapshot.is_stale = True
             snapshot.stale_since = reading.t.astimezone().replace(tzinfo=None)
             snapshot.error_message = None
@@ -367,7 +374,7 @@ class DataCollector:
         # Fetch token usage and costs from local JSONL logs: the daily series
         # ends today, so today, the month and the last 31 days are slices of it.
         try:
-            series = get_codex_daily_usage(days=DAILY_HISTORY_DAYS, end=snapshot.timestamp)
+            series, models_used = get_codex_usage_and_models(days=DAILY_HISTORY_DAYS, end=snapshot.timestamp)
             today_usage = series[-1]
             snapshot.today_input_tokens = today_usage.input_tokens
             snapshot.today_output_tokens = today_usage.output_tokens
@@ -379,6 +386,7 @@ class DataCollector:
             snapshot.month_input_tokens = month_usage.input_tokens
             snapshot.month_output_tokens = month_usage.output_tokens
             snapshot.month_cost_usd = month_usage.cost_usd
+            snapshot.models_used = models_used
 
             last31 = sum(series, CodexTokenUsage())
             snapshot.last31_cost_usd = last31.cost_usd
@@ -511,6 +519,69 @@ class DataCollector:
             for m in usage.models
         ]
 
+    def collect_antigravity(self) -> AntigravitySnapshot:
+        """Collect Google Antigravity quotas and local conversation DB usage."""
+        snapshot = AntigravitySnapshot(timestamp=datetime.now())
+        api_failed = False
+
+        try:
+            ag_data = fetch_antigravity_usage()
+            if ag_data.is_valid:
+                snapshot.session_percent = ag_data.session_percent
+                snapshot.session_reset = ag_data.session_reset
+                snapshot.session_available = ag_data.has_session_window
+                snapshot.session_resets_at = ag_data.five_hour.resets_at if ag_data.five_hour else None
+                snapshot.weekly_percent = ag_data.weekly_percent
+                snapshot.weekly_reset = ag_data.weekly_reset
+                snapshot.weekly_resets_at = ag_data.weekly.resets_at if ag_data.weekly else None
+                snapshot.session_window_hours = _window_hours(ag_data.five_hour, SESSION_WINDOW_HOURS)
+                snapshot.weekly_window_hours = _window_hours(ag_data.weekly, WEEKLY_WINDOW_HOURS)
+                snapshot.extra_buckets = ag_data.extra_buckets
+                snapshot.plan_type = ag_data.plan_type
+                snapshot.email = ag_data.email
+                session, used, resets_at, _ = snapshot.charted_window()
+                if ag_data.five_hour if session else ag_data.weekly:
+                    _record_quota(quota_history.window_key("antigravity", session), used, resets_at,
+                                  snapshot.timestamp)
+                snapshot.available = True
+            else:
+                snapshot.available = False
+                api_failed = True
+                snapshot.email = ag_data.email
+                snapshot.plan_type = ag_data.plan_type
+                if ag_data.error:
+                    snapshot.error_message = ag_data.error
+        except Exception as e:
+            snapshot.available = False
+            api_failed = True
+            snapshot.error_message = str(e)
+
+        not_signed_in = (ag_data.error == "Sign in to Google in Settings") if api_failed and "ag_data" in locals() else False
+        if api_failed and not not_signed_in:
+            cached_ag, _ = load_antigravity_cache()
+            if cached_ag:
+                _fall_back_to_cache(snapshot, cached_ag, _ANTIGRAVITY_CACHED)
+
+        try:
+            local = get_antigravity_local_usage(days=DAILY_HISTORY_DAYS, end=snapshot.timestamp)
+            snapshot.today_tokens = local.today_tokens
+            snapshot.month_tokens = local.month_tokens
+            snapshot.today_cost_usd = local.today_cost_usd
+            snapshot.month_cost_usd = local.month_cost_usd
+            snapshot.last31_cost_usd = local.last31_cost_usd
+            snapshot.last31_tokens = local.last31_tokens
+            snapshot.daily_costs = local.daily_costs
+            snapshot.models_used = local.models_used
+            snapshot.pricing_source = self._pricing_source
+            snapshot.logs_available = local.logs_available
+        except Exception:
+            pass  # Local DB stats are optional; keep quota data even if DB scan fails
+
+        if not api_failed:
+            save_cache(antigravity=snapshot)
+
+        return snapshot
+
     @staticmethod
     def _isolated(name: str, collect, cached, unavailable):
         """One provider's snapshot from `collect()`. If that raises, the traceback is
@@ -527,7 +598,7 @@ class DataCollector:
         return getattr(self._config, flag, True)
 
     def collect_combined(self) -> CombinedSnapshot:
-        """Collect data from Claude, OpenAI/Codex and DeepSeek, each on its own.
+        """Collect data from Claude, OpenAI/Codex, DeepSeek and Antigravity, each on its own.
 
         An engine switched off in Settings is not collected at all: no request, no log
         parse, no cache write, no history line. Its snapshot is None, which every
@@ -535,10 +606,10 @@ class DataCollector:
         claude_on = self._engine_on("claude_enabled")
         codex_on = self._engine_on("codex_enabled")
         deepseek_on = self._engine_on("deepseek_enabled")
+        antigravity_on = self._engine_on("antigravity_enabled")
 
-        # Refresh price tables first so both parsers below use the same rates. Only the two
-        # engines that read logs price anything.
-        if claude_on or codex_on:
+        # Refresh price tables first so all local-log parsers use the same rates.
+        if claude_on or codex_on or antigravity_on:
             try:
                 self._pricing_source = "models.dev" if model_catalog.apply() else "bundled"
             except Exception:
@@ -558,11 +629,15 @@ class DataCollector:
             "DeepSeek", self.collect_deepseek, lambda: load_deepseek_cache()[0],
             lambda: DeepSeekSnapshot(timestamp=datetime.now(), error_message=failed,
                                      usage_error=failed)) if deepseek_on else None
+        antigravity_snapshot = self._isolated(
+            "Antigravity", self.collect_antigravity, lambda: load_antigravity_cache()[0],
+            lambda: AntigravitySnapshot(timestamp=datetime.now(), error_message=failed)) if antigravity_on else None
 
         return CombinedSnapshot(
             claude=claude_snapshot,
             openai=openai_snapshot,
             deepseek=deepseek_snapshot,
+            antigravity=antigravity_snapshot,
             active_engine=self._active_engine,
             timestamp=datetime.now(),
         )

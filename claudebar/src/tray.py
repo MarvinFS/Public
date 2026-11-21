@@ -62,6 +62,10 @@ def _in_menu_mode(thread_id: Optional[int]) -> bool:
         return False
 
 
+# Win32 NOTIFYICONDATAW.szTip holds 128 WCHARs including the trailing NUL.
+# Passing a longer string to pystray._win32 raises ValueError and aborts tray setup.
+_MAX_TOOLTIP_LEN = 127
+
 # Custom app icon path
 _CUSTOM_ICON_PATH = get_resources_path() / "icons" / "app_icon.png"
 
@@ -205,10 +209,32 @@ class TrayManager:
                     items.append(pystray.MenuItem(
                         f"  {format_tokens(deepseek.week_tokens)} tokens this week", None, enabled=False))
 
+        # Google / Antigravity usage summary
+        antigravity = self._combined.antigravity if self._combined else None
+        if antigravity and (antigravity.available or antigravity.logs_available):
+            items.append(pystray.Menu.SEPARATOR)
+            items.append(pystray.MenuItem("Google", None, enabled=False))
+            if antigravity.available:
+                if antigravity.session_available:
+                    items.append(pystray.MenuItem(
+                        f"  Gemini 5h: {antigravity.session_percent:.0f}% used",
+                        None,
+                        enabled=False,
+                    ))
+                items.append(pystray.MenuItem(
+                    f"  Gemini Weekly: {antigravity.weekly_percent:.0f}% used",
+                    None,
+                    enabled=False,
+                ))
+            if antigravity.today_total_tokens > 0:
+                items.append(pystray.MenuItem(
+                    f"  {format_tokens(antigravity.today_total_tokens)} tokens", None, enabled=False))
+
         has_claude_stats = self._snapshot and self._snapshot.logs_available
         has_openai_stats = self._combined and self._combined.openai and self._combined.openai.available
         has_deepseek_stats = deepseek and (deepseek.balance_available or deepseek.usage_available)
-        if has_claude_stats or has_openai_stats or has_deepseek_stats:
+        has_antigravity_stats = antigravity and (antigravity.available or antigravity.logs_available)
+        if has_claude_stats or has_openai_stats or has_deepseek_stats or has_antigravity_stats:
             items.append(pystray.Menu.SEPARATOR)
 
         # Action items
@@ -331,7 +357,7 @@ class TrayManager:
         return create_icon(status, percent if percent > 0 else None)
 
     def _get_tooltip(self) -> str:
-        """Get tooltip text for current state."""
+        """Get tooltip text for current state (clamped to Win32's 127-char szTip limit)."""
         snapshot = self._status_snapshot()
         if snapshot is None:
             return "ClaudeBar - Loading..."
@@ -340,8 +366,7 @@ class TrayManager:
 
         # Claude stats
         if snapshot.logs_available:
-            lines.append(f"Today: ${snapshot.today_cost_usd:.2f}")
-            lines.append(f"Month: ${snapshot.month_cost_usd:.2f}")
+            lines.append(f"Claude: ${snapshot.today_cost_usd:.2f} / ${snapshot.month_cost_usd:.2f}")
 
         # OpenAI stats
         if self._combined and self._combined.openai and self._combined.openai.available:
@@ -353,14 +378,27 @@ class TrayManager:
 
         # DeepSeek stats
         deepseek = self._combined.deepseek if self._combined else None
-        if deepseek and deepseek.balance_available:
-            lines.append(f"DeepSeek: ${deepseek.balance_total:.2f} balance")
-        if deepseek and deepseek.usage_available:
+        if deepseek and deepseek.balance_available and deepseek.usage_available:
+            lines.append(f"DeepSeek: ${deepseek.balance_total:.2f} (${deepseek.today_cost_usd:.2f})")
+        elif deepseek and deepseek.balance_available:
+            lines.append(f"DeepSeek: ${deepseek.balance_total:.2f}")
+        elif deepseek and deepseek.usage_available:
             lines.append(f"DeepSeek today: ${deepseek.today_cost_usd:.2f}")
+
+        # Google / Antigravity stats
+        antigravity = self._combined.antigravity if self._combined else None
+        if antigravity and antigravity.available:
+            if antigravity.session_available:
+                lines.append(f"Google: {antigravity.session_percent:.0f}%/{antigravity.weekly_percent:.0f}%")
+            else:
+                lines.append(f"Google: {antigravity.weekly_percent:.0f}% weekly")
 
         lines.append(f"Updated: {snapshot.timestamp.strftime('%H:%M')}")
 
-        return "\n".join(lines)
+        text = "\n".join(lines)
+        if len(text) > _MAX_TOOLTIP_LEN:
+            text = text[:_MAX_TOOLTIP_LEN - 1] + "\u2026"
+        return text
 
     def _request_menu(self) -> None:
         """Have the menu rebuilt on the main thread, once however many updates come first.

@@ -65,6 +65,7 @@ class Engine(Enum):
     CLAUDE = "claude"
     CODEX = "codex"
     DEEPSEEK = "deepseek"
+    ANTIGRAVITY = "antigravity"
 
 
 @dataclass
@@ -105,6 +106,18 @@ class ModelUsage:
     tokens: TokenUsage = field(default_factory=TokenUsage)
     cost_usd: float = 0.0
     message_count: int = 0
+
+
+@dataclass
+class QuotaBucket:
+    """A secondary rate-limit window (model-scoped weekly, shared 3P, etc.)."""
+    bucket_id: str
+    label: str
+    window: str = "other"  # "5h", "weekly", or "other"
+    used_percent: float = 0.0
+    resets_at: Optional[datetime] = None
+    reset_str: Optional[str] = None
+    window_hours: float = 0.0
 
 
 class _UsageStatus:
@@ -149,6 +162,9 @@ class UsageSnapshot(_UsageStatus):
 
     # Saved one-time limit resets; None when the response had none to report
     banked: Optional[BankedResets] = None
+
+    # Model-scoped weekly limits (e.g. "Weekly · Fable") from the limits[] array
+    extra_buckets: list[QuotaBucket] = field(default_factory=list)
 
     # Log-derived data
     today_cost_usd: float = 0.0
@@ -233,6 +249,7 @@ class OpenAISnapshot(_UsageStatus):
     # Cost calculations (from log parsing + pricing)
     today_cost_usd: float = 0.0
     month_cost_usd: float = 0.0
+    models_used: list[ModelUsage] = field(default_factory=list)
     last31_cost_usd: float = 0.0
     last31_tokens: int = 0
     daily_costs: list[float] = field(default_factory=list)   # oldest first, ends today
@@ -353,10 +370,73 @@ class DeepSeekSnapshot:
 
 
 @dataclass
+class AntigravitySnapshot(_UsageStatus):
+    """Google Antigravity usage snapshot (quotas + local conversation DB usage)."""
+    timestamp: datetime = field(default_factory=datetime.now)
+
+    # Primary Gemini usage limits
+    session_percent: float = 0.0
+    session_reset: Optional[str] = None
+    session_available: bool = True
+    session_resets_at: Optional[datetime] = None
+    weekly_percent: float = 0.0
+    weekly_reset: Optional[str] = None
+    weekly_resets_at: Optional[datetime] = None
+    session_window_hours: float = SESSION_WINDOW_HOURS
+    weekly_window_hours: float = WEEKLY_WINDOW_HOURS
+
+    # Secondary buckets (Gemini Argon/Carbon, Claude & GPT 5h/weekly, etc.)
+    extra_buckets: list[QuotaBucket] = field(default_factory=list)
+
+    # Antigravity has no banked resets; kept as None for shared panel helpers.
+    banked: Optional[BankedResets] = None
+
+    # Account metadata
+    plan_type: Optional[str] = None
+    email: Optional[str] = None
+
+    # Token usage and API-equivalent cost from local Antigravity SQLite DBs
+    today_cost_usd: float = 0.0
+    month_cost_usd: float = 0.0
+    today_tokens: TokenUsage = field(default_factory=TokenUsage)
+    month_tokens: TokenUsage = field(default_factory=TokenUsage)
+    models_used: list[ModelUsage] = field(default_factory=list)
+    last31_cost_usd: float = 0.0
+    last31_tokens: int = 0
+    daily_costs: list[float] = field(default_factory=list)   # oldest first, ends today
+    pricing_source: str = "bundled"      # "models.dev" or "bundled"
+
+    # Status
+    available: bool = False
+    logs_available: bool = False
+    error_message: Optional[str] = None
+
+    # Staleness tracking (for cached data)
+    is_stale: bool = False
+    stale_since: Optional[datetime] = None
+
+    @property
+    def today_total_tokens(self) -> int:
+        return self.today_tokens.total_tokens
+
+    @property
+    def month_total_tokens(self) -> int:
+        return self.month_tokens.total_tokens
+
+    def charted_window(self) -> tuple:
+        """(is the session, percent used, resets_at, window hours) of the window
+        the quota view charts: the 5-hour Gemini session when present, else weekly."""
+        if self.session_available:
+            return True, self.session_percent, self.session_resets_at, self.session_window_hours
+        return False, self.weekly_percent, self.weekly_resets_at, self.weekly_window_hours
+
+
+@dataclass
 class CombinedSnapshot:
-    """Combined snapshot for Claude, OpenAI/Codex and DeepSeek."""
+    """Combined snapshot for Claude, OpenAI/Codex, DeepSeek and Antigravity."""
     claude: Optional[UsageSnapshot] = None
     openai: Optional[OpenAISnapshot] = None
     deepseek: Optional[DeepSeekSnapshot] = None
+    antigravity: Optional[AntigravitySnapshot] = None
     active_engine: Engine = Engine.CLAUDE
     timestamp: datetime = field(default_factory=datetime.now)

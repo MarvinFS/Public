@@ -234,7 +234,8 @@ def fetch_openai_usage(access_token: Optional[str] = None) -> OpenAIUsageData:
         return OpenAIUsageData(error="No Codex OAuth token. Run 'codex login' first.")
 
     try:
-        data = http_json.request_json(USAGE_URL, chatgpt_headers(access_token), timeout=10)
+        account_id = load_codex_account_id()
+        data = http_json.request_json(USAGE_URL, chatgpt_headers(access_token, account_id), timeout=10)
 
         # Parse plan type
         plan_type = data.get("plan_type")
@@ -267,7 +268,7 @@ def fetch_openai_usage(access_token: Optional[str] = None) -> OpenAIUsageData:
         credits_block = data.get("rate_limit_reset_credits")
         banked = parse_codex_banked(credits_block, None, now)
         if banked is not None and banked.available > 0:
-            details = fetch_reset_credits(access_token, load_codex_account_id())
+            details = fetch_reset_credits(access_token, account_id)
             banked = parse_codex_banked(credits_block, details, now)
 
         return OpenAIUsageData(

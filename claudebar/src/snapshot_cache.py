@@ -14,7 +14,8 @@ from typing import Optional, get_args, get_origin
 import banked_resets
 from banked_resets import BankedResets
 from config import atomic_write_text, get_config_dir
-from models import UsageSnapshot, OpenAISnapshot, DeepSeekSnapshot, TokenUsage, ModelUsage
+from models import (UsageSnapshot, OpenAISnapshot, DeepSeekSnapshot, AntigravitySnapshot,
+                    TokenUsage, ModelUsage)
 
 
 def get_cache_path() -> Path:
@@ -33,10 +34,12 @@ class CachedSnapshot:
     claude: Optional[dict] = None
     openai: Optional[dict] = None
     deepseek: Optional[dict] = None
+    antigravity: Optional[dict] = None
     cached_at: str = ""  # ISO timestamp - legacy, fallback for old caches
     claude_cached_at: str = ""
     openai_cached_at: str = ""
     deepseek_cached_at: str = ""
+    antigravity_cached_at: str = ""
 
 
 def _json_default(o):
@@ -56,6 +59,12 @@ def _to_dict(snapshot) -> dict:
     data = asdict(snapshot)
     data.pop("is_stale", None)
     data.pop("stale_since", None)
+    # Optional newer lists stay out of the JSON when empty so caches without
+    # them stay byte-compatible with 1.8.x.
+    if data.get("extra_buckets") == []:
+        data.pop("extra_buckets", None)
+    if isinstance(snapshot, OpenAISnapshot) and data.get("models_used") == []:
+        data.pop("models_used", None)
     return data
 
 
@@ -133,7 +142,8 @@ def _from_dict(cls, data: dict, **given):
 
 
 def save_cache(claude: Optional[UsageSnapshot] = None, openai: Optional[OpenAISnapshot] = None,
-               deepseek: Optional[DeepSeekSnapshot] = None) -> None:
+               deepseek: Optional[DeepSeekSnapshot] = None,
+               antigravity: Optional[AntigravitySnapshot] = None) -> None:
     """Save snapshots to cache file, merging with existing data.
 
     Only the engine being saved gets its `*_cached_at` bumped — the other
@@ -162,16 +172,23 @@ def save_cache(claude: Optional[UsageSnapshot] = None, openai: Optional[OpenAISn
         claude=_to_dict(claude) if claude else existing.get("claude"),
         openai=_to_dict(openai) if openai else existing.get("openai"),
         deepseek=_to_dict(deepseek) if deepseek else existing.get("deepseek"),
+        antigravity=_to_dict(antigravity) if antigravity else existing.get("antigravity"),
         cached_at=now_iso,
         claude_cached_at=now_iso if claude else (existing.get("claude_cached_at") or legacy),
         openai_cached_at=now_iso if openai else (existing.get("openai_cached_at") or legacy),
         deepseek_cached_at=now_iso if deepseek else (existing.get("deepseek_cached_at") or legacy),
+        antigravity_cached_at=now_iso if antigravity else existing.get("antigravity_cached_at", ""),
     )
+
+    payload = asdict(cached)
+    if payload["antigravity"] is None and not payload["antigravity_cached_at"]:
+        payload.pop("antigravity", None)
+        payload.pop("antigravity_cached_at", None)
 
     try:
         # Replaced whole: written in place, a crash mid-write left a truncated
         # file, and the next save read it as empty and dropped every engine.
-        atomic_write_text(cache_path, json.dumps(asdict(cached), indent=2, default=_json_default))
+        atomic_write_text(cache_path, json.dumps(payload, indent=2, default=_json_default))
     except OSError:
         pass  # Silently fail on cache write errors
 
@@ -258,3 +275,17 @@ def load_deepseek_cache() -> tuple[Optional[DeepSeekSnapshot], Optional[datetime
     callers) stay untouched.
     """
     return _read_cache(_deepseek, (None, None))
+
+
+def _antigravity(data: dict) -> tuple:
+    if not data.get("antigravity"):
+        return None, None
+    cached_at = (_parse_iso(data.get("antigravity_cached_at", ""))
+                 or _parse_iso(data.get("cached_at", "")))
+    snapshot = _from_dict(AntigravitySnapshot, data["antigravity"], is_stale=True, stale_since=cached_at)
+    return snapshot, cached_at
+
+
+def load_antigravity_cache() -> tuple[Optional[AntigravitySnapshot], Optional[datetime]]:
+    """Load the cached Antigravity snapshot."""
+    return _read_cache(_antigravity, (None, None))

@@ -168,6 +168,11 @@ def shown(window):
     return {name for name, widgets in window._fit_widgets.items() if any(w.winfo_ismapped() for w in widgets)}
 
 
+def present(window):
+    """The named blocks of DROP_ORDER that currently hold content (optional `buckets` is absent when empty)."""
+    return set(DROP_ORDER) - ({"buckets"} if window._extra_bucket_count == 0 else set())
+
+
 def buttons(panel):
     return {b.cget("text"): b for b in panel._source_label.master.winfo_children() if b.winfo_class() == "Button"}
 
@@ -216,7 +221,7 @@ class TestADragOnAnEdge:
 
 class TestTheHeightSetsWhatIsShown:
     def test_blocks_leave_in_the_documented_order_and_come_back_in_reverse(self, panel, pictures):
-        assert DROP_ORDER == ("source", "top_model", "pace", "chart", "stats", "half", "status")
+        assert DROP_ORDER == ("source", "top_model", "pace", "chart", "stats", "buckets", "half", "status")
         seen = [frozenset(panel._fit_hidden)]
         d = Drag(panel, "s")
         for dy in list(range(0, -800, -16)) + list(range(-800, 1, 16)):
@@ -225,13 +230,37 @@ class TestTheHeightSetsWhatIsShown:
             changed = panel._fit_hidden != hidden
             if changed:
                 seen.append(frozenset(panel._fit_hidden))
-                assert shown(panel) == set(DROP_ORDER) - panel._fit_hidden       # hidden is what is off the screen
+                assert shown(panel) == present(panel) - panel._fit_hidden        # hidden is what is off the screen
             assert len(pictures.calls) - taken == int(changed) and panel._curtain is None    # one picture a change
         d.release()
         prefix = lambda n: frozenset(DROP_ORDER[:n])
-        # The footer's note frees no height, so it goes with the top-model row; then pace, chart, stats, half, status.
-        shrinking = [prefix(0), prefix(2), prefix(3), prefix(4), prefix(5), prefix(6), prefix(7)]
+        # The footer's note frees no height, so it goes with the top-model row; empty buckets go with half.
+        shrinking = [prefix(0), prefix(2), prefix(3), prefix(4), prefix(5), prefix(7), prefix(8)]
         assert seen == shrinking + shrinking[-2::-1]
+
+    def test_extra_buckets_drop_right_before_half(self, panel):
+        from models import QuotaBucket
+        snap = snapshot()
+        snap.extra_buckets = [
+            QuotaBucket("weekly_scoped_fable", "Weekly \u00b7 Fable", "weekly", 8.0, window_hours=168.0),
+            QuotaBucket("weekly_scoped_sonnet", "Weekly \u00b7 Sonnet", "weekly", 12.0, window_hours=168.0),
+        ]
+        panel.update_combined(CombinedSnapshot(claude=snap))
+        panel._apply_snapshot_update()
+        flush(panel)
+        assert panel._extra_bucket_frame.winfo_ismapped()
+        seen = [frozenset(panel._fit_hidden)]
+        d = Drag(panel, "s")
+        for dy in range(0, -800, -16):
+            hidden = set(panel._fit_hidden)
+            d.move(0, dy)
+            if panel._fit_hidden != hidden:
+                seen.append(frozenset(panel._fit_hidden))
+                assert shown(panel) == present(panel) - panel._fit_hidden
+        d.release()
+        prefix = lambda n: frozenset(DROP_ORDER[:n])
+        assert prefix(6) in seen and prefix(7) in seen
+        assert seen.index(prefix(6)) < seen.index(prefix(7))
 
     def test_the_always_kept_blocks_survive_the_smallest_height(self, panel):
         full = frame(panel)[3]
@@ -511,10 +540,10 @@ class TestWhileCapped:
         panel._on_view_select("forecast")
         flush(panel)
         quota = panel._fit_range[1]
-        assert frame(panel)[3] <= panel._px(450) and shown(panel) == set(DROP_ORDER) - panel._fit_hidden
+        assert frame(panel)[3] <= panel._px(450) and shown(panel) == present(panel) - panel._fit_hidden
         panel._on_view_select("cost")
         flush(panel)
-        assert frame(panel)[3] <= panel._px(450) and shown(panel) == set(DROP_ORDER) - panel._fit_hidden
+        assert frame(panel)[3] <= panel._px(450) and shown(panel) == present(panel) - panel._fit_hidden
         assert quota < panel._fit_range[1]            # the Quota view has no top-model row and no second row
         panel.config.panel_max_height = 520
         panel._update_window_size()

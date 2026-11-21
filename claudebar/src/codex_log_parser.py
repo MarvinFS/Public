@@ -12,6 +12,7 @@ from typing import Iterator, Optional
 import codex_pricing
 from codex_pricing import calculate_cost
 from jsonl_tail import TailedFile
+from models import ModelUsage, TokenUsage
 from validation import safe_get_int
 
 logger = logging.getLogger("claudebar")
@@ -170,6 +171,7 @@ class _Session(TailedFile):
     def reset(self) -> None:
         self.model, self.billable = "default", True
         self.days: dict[date, CodexTokenUsage] = {}
+        self.model_days: dict[tuple[date, str], CodexTokenUsage] = {}
 
     def add_line(self, line: str) -> None:
         self.model, self.billable, found = _scan_line(self.model, self.billable, line)
@@ -177,18 +179,29 @@ class _Session(TailedFile):
             timestamp, turn = found
             day = _local_day(timestamp, self.file_day)
             self.days[day] = self.days.get(day, _NOTHING) + turn
+            key = (day, self.model)
+            self.model_days[key] = self.model_days.get(key, _NOTHING) + turn
 
     def peek_line(self, line: str):
-        return _scan_line(self.model, self.billable, line)[2]
+        model, _, found = _scan_line(self.model, self.billable, line)
+        return (found[0], found[1], model) if found else None
 
     def usage_by_day(self) -> dict[date, CodexTokenUsage]:
         """The days as a full read of the file would give them, a last line the writer has not
         finished included."""
         if self.tail is None:
             return self.days
-        timestamp, turn = self.tail
+        timestamp, turn, _ = self.tail
         day = _local_day(timestamp, self.file_day)
         return {**self.days, day: self.days.get(day, _NOTHING) + turn}
+
+    def usage_by_model_day(self) -> dict[tuple[date, str], CodexTokenUsage]:
+        """Per-(day, model) totals including any unfinished last line."""
+        if self.tail is None:
+            return self.model_days
+        timestamp, turn, model = self.tail
+        key = (_local_day(timestamp, self.file_day), model)
+        return {**self.model_days, key: self.model_days.get(key, _NOTHING) + turn}
 
 
 # Per sessions directory, the sessions read from it. A turn's cost is worked out when it is
@@ -212,22 +225,20 @@ def reset_cache() -> None:
         _priced_with = None
 
 
-def get_codex_daily_usage(sessions_dir: Optional[Path] = None, days: int = 31,
-                          end: Optional[datetime] = None) -> list[CodexTokenUsage]:
-    """Usage per day for the last `days` days ending on `end` (today), oldest first.
-
-    Every request counts on the local day it happened, not the day its session
-    file was started: a session left running past midnight, or an old one
-    resumed today (`codex resume` appends to the original file), spends today's
-    tokens.
-    """
+def get_codex_usage_and_models(
+    sessions_dir: Optional[Path] = None, days: int = 31, end: Optional[datetime] = None
+) -> tuple[list[CodexTokenUsage], list[ModelUsage]]:
+    """Daily usage series (oldest first, ending on `end`) plus month-to-date per-model usage."""
     global _priced_with
     if sessions_dir is None:
         sessions_dir = get_codex_sessions_dir()
     last_day = (end or datetime.now()).date()
     first_day = last_day - timedelta(days=days - 1)
+    month_start = last_day.replace(day=1)
+    scan_start = min(first_day, month_start)
     series = {first_day + timedelta(days=i): CodexTokenUsage() for i in range(days)}
-    window_start = datetime(first_day.year, first_day.month, first_day.day).timestamp()
+    by_model: dict[str, CodexTokenUsage] = {}
+    window_start = datetime(scan_start.year, scan_start.month, scan_start.day).timestamp()
 
     with _lock:
         prices = _price_table()
@@ -242,7 +253,7 @@ def get_codex_daily_usage(sessions_dir: Optional[Path] = None, days: int = 31,
                 # A file dated before the window only matters if it was written to
                 # since (a resumed session). ponytail: Windows updates an open
                 # file's mtime late, so a resumed session shows up once it closes.
-                if file_day < first_day and file_path.stat().st_mtime < window_start:
+                if file_day < scan_start and file_path.stat().st_mtime < window_start:
                     continue
                 path = str(file_path)
                 session = known.get(path) or _Session(file_day)
@@ -254,5 +265,34 @@ def get_codex_daily_usage(sessions_dir: Optional[Path] = None, days: int = 31,
             for day, usage in session.usage_by_day().items():
                 if day in series:
                     series[day] = series[day] + usage
+            for (day, model), usage in session.usage_by_model_day().items():
+                if month_start <= day <= last_day and model and model != "default":
+                    by_model[model] = by_model.get(model, _NOTHING) + usage
         _directories[str(sessions_dir)] = visited      # a file that is gone is forgotten
-    return list(series.values())
+
+    models = [
+        ModelUsage(
+            model=model,
+            tokens=TokenUsage(
+                input_tokens=u.input_tokens,
+                output_tokens=u.output_tokens,
+                cache_read_input_tokens=u.cached_input_tokens,
+            ),
+            cost_usd=u.cost_usd,
+        )
+        for model, u in sorted(by_model.items(), key=lambda kv: kv[1].cost_usd, reverse=True)
+    ]
+    return list(series.values()), models
+
+
+def get_codex_daily_usage(sessions_dir: Optional[Path] = None, days: int = 31,
+                          end: Optional[datetime] = None) -> list[CodexTokenUsage]:
+    """Usage per day for the last `days` days ending on `end` (today), oldest first.
+
+    Every request counts on the local day it happened, not the day its session
+    file was started: a session left running past midnight, or an old one
+    resumed today (`codex resume` appends to the original file), spends today's
+    tokens.
+    """
+    series, _ = get_codex_usage_and_models(sessions_dir=sessions_dir, days=days, end=end)
+    return series

@@ -53,6 +53,7 @@ def describe_engines(config: Config) -> str:
             ("claude", config.claude_enabled),
             ("codex", config.codex_enabled),
             ("deepseek", config.deepseek_enabled),
+            ("antigravity", config.antigravity_enabled),
         ) if on
     ]
     return ", ".join(enabled) if enabled else "none"
@@ -143,11 +144,13 @@ class ClaudeBar:
     def _load_cached_initial(self) -> None:
         """Load cached data for immediate display on startup."""
         try:
-            from snapshot_cache import load_cache, load_deepseek_cache
-            from models import CombinedSnapshot, DeepSeekSnapshot, OpenAISnapshot, UsageSnapshot
+            from snapshot_cache import load_cache, load_deepseek_cache, load_antigravity_cache
+            from models import (CombinedSnapshot, DeepSeekSnapshot, OpenAISnapshot,
+                                UsageSnapshot, AntigravitySnapshot)
             cached_claude, cached_openai, cached_at = load_cache()
             cached_deepseek, _ = load_deepseek_cache()
-            if cached_claude or cached_openai or cached_deepseek:
+            cached_antigravity, _ = load_antigravity_cache()
+            if cached_claude or cached_openai or cached_deepseek or cached_antigravity:
                 # An engine switched off in Settings is left out, as a refresh leaves it out.
                 combined = CombinedSnapshot(
                     claude=(cached_claude or UsageSnapshot(timestamp=datetime.now()))
@@ -156,6 +159,8 @@ class ClaudeBar:
                     if self.config.codex_enabled else None,
                     deepseek=(cached_deepseek or DeepSeekSnapshot(timestamp=datetime.now()))
                     if self.config.deepseek_enabled else None,
+                    antigravity=(cached_antigravity or AntigravitySnapshot(timestamp=datetime.now()))
+                    if self.config.antigravity_enabled else None,
                     active_engine=self.collector.active_engine,
                     timestamp=datetime.now(),
                 )
@@ -222,7 +227,8 @@ class ClaudeBar:
         threading.Thread(target=self._refresh, daemon=True).start()
 
     def _engine_switches(self) -> tuple:
-        return (self.config.claude_enabled, self.config.codex_enabled, self.config.deepseek_enabled)
+        return (self.config.claude_enabled, self.config.codex_enabled,
+                self.config.deepseek_enabled, self.config.antigravity_enabled)
 
     def _on_settings_saved(self) -> None:
         """Handle a Settings save: the wait for the next refresh starts again with the

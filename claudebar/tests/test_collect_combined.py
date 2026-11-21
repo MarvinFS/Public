@@ -14,15 +14,16 @@ import pytest
 import data_collector as dc
 import deepseek_usage
 import snapshot_cache
+from antigravity_usage import AntigravityLocalUsage, AntigravityUsageData, AntigravityUsageWindow
 from codex_log_parser import CodexTokenUsage
 from config import Config
 from currency import ExchangeRates
 from deepseek_auth import Credential
-from models import DeepSeekSnapshot, OpenAISnapshot, UsageSnapshot
+from models import AntigravitySnapshot, DeepSeekSnapshot, OpenAISnapshot, UsageSnapshot
 from oauth_usage import OAuthUsageData, UsageWindow
 from openai_usage import OpenAIUsageData, OpenAIUsageWindow
 
-PROVIDERS = ["claude", "openai", "deepseek"]
+PROVIDERS = ["claude", "openai", "deepseek", "antigravity"]
 
 
 def boom():
@@ -30,7 +31,7 @@ def boom():
 
 
 def collector(monkeypatch, fail=(), apply=lambda: False):
-    """A collector whose three providers return a figure of their own, except those in
+    """A collector whose providers return a figure of their own, except those in
     `fail`, which raise."""
     monkeypatch.setattr(dc.model_catalog, "apply", apply)
     c = dc.DataCollector()
@@ -39,10 +40,13 @@ def collector(monkeypatch, fail=(), apply=lambda: False):
         "openai": lambda: OpenAISnapshot(timestamp=datetime.now(), session_percent=22.0, available=True),
         "deepseek": lambda: DeepSeekSnapshot(timestamp=datetime.now(), balance_available=True,
                                              balance_total=33.0),
+        "antigravity": lambda: AntigravitySnapshot(timestamp=datetime.now(), session_percent=44.0,
+                                                   available=True),
     }
     c.collect = boom if "claude" in fail else stubs["claude"]
     c.collect_openai = boom if "openai" in fail else stubs["openai"]
     c.collect_deepseek = boom if "deepseek" in fail else stubs["deepseek"]
+    c.collect_antigravity = boom if "antigravity" in fail else stubs["antigravity"]
     return c
 
 
@@ -62,6 +66,8 @@ def test_the_others_still_update_and_the_failure_is_logged_with_its_traceback(mo
         assert combined.openai.session_percent == 22.0
     if failing != "deepseek":
         assert combined.deepseek.balance_total == 33.0
+    if failing != "antigravity":
+        assert combined.antigravity.session_percent == 44.0
 
     (record,) = errors(caplog)
     assert record.exc_info and isinstance(record.exc_info[1], RuntimeError)
@@ -81,7 +87,9 @@ def test_with_no_cache_a_failed_provider_says_it_is_unavailable(monkeypatch):
     assert not deepseek.balance_available and not deepseek.usage_available
     assert deepseek.error_message and deepseek.usage_error
 
-    for snapshot in (claude, combined.openai, deepseek):
+    assert not combined.antigravity.available and combined.antigravity.error_message
+
+    for snapshot in (claude, combined.openai, deepseek, combined.antigravity):
         assert "disk on fire" not in snapshot.error_message, "the panel never shows the exception's text"
 
 
@@ -91,7 +99,8 @@ def test_a_failed_provider_shows_its_cached_snapshot_marked_cached(monkeypatch):
         claude=UsageSnapshot(timestamp=saved, session_percent=33.0),
         openai=OpenAISnapshot(timestamp=saved, session_percent=44.0, available=True),
         deepseek=DeepSeekSnapshot(timestamp=saved, balance_available=True, balance_total=55.0,
-                                  balance_fetched_at=saved))
+                                  balance_fetched_at=saved),
+        antigravity=AntigravitySnapshot(timestamp=saved, session_percent=66.0, available=True))
 
     combined = collector(monkeypatch, fail=PROVIDERS).collect_combined()
 
@@ -99,6 +108,7 @@ def test_a_failed_provider_shows_its_cached_snapshot_marked_cached(monkeypatch):
     assert combined.claude.stale_since is not None
     assert (combined.openai.session_percent, combined.openai.is_stale) == (44.0, True)
     assert (combined.deepseek.balance_total, combined.deepseek.is_stale) == (55.0, True)
+    assert (combined.antigravity.session_percent, combined.antigravity.is_stale) == (66.0, True)
 
 
 def test_a_cache_file_of_the_wrong_shape_does_not_stop_the_refresh(monkeypatch):
@@ -123,8 +133,8 @@ def test_a_failing_price_table_refresh_means_the_bundled_prices(monkeypatch, cap
     assert len(errors(caplog)) == 1
 
 
-ENGINES = ["claude", "codex", "deepseek"]
-FIELD = {"claude": "claude", "codex": "openai", "deepseek": "deepseek"}
+ENGINES = ["claude", "codex", "deepseek", "antigravity"]
+FIELD = {"claude": "claude", "codex": "openai", "deepseek": "deepseek", "antigravity": "antigravity"}
 
 
 @pytest.fixture
@@ -154,12 +164,21 @@ def world(monkeypatch):
     monkeypatch.setattr(dc, "collect_entries", counted("claude log parse", {}))
     monkeypatch.setattr(dc, "fetch_openai_usage", counted(
         "codex http", OpenAIUsageData(five_hour=OpenAIUsageWindow(30.0, soon, 18000))))
-    monkeypatch.setattr(dc, "get_codex_daily_usage", counted("codex log parse", [CodexTokenUsage()] * 31))
+    monkeypatch.setattr(dc, "get_codex_usage_and_models", counted(
+        "codex log parse", ([CodexTokenUsage()] * 31, [])))
     monkeypatch.setattr(dc.deepseek_auth, "discover_user_token", counted("deepseek token", Credential("t", "saved")))
     monkeypatch.setattr(dc, "get_exchange_rates", counted("deepseek rates", ExchangeRates({}, datetime.now())))
     monkeypatch.setattr(dc, "fetch_usage", counted("deepseek http", deepseek_usage.UsageData(available=False, error="x")))
     monkeypatch.setattr(dc, "fetch_summary", counted(
         "deepseek http", deepseek_usage.AccountSummary(available=True, topped_up=5.0)))
+    monkeypatch.setattr(dc, "fetch_antigravity_usage", counted(
+        "antigravity http", AntigravityUsageData(
+            five_hour=AntigravityUsageWindow(25.0, soon, 18000, "gemini-5h", "Gemini · 5-hour"),
+            weekly=AntigravityUsageWindow(10.0, soon, 604800, "gemini-weekly", "Gemini · Weekly"),
+            plan_type="AI Pro",
+        )))
+    monkeypatch.setattr(dc, "get_antigravity_local_usage", counted(
+        "antigravity log parse", AntigravityLocalUsage(daily_costs=[0.0] * 31, logs_available=True)))
     monkeypatch.setattr(dc, "save_cache", saved)
     monkeypatch.setattr(dc.quota_history, "append", recorded)
     return calls
@@ -199,10 +218,13 @@ def test_an_engine_switched_off_costs_the_refresh_nothing(world, off):
 
 
 def test_the_price_table_is_not_fetched_when_no_enabled_engine_prices_anything(world):
-    dc.DataCollector(config=Config(claude_enabled=False, codex_enabled=False)).collect_combined()
+    dc.DataCollector(config=Config(claude_enabled=False, codex_enabled=False,
+                                   antigravity_enabled=False)).collect_combined()
     assert world["price table"] == 0
-    dc.DataCollector(config=Config(claude_enabled=False)).collect_combined()
+    dc.DataCollector(config=Config(claude_enabled=False, antigravity_enabled=False)).collect_combined()
     assert world["price table"] == 1                        # Codex still prices its turns
+    dc.DataCollector(config=Config(claude_enabled=False, codex_enabled=False)).collect_combined()
+    assert world["price table"] == 2                        # Antigravity prices its local DB turns
 
 
 def test_an_engine_switched_back_on_is_collected_at_the_next_refresh_without_a_restart(world):

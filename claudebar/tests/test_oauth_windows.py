@@ -110,3 +110,32 @@ def test_the_log_line_for_an_empty_reply_has_a_reason(monkeypatch, caplog):
         collector._fetch_usage_limits(errors)
     assert errors == ["OAuth: The usage reply holds no session or weekly window"]
     assert "None" not in caplog.text
+
+
+def test_limits_array_parses_weekly_scoped_rows_and_skips_malformed():
+    reply = {
+        "five_hour": {"utilization": 3.0, "resets_at": RESET},
+        "seven_day": WEEKLY,
+        "limits": [
+            {"kind": "session", "percent": 3, "resets_at": RESET, "scope": None, "is_active": False},
+            {"kind": "weekly_all", "percent": 6, "resets_at": RESET, "scope": None, "is_active": False},
+            {"kind": "weekly_scoped", "percent": 8, "resets_at": RESET,
+             "scope": {"model": {"id": None, "display_name": "Fable"}, "surface": None}, "is_active": True},
+            {"kind": "weekly_scoped", "percent": 12, "resets_at": RESET, "scope": None},
+            {"kind": "weekly_scoped", "percent": 12, "resets_at": RESET, "scope": {"model": {"display_name": ""}}},
+            {"kind": "weekly_scoped", "percent": True, "resets_at": RESET,
+             "scope": {"model": {"display_name": "BadBool"}}},
+            {"kind": "weekly_scoped", "percent": float("nan"), "resets_at": RESET,
+             "scope": {"model": {"display_name": "BadNan"}}},
+            {"kind": "weekly_scoped", "percent": 20, "resets_at": RESET,
+             "scope": {"model": None, "surface": "chat"}},
+        ],
+    }
+    data = parse_usage_response(reply)
+    assert len(data.extra_buckets) == 1
+    b = data.extra_buckets[0]
+    assert b.bucket_id == "weekly_scoped_fable"
+    assert b.label == "Weekly \u00b7 Fable"
+    assert b.used_percent == 8.0
+    assert b.window == "weekly"
+    assert b.resets_at is not None

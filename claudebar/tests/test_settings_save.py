@@ -24,7 +24,9 @@ class Var:
 def dialog():
     dialog = SettingsDialog.__new__(SettingsDialog)
     dialog.config = config.Config(refresh_interval=300)
-    dialog.claude_var, dialog.codex_var, dialog.deepseek_var = Var(True), Var(True), Var(True)
+    dialog.claude_var, dialog.codex_var, dialog.deepseek_var, dialog.antigravity_var = (
+        Var(True), Var(True), Var(True), Var(True)
+    )
     dialog.deepseek_token_var = Var("")
     dialog.currency_var = Var("USD")
     dialog.refresh_var = Var("300")
@@ -63,3 +65,27 @@ def test_an_entry_that_is_no_whole_number_keeps_the_interval_as_it_was(dialog, t
     dialog.refresh_var = Var(typed)
     dialog._save()
     assert dialog.config.refresh_interval == 300 and stored() == 300
+
+
+def test_deepseek_token_input_hidden_and_disabled_when_signed_in(tk_root, monkeypatch):
+    import ui_window
+    from models import DeepSeekSnapshot
+
+    monkeypatch.setattr(ui_window.deepseek_auth, "discover_user_token", lambda: None)
+    signed_in_snap = DeepSeekSnapshot(balance_available=True, balance_total=11.67, balance_currency="USD")
+    d1 = SettingsDialog(tk_root, config.Config(), on_save=lambda: None,
+                        session_state=lambda: signed_in_snap)
+    try:
+        assert str(d1._deepseek_token_entry.cget("state")) == "disabled"
+        assert d1._deepseek_token_frame.winfo_manager() == ""
+    finally:
+        d1.dialog.destroy()
+
+    expired_snap = DeepSeekSnapshot(balance_available=False, usage_error="Session expired")
+    d2 = SettingsDialog(tk_root, config.Config(), on_save=lambda: None,
+                        session_state=lambda: expired_snap)
+    try:
+        assert str(d2._deepseek_token_entry.cget("state")) == "normal"
+        assert d2._deepseek_token_frame.winfo_manager() == "pack"
+    finally:
+        d2.dialog.destroy()

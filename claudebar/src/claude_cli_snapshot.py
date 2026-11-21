@@ -90,9 +90,14 @@ def _reading(config, now: datetime) -> Optional[CliReading]:
     if not timedelta(0) <= now - taken <= MAX_AGE:
         return None
 
-    parsed = parse_usage_response({key: reply[key] for key in _WINDOWS if isinstance(reply.get(key), dict)})
+    raw_payload = {key: reply[key] for key in _WINDOWS if isinstance(reply.get(key), dict)}
+    if isinstance(reply.get("limits"), list):
+        raw_payload["limits"] = reply["limits"]
+    parsed = parse_usage_response(raw_payload)
     running = [w if w is not None and (w.resets_at is None or w.resets_at > now) else None
                for w in (parsed.session, parsed.weekly)]
     if not any(running):
         return None
-    return CliReading(taken, OAuthUsageData(session=running[0], weekly=running[1]))
+    running_buckets = [b for b in parsed.extra_buckets if b.resets_at is None or b.resets_at > now]
+    return CliReading(taken, OAuthUsageData(session=running[0], weekly=running[1],
+                                            extra_buckets=running_buckets))

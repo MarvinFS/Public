@@ -16,7 +16,8 @@ from pathlib import Path
 
 from PIL import Image, ImageTk
 
-from models import (UsageSnapshot, OpenAISnapshot, DeepSeekSnapshot, CombinedSnapshot, Engine,
+from models import (UsageSnapshot, OpenAISnapshot, DeepSeekSnapshot, AntigravitySnapshot,
+                    CombinedSnapshot, Engine,
                     project_window, reset_clock, SESSION_WINDOW_HOURS, WEEKLY_WINDOW_HOURS, DAILY_HISTORY_DAYS)
 from config import (Config, save_config, get_resources_path, clamp_refresh_interval, MIN_REFRESH_INTERVAL,
                     MAX_REFRESH_INTERVAL, PANEL_VIEWS)
@@ -39,6 +40,8 @@ from ui_scale import (DROP_ORDER, PANEL_MAX_SCALE, PANEL_MIN_SCALE, Scale, auto_
 from ui_widgets import PaceBar, BarChart
 import logging
 
+import antigravity_auth
+import antigravity_usage
 import browser_signin
 import deepseek_auth
 import deepseek_usage
@@ -148,6 +151,24 @@ def _deepseek_status_for(snapshot) -> tuple:
     return "warn", snapshot.balance_message
 
 
+def _antigravity_status_for(snapshot) -> tuple:
+    if snapshot is None:
+        return "muted", ""
+    if snapshot.available:
+        return "ok", snapshot.plan_type or ""
+    if snapshot.error_message:
+        err = snapshot.error_message
+        low = err.lower()
+        if "sign in to google" in low or "sign in to antigravity" in low:
+            return "muted", "Not signed in"
+        if "expired" in low or "invalid" in low:
+            return "warn", "Sign-in expired"
+        if "403" in err or "restricted" in low:
+            return "attention", "Access restricted"
+        return "warn", "Connection error"
+    return "attention", "Not signed in"
+
+
 def status_for(engine: Engine, snapshot, claude_status=None, oauth_error: Optional[str] = None) -> tuple:
     """The status row for an engine as (tone, text); the panel colours the dot by tone.
 
@@ -161,22 +182,26 @@ def status_for(engine: Engine, snapshot, claude_status=None, oauth_error: Option
         return _claude_status_for(snapshot, claude_status, oauth_error)
     if engine == Engine.CODEX:
         return _codex_status_for(snapshot)
+    if engine == Engine.ANTIGRAVITY:
+        return _antigravity_status_for(snapshot)
     return _deepseek_status_for(snapshot)
 
 
-# Engine icon paths. The three marks ship in resources/icons; a missing one falls back to
+# Engine icon paths. The marks ship in resources/icons; a missing one falls back to
 # the text button, and nothing is downloaded: that would be network I/O on the Tk thread.
 _ICONS_DIR = get_resources_path() / "icons"
 _CUSTOM_ICON_PATH = _ICONS_DIR / "app_icon.png"
 _CLAUDE_ICON_PATH = _ICONS_DIR / "claude_icon.png"
 _OPENAI_ICON_PATH = _ICONS_DIR / "openai_icon.png"
 _DEEPSEEK_ICON_PATH = _ICONS_DIR / "deepseek_icon.png"
+_GOOGLE_ICON_PATH = _ICONS_DIR / "google_icon.png"
 
 # engine -> (display name, icon, accent colour)
 _ENGINE_META = {
     Engine.CLAUDE: ("Claude", _CLAUDE_ICON_PATH, "#F59E0B"),
     Engine.CODEX: ("Codex", _OPENAI_ICON_PATH, "#F59E0B"),
     Engine.DEEPSEEK: ("DeepSeek", _DEEPSEEK_ICON_PATH, "#4D6BFE"),
+    Engine.ANTIGRAVITY: ("Google", _GOOGLE_ICON_PATH, "#60A5FA"),
 }
 
 # engine -> Config attribute that enables it
@@ -184,6 +209,7 @@ _ENABLED_FLAG = {
     Engine.CLAUDE: "claude_enabled",
     Engine.CODEX: "codex_enabled",
     Engine.DEEPSEEK: "deepseek_enabled",
+    Engine.ANTIGRAVITY: "antigravity_enabled",
 }
 
 # The labels of the two panel views, per engine: DeepSeek has spend and a
@@ -192,6 +218,7 @@ _TAB_TITLES = {
     Engine.CLAUDE: ("Cost", "Quota"),
     Engine.CODEX: ("Cost", "Quota"),
     Engine.DEEPSEEK: ("Spend", "Balance"),
+    Engine.ANTIGRAVITY: ("Cost", "Quota"),
 }
 
 
@@ -228,6 +255,7 @@ _STILL_WORKING = timedelta(minutes=3)
 # Quota view: chart height, and how many detail rows the frame can hold.
 _FORECAST_HEIGHT = 110
 _FORECAST_ROWS = 6
+_EXTRA_BUCKET_ROWS = 6
 
 # A point in the panel's header: the panel is on the monitor that holds it.
 _HEADER_POINT = (40, 20)
@@ -322,12 +350,15 @@ def _monitor_near(widget, x: int, y: int) -> Monitor:
 
 
 def _open_url(url: str) -> None:
-    """Open a link in the default browser via `start`, the route that has
-    proved most reliable from a windowed build."""
-    import subprocess
+    """Open a link in the default browser without invoking cmd.exe (cmd /c start
+    treats `&` in OAuth query strings as a command separator and truncates the URL)."""
+    import os
+    import webbrowser
     try:
-        subprocess.Popen(['cmd', '/c', 'start', '', url], shell=False,
-                         creationflags=subprocess.CREATE_NO_WINDOW)
+        if hasattr(os, "startfile"):
+            os.startfile(url)
+        else:
+            webbrowser.open(url)
     except Exception:
         pass
 
@@ -398,7 +429,7 @@ class SettingsDialog(_Scaled):
 
     def __init__(self, parent, config: Config, on_save: Callable, on_close: Callable = None,
                  on_refresh: Callable = None, session_state: Callable = None,
-                 scale: Optional[Scale] = None):
+                 scale: Optional[Scale] = None, antigravity_state: Callable = None):
         self.config = config
         self.scale = scale or Scale()
         self.on_save = on_save
@@ -408,6 +439,7 @@ class SettingsDialog(_Scaled):
         # there is one judgement of whether the session works - the panel's -
         # instead of a second one here that could disagree with it.
         self._session_state = session_state
+        self._antigravity_state = antigravity_state
         # Fired after a credential change so the panel can refetch immediately
         # rather than waiting for the next scheduled refresh.
         self.on_refresh = on_refresh
@@ -416,6 +448,11 @@ class SettingsDialog(_Scaled):
         self._signin_result = None
         self._forget_thread = None
         self._forget_result = None
+        self._ag_session = None
+        self._ag_thread = None
+        self._ag_progress = None
+        self._ag_start_result = None
+        self._ag_submit_result = None
         self.parent = parent
 
         # Temporarily lower parent's topmost so dialog can appear on top
@@ -469,37 +506,28 @@ class SettingsDialog(_Scaled):
         engines_frame = tk.Frame(frame, bg="#0f0f0f")
         engines_frame.pack(fill=tk.X, pady=self._spacing((5, 15)))
 
+        cb_style = dict(font=self._font(10), fg="#ffffff", bg="#0f0f0f",
+                        activebackground="#0f0f0f", activeforeground="#ffffff",
+                        selectcolor="#1a1a1a")
         self.claude_var = tk.BooleanVar(value=self.config.claude_enabled)
-        claude_cb = tk.Checkbutton(engines_frame, text="Claude",
-                                   variable=self.claude_var,
-                                   font=self._font(10),
-                                   fg="#ffffff", bg="#0f0f0f",
-                                   activebackground="#0f0f0f",
-                                   activeforeground="#ffffff",
-                                   selectcolor="#1a1a1a")
-        claude_cb.pack(side=tk.LEFT)
+        tk.Checkbutton(engines_frame, text="Claude", variable=self.claude_var,
+                       **cb_style).grid(row=0, column=0, sticky="w")
 
         self.codex_var = tk.BooleanVar(value=self.config.codex_enabled)
-        codex_cb = tk.Checkbutton(engines_frame, text="Codex",
-                                  variable=self.codex_var,
-                                  font=self._font(10),
-                                  fg="#ffffff", bg="#0f0f0f",
-                                  activebackground="#0f0f0f",
-                                  activeforeground="#ffffff",
-                                  selectcolor="#1a1a1a")
-        codex_cb.pack(side=tk.LEFT, padx=self._spacing((10, 0)))
+        tk.Checkbutton(engines_frame, text="Codex", variable=self.codex_var,
+                       **cb_style).grid(row=0, column=1, sticky="w", padx=self._spacing((18, 0)))
 
         self.deepseek_var = tk.BooleanVar(value=self.config.deepseek_enabled)
-        deepseek_cb = tk.Checkbutton(engines_frame, text="DeepSeek",
-                                     variable=self.deepseek_var,
-                                     font=self._font(10),
-                                     fg="#ffffff", bg="#0f0f0f",
-                                     activebackground="#0f0f0f",
-                                     activeforeground="#ffffff",
-                                     selectcolor="#1a1a1a")
-        deepseek_cb.pack(side=tk.LEFT, padx=self._spacing((10, 0)))
+        tk.Checkbutton(engines_frame, text="DeepSeek", variable=self.deepseek_var,
+                       **cb_style).grid(row=1, column=0, sticky="w", pady=self._spacing((2, 0)))
+
+        self.antigravity_var = tk.BooleanVar(value=self.config.antigravity_enabled)
+        tk.Checkbutton(engines_frame, text="Google", variable=self.antigravity_var,
+                       **cb_style).grid(row=1, column=1, sticky="w",
+                                        padx=self._spacing((18, 0)), pady=self._spacing((2, 0)))
 
         self._create_deepseek_credentials(frame)
+        self._create_antigravity_credentials(frame)
 
         # Currency selection
         currency_frame = tk.Frame(frame, bg="#0f0f0f")
@@ -591,10 +619,9 @@ class SettingsDialog(_Scaled):
         section = tk.Frame(frame, bg="#0f0f0f")
         section.pack(fill=tk.X, pady=self._spacing((0, 15)))
 
-        self._hint(section, "Signing in gives the balance and the usage figures.")
-
         tk.Label(section, text="DeepSeek account", font=self._font(9),
-                 fg=self.label_color, bg="#0f0f0f").pack(anchor=tk.W, pady=self._spacing((10, 0)))
+                 fg=self.label_color, bg="#0f0f0f").pack(anchor=tk.W, pady=self._spacing((4, 0)))
+        self._hint(section, "Signing in gives the balance and the usage figures.")
         signin_row = tk.Frame(section, bg="#0f0f0f")
         signin_row.pack(fill=tk.X, pady=self._spacing((4, 0)))
         self._signin_btn = tk.Button(
@@ -612,22 +639,26 @@ class SettingsDialog(_Scaled):
                                        wraplength=self._px(320), justify=tk.LEFT, anchor=tk.W)
         self._signin_status.pack(fill=tk.X, pady=self._spacing((4, 0)))
 
-        tk.Label(section, text="or paste a session token", font=self._font(9),
+        self._deepseek_token_frame = tk.Frame(section, bg="#0f0f0f")
+        self._deepseek_token_frame.pack(fill=tk.X)
+        tk.Label(self._deepseek_token_frame, text="or paste a session token", font=self._font(9),
                  fg=self.label_color, bg="#0f0f0f").pack(anchor=tk.W, pady=self._spacing((8, 0)))
         self.deepseek_token_var = tk.StringVar()
-        tk.Entry(section, textvariable=self.deepseek_token_var, show="•", width=34,
-                 font=self._font(9), bg="#1a1a1a", fg="#ffffff", insertbackground="#ffffff",
-                 relief=tk.FLAT).pack(anchor=tk.W, pady=self._spacing((2, 0)))
+        self._deepseek_token_entry = tk.Entry(
+            self._deepseek_token_frame, textvariable=self.deepseek_token_var, show="•", width=34,
+            font=self._font(9), bg="#1a1a1a", fg="#ffffff", insertbackground="#ffffff",
+            relief=tk.FLAT)
+        self._deepseek_token_entry.pack(anchor=tk.W, pady=self._spacing((2, 0)))
 
         # One action, not two. It clears what ClaudeBar stores and the browser
         # profile ClaudeBar created; the user's own browser is never touched.
-        actions = tk.Frame(section, bg="#0f0f0f")
-        actions.pack(fill=tk.X, pady=self._spacing((10, 0)))
-        tk.Button(actions, text="Forget sign-in", command=self._forget_signin,
+        self._deepseek_actions = tk.Frame(section, bg="#0f0f0f")
+        self._deepseek_actions.pack(fill=tk.X, pady=self._spacing((10, 0)))
+        tk.Button(self._deepseek_actions, text="Forget sign-in", command=self._forget_signin,
                   font=self._font(9), bg="#2a2a2a", fg="#ffffff",
                   activebackground="#3a3a3a", activeforeground="#ffffff",
                   relief=tk.FLAT, padx=self._px(12), pady=self._px(4), cursor="hand2").pack(side=tk.LEFT)
-        self._credential_note = tk.Label(actions, text="", font=self._font(8),
+        self._credential_note = tk.Label(self._deepseek_actions, text="", font=self._font(8),
                                          fg=self.hint_color, bg="#0f0f0f")
         self._credential_note.pack(side=tk.LEFT, padx=self._spacing((8, 0)))
         self._hint(section, "Kept encrypted with Windows DPAPI. Only ClaudeBar's own "
@@ -639,6 +670,203 @@ class SettingsDialog(_Scaled):
         # to stderr, where the application log never sees it, and whose only
         # symptom is a dialog that stops drawing at that point.
         self._sync_signin_button()
+
+    def _create_antigravity_credentials(self, frame):
+        """Google account sign-in/sign-out via Google's official `agy` CLI (isolated profile)."""
+        section = tk.Frame(frame, bg="#0f0f0f")
+        section.pack(fill=tk.X, pady=self._spacing((0, 15)))
+
+        tk.Label(section, text="Google account", font=self._font(9),
+                 fg=self.label_color, bg="#0f0f0f").pack(anchor=tk.W)
+        row = tk.Frame(section, bg="#0f0f0f")
+        row.pack(fill=tk.X, pady=self._spacing((4, 0)))
+        btn_style = dict(font=self._font(9), bg="#2a2a2a", fg="#ffffff",
+                         activebackground="#3a3a3a", activeforeground="#ffffff",
+                         relief=tk.FLAT, padx=self._px(12), pady=self._px(4), cursor="hand2")
+        self._ag_signin_btn = tk.Button(row, text="Sign in to Google\u2026",
+                                        command=self._start_ag_signin, **btn_style)
+        self._ag_signin_btn.pack(side=tk.LEFT)
+        self._ag_signout_btn = tk.Button(row, text="Sign out",
+                                         command=self._ag_signout, **btn_style)
+        self._ag_signout_btn.pack(side=tk.LEFT, padx=self._spacing((8, 0)))
+
+        self._ag_status = tk.Label(section, text="", font=self._font(8),
+                                   fg=self.hint_color, bg="#0f0f0f",
+                                   wraplength=self._px(320), justify=tk.LEFT, anchor=tk.W)
+        self._ag_status.pack(fill=tk.X, pady=self._spacing((4, 0)))
+
+        # Revealed once `agy acp --login` opens Google sign-in in the browser.
+        self._ag_code_frame = tk.Frame(section, bg="#0f0f0f")
+        self._ag_code_var = tk.StringVar()
+        tk.Label(self._ag_code_frame, text="Paste code or callback URL",
+                 font=self._font(8), fg=self.hint_color, bg="#0f0f0f").pack(anchor=tk.W)
+        code_row = tk.Frame(self._ag_code_frame, bg="#0f0f0f")
+        code_row.pack(fill=tk.X, pady=self._spacing((2, 0)))
+        self._ag_code_entry = tk.Entry(code_row, textvariable=self._ag_code_var, width=26,
+                 font=self._font(9), bg="#1a1a1a", fg="#ffffff",
+                 insertbackground="#ffffff", relief=tk.FLAT)
+        self._ag_code_entry.pack(side=tk.LEFT)
+        self._ag_code_entry.bind("<Return>", lambda e: self._submit_ag_code())
+        self._ag_submit_btn = tk.Button(code_row, text="Submit",
+                                        command=self._submit_ag_code, **btn_style)
+        self._ag_submit_btn.pack(side=tk.LEFT, padx=self._spacing((6, 0)))
+
+        self._sync_ag_controls()
+
+    def _resize_to_fit(self):
+        try:
+            if self.dialog.winfo_exists():
+                self.dialog.update_idletasks()
+                _place_over(self.dialog, self.parent, self._px(360),
+                            self._frame.winfo_reqheight() + self._px(40), self._px(12))
+        except tk.TclError:
+            pass
+
+    def _sync_ag_controls(self):
+        if not hasattr(self, "_ag_signin_btn"):
+            return
+        signed_in, email, _ = antigravity_auth.claudebar_account_status()
+        self._ag_signin_btn.config(
+            text="Change account" if signed_in else "Sign in to Google\u2026",
+            state=tk.NORMAL,
+        )
+        self._ag_signout_btn.config(state=tk.NORMAL if signed_in else tk.DISABLED)
+        if signed_in:
+            label = f"Signed in \u00b7 {email}" if email else "Signed in"
+            self._ag_status.config(text=label, fg=self.ok_color)
+        else:
+            self._ag_status.config(
+                text="Sign in with Google to view Antigravity limits.",
+                fg=self.hint_color,
+            )
+
+    def _start_ag_signin(self):
+        if self._ag_thread and self._ag_thread.is_alive():
+            return
+        if self._ag_session is not None:
+            self._ag_session.cancel()
+            self._ag_session = None
+        self._ag_signin_btn.config(state=tk.DISABLED)
+        self._ag_signout_btn.config(state=tk.DISABLED)
+        self._ag_progress = "Starting Google sign-in\u2026"
+        self._ag_start_result = None
+        self._ag_status.config(text=self._ag_progress, fg=self.hint_color)
+        self._ag_thread = threading.Thread(target=self._run_ag_start, daemon=True)
+        self._ag_thread.start()
+        self._poll_ag_start()
+
+    def _run_ag_start(self):
+        try:
+            agy = antigravity_auth.find_agy_executable()
+            if agy is None:
+                def _prog(msg):
+                    self._ag_progress = msg
+                agy = antigravity_auth.install_agy_executable(on_progress=_prog)
+            self._ag_progress = "Opening Google sign-in\u2026"
+            session = antigravity_auth.AntigravityLoginSession(agy)
+            self._ag_session = session
+            url = session.start(timeout=30.0)
+            self._ag_start_result = ("url", url)
+        except Exception as exc:                      # noqa: BLE001 - surfaced in dialog
+            logger.warning("Antigravity sign-in could not start: %s", exc)
+            self._ag_start_result = ("fail", str(exc))
+
+    def _poll_ag_start(self):
+        result = self._ag_start_result
+        if result is None:
+            try:
+                if self.dialog.winfo_exists():
+                    if self._ag_progress:
+                        self._ag_status.config(text=self._ag_progress, fg=self.hint_color)
+                    if self._ag_thread and self._ag_thread.is_alive():
+                        self.dialog.after(200, self._poll_ag_start)
+            except tk.TclError:
+                pass
+            return
+        status, payload = result
+        if status == "url":
+            _open_url(payload)
+            self._ag_code_var.set("")
+            self._ag_submit_btn.config(state=tk.NORMAL)
+            if not self._ag_code_frame.winfo_manager():
+                self._ag_code_frame.pack(fill=tk.X, pady=self._spacing((6, 0)))
+                self._resize_to_fit()
+            self._ag_code_entry.focus_set()
+            self._ag_status.config(
+                text="Sign in in your browser, then paste the code below.",
+                fg=self.hint_color,
+            )
+            self._ag_signin_btn.config(state=tk.NORMAL)
+        else:
+            self._sync_ag_controls()
+            self._ag_status.config(text=payload, fg=self.warn_color)
+
+    def _submit_ag_code(self):
+        if self._ag_thread and self._ag_thread.is_alive():
+            return
+        raw = self._ag_code_var.get().strip()
+        if not antigravity_auth.normalize_login_code(raw):
+            self._ag_status.config(
+                text="Paste the code from Google's callback page (or its full URL).",
+                fg=self.warn_color,
+            )
+            return
+        if self._ag_session is None:
+            self._ag_status.config(text="Start sign-in again first.", fg=self.warn_color)
+            return
+        self._ag_submit_btn.config(state=tk.DISABLED)
+        self._ag_signin_btn.config(state=tk.DISABLED)
+        self._ag_submit_result = None
+        self._ag_status.config(text="Completing sign-in\u2026", fg=self.hint_color)
+        self._ag_thread = threading.Thread(target=self._run_ag_submit, args=(raw,), daemon=True)
+        self._ag_thread.start()
+        self._poll_ag_submit()
+
+    def _run_ag_submit(self, raw: str):
+        try:
+            cred = self._ag_session.submit_code(raw, timeout=60.0)
+            self._ag_session = None
+            self._ag_submit_result = ("ok", cred)
+        except Exception as exc:                      # noqa: BLE001 - surfaced in dialog
+            logger.warning("Antigravity code submit failed: %s", exc)
+            self._ag_submit_result = ("fail", str(exc))
+
+    def _poll_ag_submit(self):
+        result = self._ag_submit_result
+        if result is None:
+            try:
+                if self.dialog.winfo_exists() and self._ag_thread and self._ag_thread.is_alive():
+                    self.dialog.after(200, self._poll_ag_submit)
+            except tk.TclError:
+                pass
+            return
+        status, payload = result
+        if status == "ok":
+            self._ag_code_var.set("")
+            if self._ag_code_frame.winfo_manager():
+                self._ag_code_frame.pack_forget()
+                self._resize_to_fit()
+            antigravity_usage.reset_runtime_state()
+            self._sync_ag_controls()
+            if self.on_refresh:
+                self.on_refresh()
+        else:
+            self._ag_submit_btn.config(state=tk.NORMAL)
+            self._ag_signin_btn.config(state=tk.NORMAL)
+            self._ag_status.config(text=payload, fg=self.warn_color)
+
+    def _ag_signout(self):
+        if self._ag_session is not None:
+            self._ag_session.cancel()
+            self._ag_session = None
+        if self._ag_code_frame.winfo_manager():
+            self._ag_code_frame.pack_forget()
+            self._resize_to_fit()
+        antigravity_auth.sign_out_claudebar_profile()
+        antigravity_usage.reset_runtime_state()
+        self._sync_ag_controls()
+        if self.on_refresh:
+            self.on_refresh()
 
     # ---- DeepSeek sign-in -------------------------------------------------
 
@@ -781,12 +1009,36 @@ class SettingsDialog(_Scaled):
             if not browser_ended:
                 browser_signin.end_signin(process)
 
+    @staticmethod
+    def _sync_deepseek_token_input(dialog, signed_in: bool):
+        """Hide and disable the manual session-token paste field while DeepSeek is signed in."""
+        entry = getattr(dialog, "_deepseek_token_entry", None)
+        if entry is not None:
+            entry.config(state=tk.DISABLED if signed_in else tk.NORMAL)
+        token_frame = getattr(dialog, "_deepseek_token_frame", None)
+        if token_frame is None:
+            return
+        currently_shown = bool(token_frame.winfo_manager())
+        if signed_in and currently_shown:
+            token_frame.pack_forget()
+        elif not signed_in and not currently_shown:
+            actions = getattr(dialog, "_deepseek_actions", None)
+            pack_kw = {"fill": tk.X}
+            if actions is not None:
+                pack_kw["before"] = actions
+            token_frame.pack(**pack_kw)
+        else:
+            return
+        win = getattr(dialog, "dialog", None)
+        if win is not None and win.winfo_exists() and win.winfo_ismapped():
+            dialog._resize_to_fit()
+
     def _sync_signin_button(self):
         """Enable the button only when there is no working session.
 
         A button that stays live after signing in invites a second sign-in that
         cannot help, and it hides the fact that the first one worked. A stored
-        token is not the same as a working one either: it expires, and the panel
+        token is not the same thing either: it expires, and the panel
         already knows when it has, so the button comes back when it does.
         """
         if not hasattr(self, "_signin_btn"):
@@ -802,16 +1054,19 @@ class SettingsDialog(_Scaled):
                 text=f"Signed in · balance {snapshot.balance_currency} "
                      f"{snapshot.balance_total:,.2f}",
                 fg=self.ok_color)
+            SettingsDialog._sync_deepseek_token_input(self, True)
             return
 
         if expired:
             self._signin_btn.config(state=tk.NORMAL)
             self._signin_status.config(text="Session expired · sign in again",
                                        fg=self.warn_color)
+            SettingsDialog._sync_deepseek_token_input(self, False)
             return
 
         stored = deepseek_auth.discover_user_token() is not None
         self._signin_btn.config(state=tk.NORMAL if not stored else tk.DISABLED)
+        SettingsDialog._sync_deepseek_token_input(self, stored)
         if stored:
             self._signin_status.config(text="Signed in", fg=self.ok_color)
 
@@ -827,6 +1082,7 @@ class SettingsDialog(_Scaled):
             text=f"Signed in · balance {summary.currency} {summary.total:.2f}",
             fg=self.ok_color)
         self._credential_note.config(text="Session stored")
+        SettingsDialog._sync_deepseek_token_input(self, True)
         if self.on_refresh:
             self.on_refresh()
 
@@ -890,6 +1146,7 @@ class SettingsDialog(_Scaled):
             self._credential_note.config(text="Could not forget the sign-in")
             return
         self.deepseek_token_var.set("")
+        SettingsDialog._sync_deepseek_token_input(self, False)
         self._credential_note.config(
             text="Signed out" if cleared else "Credentials cleared")
         if self.on_refresh:
@@ -911,6 +1168,10 @@ class SettingsDialog(_Scaled):
         browser, and checks again just before it stores a token.
         """
         self._signin_cancel = True
+        ag_session = getattr(self, "_ag_session", None)
+        if ag_session is not None:
+            ag_session.cancel()
+            self._ag_session = None
         thread = self._signin_thread
         if wait and thread and thread.is_alive():
             thread.join(wait)
@@ -927,8 +1188,10 @@ class SettingsDialog(_Scaled):
         claude_enabled = self.claude_var.get()
         codex_enabled = self.codex_var.get()
         deepseek_enabled = self.deepseek_var.get()
+        ag_var = getattr(self, "antigravity_var", None)
+        antigravity_enabled = ag_var.get() if ag_var is not None else self.config.antigravity_enabled
 
-        if not claude_enabled and not codex_enabled and not deepseek_enabled:
+        if not claude_enabled and not codex_enabled and not deepseek_enabled and not antigravity_enabled:
             self.error_label.config(text="At least one engine must be enabled")
             return
 
@@ -944,6 +1207,7 @@ class SettingsDialog(_Scaled):
         self.config.claude_enabled = claude_enabled
         self.config.codex_enabled = codex_enabled
         self.config.deepseek_enabled = deepseek_enabled
+        self.config.antigravity_enabled = antigravity_enabled
         self.config.currency = self.currency_var.get()
         try:
             self.config.refresh_interval = clamp_refresh_interval(int(self.refresh_var.get()))
@@ -1084,9 +1348,11 @@ class ClaudeBarWindow(_Scaled):
         self._snapshot: Optional[UsageSnapshot] = None
         self._openai_snapshot: Optional[OpenAISnapshot] = None
         self._deepseek_snapshot: Optional[DeepSeekSnapshot] = None
+        self._antigravity_snapshot: Optional[AntigravitySnapshot] = None
         self._pending_snapshot: Optional[UsageSnapshot] = None  # Thread-safe pending update
         self._pending_openai_snapshot: Optional[OpenAISnapshot] = None
         self._pending_deepseek_snapshot: Optional[DeepSeekSnapshot] = None
+        self._pending_antigravity_snapshot: Optional[AntigravitySnapshot] = None
         self._exchange_rates: Optional[ExchangeRates] = None
         self._claude_status: Optional[ClaudeStatus] = None
         self._claude_status_at = 0.0     # time.monotonic() of that answer
@@ -1115,6 +1381,9 @@ class ClaudeBarWindow(_Scaled):
         self._extra_frame: Optional[tk.Frame] = None
         self._extra_bar: Optional[PaceBar] = None
         self._extra_amount: Optional[tk.Label] = None
+        self._extra_bucket_frame: Optional[tk.Frame] = None
+        self._extra_bucket_rows: list = []
+        self._extra_bucket_count = 0
         self._stats: dict = {}           # key -> (title, value, sub) labels
         self._chart: Optional[BarChart] = None
         self._chart_note: Optional[tk.Label] = None
@@ -1254,6 +1523,7 @@ class ClaudeBarWindow(_Scaled):
         self._engine_btns, self._engine_icons, self._engine_frame = {}, {}, None
         self._limits, self._stats, self._tabs, self._fc_rows = {}, {}, {}, []
         self._fc_row_count = 0
+        self._extra_bucket_rows, self._extra_bucket_count = [], 0
         self._banked_visible = self._banked_pinned = False
         self._layout_key = None
         self._pads, self._rows = {}, {}
@@ -1301,6 +1571,7 @@ class ClaudeBarWindow(_Scaled):
             "pace": [w["pace"] for w in self._limits.values()],
             "chart": [self._chart_group, self._fc_rows_host],
             "stats": [self._stats[key][0].master for key in ("month", "last31")],
+            "buckets": [self._extra_bucket_frame],
             "half": [self._lower], "status": [self._status_row]}
 
     def _pack_main(self):
@@ -1706,6 +1977,7 @@ class ClaudeBarWindow(_Scaled):
             "chart": height(self._chart_group) if cost else (
                 height(self._fc_rows_host) if self._fc_row_count else 0),
             "stats": max(map(height, self._fit_widgets["stats"])) if cost else 0,
+            "buckets": height(self._extra_bucket_frame) if self._extra_bucket_count else 0,
             "status": height(self._status_row)}
         shown = lambda name: name not in self._fit_hidden
         # The half is its block less the inner ones that are out; a banked block that only informs goes with it.
@@ -1727,9 +1999,15 @@ class ClaudeBarWindow(_Scaled):
         for name, widgets in self._fit_widgets.items():
             for widget in widgets:
                 self._show(widget, name not in hide)
+        self._place_buckets()
         self._place_banked()
         self._place_rows()
         self._window.update_idletasks()
+
+    def _place_buckets(self):
+        """Show the secondary-bucket block when it has rows and the fit has not dropped it."""
+        self._show(self._extra_bucket_frame,
+                   self._extra_bucket_count > 0 and "buckets" not in self._fit_hidden)
 
     def _place_banked(self):
         """Show the banked block when it has something to say, unless its half is dropped and it only
@@ -1949,6 +2227,30 @@ class ClaudeBarWindow(_Scaled):
                                              self._font(8), self.text_primary, self.text_muted)
         self._extra_bar = self._put(PaceBar(self._extra_frame, width=348, bg=self.bg_color,
                                             track=self.track_color, scale=self.scale.k))
+
+        # Compact secondary quota buckets (Claude model-scoped weekly, Antigravity Argon & 3P).
+        self._extra_bucket_frame = self._put(tk.Frame(parent, bg=self.bg_color), (2, 4), shown=False)
+        self._put(tk.Frame(self._extra_bucket_frame, bg=self.separator_color,
+                           height=self._px(1)), (0, 6))
+        for _ in range(_EXTRA_BUCKET_ROWS):
+            row = self._put(tk.Frame(self._extra_bucket_frame, bg=self.bg_color), (0, 4), shown=False)
+            row.columnconfigure(0, weight=1)
+            left = tk.Frame(row, bg=self.bg_color)
+            left.grid(row=0, column=0, sticky="w")
+            name = self._label(left, text="", font=self._font(8), fg=self.text_muted,
+                               bg=self.bg_color, padx=0, pady=0)
+            name.pack(side=tk.LEFT)
+            reset = self._label(left, text="", font=self._font(8), fg=self.text_muted,
+                                bg=self.bg_color, padx=0, pady=0)
+            reset.pack(side=tk.LEFT, padx=self._spacing((6, 0)))
+            bar = PaceBar(row, width=62, height=4, bg=self.bg_color,
+                          track=self.track_color, scale=self.scale.k)
+            bar.grid(row=0, column=1, sticky="e", padx=self._spacing((8, 8)))
+            pct = self._label(row, text="", font=self._font(8, mono=True), fg=self.text_muted,
+                              bg=self.bg_color, padx=0, pady=0, width=4, anchor="e")
+            pct.grid(row=0, column=2, sticky="e")
+            self._extra_bucket_rows.append({"frame": row, "name": name, "reset": reset,
+                                            "bar": bar, "pct": pct})
 
     def _create_balance(self, parent):
         """DeepSeek balance block. Stands in the row where the limits sit,
@@ -2196,6 +2498,8 @@ class ClaudeBarWindow(_Scaled):
                     self._oauth_error = None
         elif engine == Engine.CODEX:
             snapshot = self._openai_snapshot
+        elif engine == Engine.ANTIGRAVITY:
+            snapshot = self._antigravity_snapshot
         else:
             snapshot = self._deepseek_snapshot
 
@@ -2219,7 +2523,8 @@ class ClaudeBarWindow(_Scaled):
             SettingsDialog(self._window, self.config, self._on_settings_saved,
                            on_refresh=self.on_refresh,
                            session_state=lambda: self._deepseek_snapshot,
-                           scale=self._dialog_scale())
+                           scale=self._dialog_scale(),
+                           antigravity_state=lambda: self._antigravity_snapshot)
 
     def _on_settings_saved(self):
         """Handle settings save: the content is built again, in the window that is already up."""
@@ -2241,7 +2546,8 @@ class ClaudeBarWindow(_Scaled):
 
     def _refill(self):
         """Fill widgets that were just built from the snapshots the panel already holds."""
-        if self._snapshot or self._openai_snapshot or self._deepseek_snapshot:
+        if (self._snapshot or self._openai_snapshot or self._deepseek_snapshot
+                or self._antigravity_snapshot):
             self._refresh_display_immediate()
             self._update_status_display()
 
@@ -2265,12 +2571,18 @@ class ClaudeBarWindow(_Scaled):
         with self._lock:
             self._pending_deepseek_snapshot = snapshot
 
+    def update_antigravity(self, snapshot: AntigravitySnapshot):
+        """Queue Antigravity snapshot update (thread-safe)."""
+        with self._lock:
+            self._pending_antigravity_snapshot = snapshot
+
     def update_combined(self, combined: CombinedSnapshot):
         """Queue combined snapshot update (thread-safe)."""
         with self._lock:
             self._pending_snapshot = combined.claude
             self._pending_openai_snapshot = combined.openai
             self._pending_deepseek_snapshot = combined.deepseek
+            self._pending_antigravity_snapshot = combined.antigravity
             # combined.active_engine is not read back: the panel owns the choice
             # of engine, and a snapshot collected before a tab click carries
             # the engine from before it.
@@ -2294,6 +2606,10 @@ class ClaudeBarWindow(_Scaled):
             if self._pending_deepseek_snapshot:
                 self._deepseek_snapshot = self._pending_deepseek_snapshot
                 self._pending_deepseek_snapshot = None
+                updated = True
+            if self._pending_antigravity_snapshot:
+                self._antigravity_snapshot = self._pending_antigravity_snapshot
+                self._pending_antigravity_snapshot = None
                 updated = True
 
         if not updated:
@@ -2323,6 +2639,8 @@ class ClaudeBarWindow(_Scaled):
             self._fill_codex_view(self._openai_snapshot, money)
         elif engine == Engine.DEEPSEEK and self._deepseek_snapshot:
             self._fill_deepseek_view(self._deepseek_snapshot, money)
+        elif engine == Engine.ANTIGRAVITY and self._antigravity_snapshot:
+            self._fill_antigravity_view(self._antigravity_snapshot, money)
 
     def _redraw_if_due(self):
         """Redraw an open panel once a minute: a countdown moves, and a window can end,
@@ -2334,7 +2652,8 @@ class ClaudeBarWindow(_Scaled):
         """Each engine tints the shared bars and chart with its own colour."""
         accent = _ENGINE_META[engine][2]
         for widget in (self._limits["session"]["bar"], self._limits["weekly"]["bar"],
-                       self._extra_bar, self._chart, self._fc_chart):
+                       self._extra_bar, self._chart, self._fc_chart,
+                       *(row["bar"] for row in self._extra_bucket_rows)):
             if widget is not None:
                 widget.set_accent(accent)
 
@@ -2351,6 +2670,8 @@ class ClaudeBarWindow(_Scaled):
                        self._extra_frame):
             self._show(widget, False)
         self._show(self._balance_frame, True)
+        self._extra_bucket_count = 0
+        self._place_buckets()
         self._banked_visible = False
         self._place_banked()
 
@@ -2420,6 +2741,11 @@ class ClaudeBarWindow(_Scaled):
         self._fill_limit("weekly", snap.weekly_percent, snap.weekly_reset,
                          snap.weekly_resets_at, WEEKLY_WINDOW_HOURS, placeholder)
         self._show_limits(session_visible=True, extra_visible=snap.extra_enabled)
+        buckets_shown = self._fill_extra_buckets(
+            [] if placeholder else snap.extra_buckets,
+            _ENGINE_META[Engine.CLAUDE][2],
+            {"5h": snap.session_resets_at, "weekly": snap.weekly_resets_at},
+        )
         banked_shown = self._fill_banked(snap)
 
         if snap.extra_enabled:
@@ -2430,7 +2756,7 @@ class ClaudeBarWindow(_Scaled):
 
         self._fill_log_view(Engine.CLAUDE, snap, money, snap.models_used,
                             placeholder or (_SESSION_RUNNING_CHART if running else None),
-                            banked_shown, snap.extra_enabled,
+                            banked_shown, (snap.extra_enabled, buckets_shown),
                             "Estimated from local Claude Code logs", "Usage limits from the Claude API")
 
     def _fill_codex_view(self, snap: OpenAISnapshot, money):
@@ -2450,11 +2776,41 @@ class ClaudeBarWindow(_Scaled):
                          snap.weekly_resets_at, snap.weekly_window_hours, placeholder,
                          None if session_charted else key)
         self._show_limits(session_visible=snap.session_available, extra_visible=False)
+        buckets_shown = self._fill_extra_buckets([], _ENGINE_META[Engine.CODEX][2])
         banked_shown = self._fill_banked(snap)
 
-        self._fill_log_view(Engine.CODEX, snap, money, [], placeholder, banked_shown,
-                            snap.session_available, "Estimated from local Codex logs",
+        self._fill_log_view(Engine.CODEX, snap, money, snap.models_used, placeholder, banked_shown,
+                            (snap.session_available, buckets_shown), "Estimated from local Codex logs",
                             "Usage limits from the Codex API")
+
+    def _fill_antigravity_view(self, snap: AntigravitySnapshot, money):
+        unavailable = not snap.available and not snap.is_stale
+        placeholder = "Unavailable" if unavailable else ("Collecting..." if self._collecting(snap) else None)
+
+        self._limits["session"]["title"].config(text=f"Gemini ({snap.session_window_hours:g}-hour)")
+        self._limits["weekly"]["title"].config(
+            text=f"Gemini ({forecast_text.window_title(snap.weekly_window_hours)})"
+        )
+        session_charted = snap.charted_window()[0]
+        key = quota_history.window_key(Engine.ANTIGRAVITY.value, session_charted)
+        self._fill_limit("session", snap.session_percent, snap.session_reset,
+                         snap.session_resets_at, snap.session_window_hours, placeholder,
+                         key if session_charted else None)
+        self._fill_limit("weekly", snap.weekly_percent, snap.weekly_reset,
+                         snap.weekly_resets_at, snap.weekly_window_hours, placeholder,
+                         None if session_charted else key)
+        self._show_limits(session_visible=snap.session_available, extra_visible=False)
+        buckets_shown = self._fill_extra_buckets(
+            [] if placeholder else snap.extra_buckets,
+            _ENGINE_META[Engine.ANTIGRAVITY][2],
+            {"5h": snap.session_resets_at, "weekly": snap.weekly_resets_at},
+        )
+        banked_shown = self._fill_banked(snap)
+
+        self._fill_log_view(Engine.ANTIGRAVITY, snap, money, snap.models_used, placeholder, banked_shown,
+                            (snap.session_available, buckets_shown),
+                            "Estimated from local Antigravity logs",
+                            "Limits from Antigravity")
 
     def _fill_log_view(self, engine: Engine, snap, money, models, placeholder, banked_shown: bool,
                        layout_flag: bool, cost_source: str, forecast_source: str):
@@ -2869,6 +3225,47 @@ class ClaudeBarWindow(_Scaled):
         dry = forecast.runout_time(now, 100 - percent, rate, reset, window_hours)
         return float("inf") if dry is None else (dry - now).total_seconds() / 3600
 
+    @staticmethod
+    def _same_reset(a: Optional[datetime], b: Optional[datetime]) -> bool:
+        if a is None or b is None:
+            return False
+        return abs((forecast.as_utc(a) - forecast.as_utc(b)).total_seconds()) <= 60
+
+    def _fill_extra_buckets(self, buckets, accent: str, primary_resets: Optional[dict] = None) -> int:
+        """Fill the compact secondary-bucket ledger rows (Option A) below the primary limits.
+
+        An inline reset countdown is shown only when the bucket has active usage (`used > 0`)
+        and its reset time differs from the primary bar of the same cadence, so the panel never
+        repeats a countdown already shown above.
+        """
+        primary_resets = primary_resets or {}
+        shown = list(buckets or [])[:_EXTRA_BUCKET_ROWS]
+        for idx, row in enumerate(self._extra_bucket_rows):
+            if idx >= len(shown):
+                self._show(row["frame"], False)
+                continue
+            bucket = shown[idx]
+            clock = reset_clock(bucket.resets_at)
+            if clock and clock[0]:
+                used = 0.0
+                reset_text = ""
+            else:
+                used = min(max(float(bucket.used_percent), 0.0), 100.0)
+                same = self._same_reset(bucket.resets_at, primary_resets.get(bucket.window))
+                reset_text = (clock[1].removeprefix("in ")
+                              if (clock and not clock[0] and used > 0 and not same) else "")
+            active = used > 0
+            fg = self.text_secondary if active else self.text_muted
+            row["name"].config(text=bucket.label, fg=fg)
+            row["reset"].config(text=reset_text)
+            row["bar"].set_accent(accent if active else self.track_color)
+            row["bar"].set_value(used, None)
+            row["pct"].config(text=f"{100 - used:.0f}%", fg=fg)
+            self._show(row["frame"], True)
+        self._extra_bucket_count = len(shown)
+        self._place_buckets()
+        return self._extra_bucket_count
+
     def _fill_limit(self, key, percent, reset_str, resets_at, window_hours, placeholder,
                     history_key=None, running=False):
         """`history_key` names the recorded window behind this bar (the one the quota view
@@ -2906,9 +3303,16 @@ class ClaudeBarWindow(_Scaled):
         expected, remaining, runout = proj
         if history_key:
             runout = self._recent_runout(history_key, percent, resets_at, window_hours)
+        elapsed = max(window_hours - remaining, 0.0)
         lasts = runout >= remaining
-        w["note"].config(text="Lasts until reset" if lasts else forecast_text.runout_text(runout),
-                         fg=self.ok_color if lasts else self.warn_color)
+        # A brief burst right after a reset (< 6 h into a week, < ~11 m into a 5-hour
+        # session) extrapolates linearly to a bogus 24/7 run-out warning. Hold back a
+        # red run-out note until enough of the window has elapsed.
+        if not lasts and elapsed < forecast.min_rate_span_hours(window_hours):
+            w["note"].config(text="")
+        else:
+            w["note"].config(text="Lasts until reset" if lasts else forecast_text.runout_text(runout),
+                             fg=self.ok_color if lasts else self.warn_color)
         ahead = percent - expected
         w["pace"].config(text="On pace" if ahead <= 5 else f"{ahead:.0f}% ahead of pace")
 

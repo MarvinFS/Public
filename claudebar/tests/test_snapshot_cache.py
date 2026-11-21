@@ -574,3 +574,21 @@ class TestSavingOverAFileThatCannotBeRead:
         claude, openai, _ = snapshot_cache.load_cache()
         assert claude is not None and claude.session_percent == 42.5
         assert openai is None
+
+
+def test_extra_buckets_and_codex_models_round_trip():
+    from models import QuotaBucket
+    reset = datetime(2026, 11, 26, 17, 0, tzinfo=UTC)
+    c = claude_snapshot()
+    c.extra_buckets = [QuotaBucket("weekly_scoped_fable", "Weekly \u00b7 Fable", "weekly", 8.0,
+                                   resets_at=reset, reset_str="in 5d", window_hours=168.0)]
+    o = openai_snapshot()
+    o.models_used = [ModelUsage("gpt-5.4", TokenUsage(), 12.5, 0)]
+    snapshot_cache.save_cache(claude=c, openai=o)
+    loaded_c, loaded_o, _ = snapshot_cache.load_cache()
+    assert len(loaded_c.extra_buckets) == 1
+    assert loaded_c.extra_buckets[0].label == "Weekly \u00b7 Fable"
+    assert loaded_c.extra_buckets[0].resets_at == reset
+    assert len(loaded_o.models_used) == 1
+    assert loaded_o.models_used[0].model == "gpt-5.4"
+    assert loaded_o.models_used[0].cost_usd == 12.5

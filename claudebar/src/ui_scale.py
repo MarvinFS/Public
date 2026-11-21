@@ -80,7 +80,7 @@ def width_for_scale(k: float, base_width: float) -> int:
 # "top_model" the row under the daily chart, "pace" the line under each limit bar, "chart" the daily
 # chart (Cost) or the detail rows (Quota), "stats" the second row of figures, "half" the whole
 # Cost/Quota half with its tabs, "status" the "Updated" row.
-DROP_ORDER = ("source", "top_model", "pace", "chart", "stats", "half", "status")
+DROP_ORDER = ("source", "top_model", "pace", "chart", "stats", "buckets", "half", "status")
 
 
 def zone_at(x: float, y: float, width: float, height: float, margin: float) -> Optional[str]:

@@ -205,11 +205,11 @@ class TestBlocksToHide:
         assert blocks_to_hide({"base": 100, "a": 50}, 120, ("a", "z")) == {"a"}
 
     def test_the_default_order_is_the_documented_one(self):
-        assert DROP_ORDER == ("source", "top_model", "pace", "chart", "stats", "half", "status")
+        assert DROP_ORDER == ("source", "top_model", "pace", "chart", "stats", "buckets", "half", "status")
         heights = {"base": 200, "source": 0, "top_model": 20, "pace": 30, "chart": 130, "stats": 80,
-                   "half": 190, "status": 30}
-        assert blocks_to_hide(heights, 10_000) == set() == blocks_to_hide(heights, 680)
-        assert blocks_to_hide(heights, 679) == {"source", "top_model"}
+                   "buckets": 40, "half": 190, "status": 30}
+        assert blocks_to_hide(heights, 10_000) == set() == blocks_to_hide(heights, 720)
+        assert blocks_to_hide(heights, 719) == {"source", "top_model"}
         assert blocks_to_hide(heights, 0) == set(DROP_ORDER)
 
     def test_the_heights_are_not_changed(self):

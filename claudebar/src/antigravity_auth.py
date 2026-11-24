@@ -475,7 +475,7 @@ def normalize_login_code(raw: str) -> Optional[str]:
     value = (raw or "").strip()
     if not value or any(ch in value for ch in ("\r", "\n")):
         return None
-    if re.fullmatch(r"[\w./~-]{1,2048}", value):
+    if re.fullmatch(r"[\w./~+=%-]{1,2048}", value):
         return value
     parsed = urllib.parse.urlsplit(value)
     if (
@@ -498,6 +498,7 @@ class AntigravityLoginSession:
         self._proc: Optional[subprocess.Popen] = None
         self._url_queue: queue.Queue[Optional[str]] = queue.Queue()
         self._auth_url: Optional[str] = None
+        self._output_tail: list[str] = []
         self._closed = False
 
     def start(self, timeout: float = 30.0) -> str:
@@ -554,6 +555,11 @@ class AntigravityLoginSession:
         sent = False
         try:
             for line in proc.stdout:
+                stripped = line.strip()
+                if stripped and not any(k in stripped.lower() for k in ("access_token", "refresh_token", "id_token")):
+                    self._output_tail.append(stripped[:200])
+                    if len(self._output_tail) > 20:
+                        del self._output_tail[0]
                 m = _AUTH_URL_RE.search(line)
                 if m and not sent:
                     valid = validate_authorization_url(m.group(0))
@@ -572,23 +578,36 @@ class AntigravityLoginSession:
         if not normalized:
             raise ValueError("Paste the code from the Google callback page, or its full URL")
         proc = self._proc
-        if proc is None or proc.stdin is None:
-            raise RuntimeError("Sign-in session is not active")
+        if (
+            self._closed
+            or proc is None
+            or proc.stdin is None
+            or getattr(proc.stdin, "closed", False)
+            or proc.poll() is not None
+        ):
+            self.cancel()
+            raise RuntimeError("Sign-in session ended. Click Sign in to Google again.")
         try:
             proc.stdin.write(normalized + "\n")
             proc.stdin.flush()
             proc.stdin.close()
-        except OSError as exc:
-            raise RuntimeError("Could not send code to Antigravity") from exc
+        except (OSError, ValueError) as exc:
+            self.cancel()
+            raise RuntimeError("Sign-in session ended. Click Sign in to Google again.") from exc
 
         try:
             exit_code = proc.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
             self.cancel()
             raise RuntimeError("Timed out waiting for Google to finish sign-in")
+        finally:
+            self._closed = True
 
         if exit_code != 0:
-            raise RuntimeError(f"Google sign-in failed (exit code {exit_code})")
+            joined = " ".join(self._output_tail).lower()
+            if "invalid_grant" in joined:
+                raise RuntimeError("Code expired or did not match this sign-in. Click Sign in to Google again.")
+            raise RuntimeError(f"Google sign-in failed (exit code {exit_code}). Click Sign in to Google again.")
 
         token_path = self.profile_dir / "antigravity-acp" / "antigravity-oauth-token"
         cred = _read_token_file(token_path, "claudebar")

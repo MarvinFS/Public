@@ -101,7 +101,8 @@ def _claude_status_for(snapshot, claude_status, oauth_error: Optional[str]) -> t
         error = oauth_error.lower()
         if "refresh failed" in error or "token expired" in error:
             return "warn", "Session expired"
-        if "not found" in error or "no oauth" in error:
+        if ("not found" in error or "no oauth" in error
+                or "no claude oauth" in error or "no credentials file" in error):
             return "warn", "Not logged in"
         if "429" in oauth_error or "restricted" in error or "rate limit" in error:
             return "attention", "API restricted"
@@ -748,6 +749,8 @@ class SettingsDialog(_Scaled):
             self._ag_session = None
         self._ag_signin_btn.config(state=tk.DISABLED)
         self._ag_signout_btn.config(state=tk.DISABLED)
+        self._ag_submit_btn.config(state=tk.DISABLED)
+        self._ag_code_var.set("")
         self._ag_progress = "Starting Google sign-in\u2026"
         self._ag_start_result = None
         self._ag_status.config(text=self._ag_progress, fg=self.hint_color)
@@ -823,13 +826,19 @@ class SettingsDialog(_Scaled):
         self._poll_ag_submit()
 
     def _run_ag_submit(self, raw: str):
+        session = self._ag_session
+        self._ag_session = None
         try:
-            cred = self._ag_session.submit_code(raw, timeout=60.0)
-            self._ag_session = None
+            if session is None:
+                raise RuntimeError("Sign-in session ended. Click Sign in to Google again.")
+            cred = session.submit_code(raw, timeout=60.0)
             self._ag_submit_result = ("ok", cred)
         except Exception as exc:                      # noqa: BLE001 - surfaced in dialog
             logger.warning("Antigravity code submit failed: %s", exc)
             self._ag_submit_result = ("fail", str(exc))
+        finally:
+            if session is not None:
+                session.cancel()
 
     def _poll_ag_submit(self):
         result = self._ag_submit_result
@@ -851,7 +860,7 @@ class SettingsDialog(_Scaled):
             if self.on_refresh:
                 self.on_refresh()
         else:
-            self._ag_submit_btn.config(state=tk.NORMAL)
+            self._ag_submit_btn.config(state=tk.DISABLED)
             self._ag_signin_btn.config(state=tk.NORMAL)
             self._ag_status.config(text=payload, fg=self.warn_color)
 

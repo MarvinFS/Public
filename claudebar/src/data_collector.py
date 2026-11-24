@@ -143,6 +143,7 @@ class DataCollector:
         self._oauth_failed_since: Optional[datetime] = None
         self._oauth_last_reminder: Optional[datetime] = None
         self._cli_snapshot_noted = False
+        self._antigravity_error: Optional[str] = None
 
     def set_oauth_callbacks(self, on_failure: Optional[callable] = None,
                             on_success: Optional[callable] = None) -> None:
@@ -544,6 +545,9 @@ class DataCollector:
                     _record_quota(quota_history.window_key("antigravity", session), used, resets_at,
                                   snapshot.timestamp)
                 snapshot.available = True
+                if self._antigravity_error is not None:
+                    logger.info("Antigravity usage recovered")
+                    self._antigravity_error = None
             else:
                 snapshot.available = False
                 api_failed = True
@@ -551,10 +555,21 @@ class DataCollector:
                 snapshot.plan_type = ag_data.plan_type
                 if ag_data.error:
                     snapshot.error_message = ag_data.error
+                if ag_data.error == "Sign in to Google in Settings":
+                    self._antigravity_error = None
+                else:
+                    reason = ag_data.error or "unknown error"
+                    if reason != self._antigravity_error:
+                        self._antigravity_error = reason
+                        logger.warning("Antigravity usage unavailable: %s", reason)
         except Exception as e:
             snapshot.available = False
             api_failed = True
             snapshot.error_message = str(e)
+            reason = str(e) or type(e).__name__
+            if reason != self._antigravity_error:
+                self._antigravity_error = reason
+                logger.warning("Antigravity usage unavailable: %s", reason)
 
         not_signed_in = (ag_data.error == "Sign in to Google in Settings") if api_failed and "ag_data" in locals() else False
         if api_failed and not not_signed_in:

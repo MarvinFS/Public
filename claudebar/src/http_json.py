@@ -13,6 +13,8 @@ follow redirects.
 """
 
 import json
+import os
+import threading
 import time
 import urllib.request
 from typing import Any, Callable, Optional
@@ -25,7 +27,38 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
-_OPENER = urllib.request.build_opener(_NoRedirect)
+_OPENER: Optional[urllib.request.OpenerDirector] = None
+_BUILT_OPENER: Optional[urllib.request.OpenerDirector] = None
+_OPENER_TLS_ENV: Optional[tuple[Optional[str], Optional[str]]] = None
+_OPENER_LOCK = threading.Lock()
+
+
+def _tls_env() -> tuple[Optional[str], Optional[str]]:
+    return (os.environ.get("SSL_CERT_FILE"), os.environ.get("SSL_CERT_DIR"))
+
+
+def _get_opener() -> urllib.request.OpenerDirector:
+    """Return the no-redirect opener, built lazily on first use.
+
+    `build_opener()` constructs an `HTTPSHandler` whose `SSLContext` loads the
+    default CA store immediately. Deferring creation (and rebuilding if
+    `SSL_CERT_FILE` / `SSL_CERT_DIR` changed) ensures startup hooks such as
+    `hostenv.tls.ensure_ca_bundle()` take effect even when this module was
+    imported before `main()` ran.
+    """
+    global _OPENER, _BUILT_OPENER, _OPENER_TLS_ENV
+    env = _tls_env()
+    opener = _OPENER
+    if opener is not None and (opener is not _BUILT_OPENER or _OPENER_TLS_ENV == env):
+        return opener
+    with _OPENER_LOCK:
+        opener = _OPENER
+        if opener is not None and (opener is not _BUILT_OPENER or _OPENER_TLS_ENV == env):
+            return opener
+        opener = urllib.request.build_opener(_NoRedirect)
+        _OPENER = _BUILT_OPENER = opener
+        _OPENER_TLS_ENV = env
+        return opener
 
 
 def build_request(url: str, headers: Optional[dict] = None, method: str = "GET",
@@ -39,7 +72,7 @@ def open_url(request: urllib.request.Request, timeout: float, follow_redirects: 
     body; a non-2xx answer, a redirect included unless asked for, raises HTTPError."""
     if follow_redirects:
         return urllib.request.urlopen(request, timeout=timeout)
-    return _OPENER.open(request, timeout=timeout)
+    return _get_opener().open(request, timeout=timeout)
 
 
 def request_json(url: str, headers: Optional[dict], timeout: float, method: str = "GET",

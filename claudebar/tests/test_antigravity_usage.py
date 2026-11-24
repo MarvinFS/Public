@@ -276,10 +276,53 @@ class TestAntigravityAuth:
         ) is None
 
         assert antigravity_auth.normalize_login_code("4/0AbC_123-xyz") == "4/0AbC_123-xyz"
+        assert antigravity_auth.normalize_login_code("4%2F0AbC+123=") == "4%2F0AbC+123="
         cb_url = "https://antigravity.google/oauth-callback?code=4%2F0AbC&state=ok"
         assert antigravity_auth.normalize_login_code(cb_url) == cb_url
         assert antigravity_auth.normalize_login_code("https://evil.example/oauth-callback?code=123") is None
         assert antigravity_auth.normalize_login_code("line1\nline2") is None
+
+    def test_submit_code_invalid_grant_and_closed_session_error(self, tmp_path):
+        class FakeStdin:
+            def __init__(self):
+                self.closed = False
+                self.written = []
+
+            def write(self, text):
+                if self.closed:
+                    raise ValueError("I/O operation on closed file.")
+                self.written.append(text)
+
+            def flush(self):
+                pass
+
+            def close(self):
+                self.closed = True
+
+        class FakeProc:
+            def __init__(self):
+                self.stdin = FakeStdin()
+                self._done = False
+
+            def poll(self):
+                return 1 if self._done else None
+
+            def wait(self, timeout=None):
+                self._done = True
+                return 1
+
+            def terminate(self):
+                self._done = True
+
+        sess = antigravity_auth.AntigravityLoginSession(tmp_path / "agy", profile_dir=tmp_path)
+        sess._proc = FakeProc()
+        sess._output_tail = ['Error: couldn\'t log in: token exchange failed: oauth2: "invalid_grant" "Bad Request"']
+
+        with pytest.raises(RuntimeError, match="Code expired or did not match"):
+            sess.submit_code("4/0AbC_123-xyz")
+        # A second submit on the finished session must never leak ValueError("I/O operation on closed file.")
+        with pytest.raises(RuntimeError, match="Sign-in session ended"):
+            sess.submit_code("4/0AbC_123-xyz")
 
     def test_open_url_preserves_ampersands_without_cmd(self, monkeypatch):
         import os
@@ -652,3 +695,46 @@ def test_panel_renders_antigravity_view_and_buckets(tk_root, monkeypatch):
         assert panel._source_label.cget("text") == "Estimated from local Antigravity logs"
     finally:
         panel.destroy()
+
+
+def test_collect_antigravity_logs_failure_once_and_recovery(monkeypatch, caplog):
+    import logging
+
+    import data_collector
+
+    responses = iter([
+        antigravity_usage.AntigravityUsageData(error="Sign in to Google in Settings"),
+        antigravity_usage.AntigravityUsageData(error="Network error: SSL failure"),
+        antigravity_usage.AntigravityUsageData(error="Network error: SSL failure"),
+        antigravity_usage.AntigravityUsageData(
+            five_hour=antigravity_usage.AntigravityUsageWindow(percent=12.0),
+            weekly=antigravity_usage.AntigravityUsageWindow(percent=8.0),
+            plan_type="AI Ultra",
+        ),
+    ])
+    monkeypatch.setattr(data_collector, "fetch_antigravity_usage", lambda: next(responses))
+    monkeypatch.setattr(
+        data_collector,
+        "get_antigravity_local_usage",
+        lambda days=31, end=None: antigravity_usage.AntigravityLocalUsage(),
+    )
+    monkeypatch.setattr(data_collector, "save_cache", lambda **kw: None)
+    monkeypatch.setattr(data_collector, "load_antigravity_cache", lambda: (None, None))
+    monkeypatch.setattr(data_collector.quota_history, "append", lambda *a, **kw: None)
+
+    collector = data_collector.DataCollector()
+    with caplog.at_level(logging.INFO, logger="claudebar"):
+        # Signed-out state is normal and stays quiet.
+        assert not collector.collect_antigravity().available
+        assert not any("Antigravity usage" in r.message for r in caplog.records)
+
+        # Identical failure logs once, not on every refresh.
+        assert not collector.collect_antigravity().available
+        assert not collector.collect_antigravity().available
+        warnings = [r.message for r in caplog.records if r.levelno == logging.WARNING]
+        assert warnings == ["Antigravity usage unavailable: Network error: SSL failure"]
+
+        # Subsequent success logs recovery.
+        snap = collector.collect_antigravity()
+        assert snap.available is True
+        assert any("Antigravity usage recovered" in r.message for r in caplog.records)

@@ -210,6 +210,23 @@ class TestTheModuleItself:
         assert method == "POST" and headers["X-Test"] == "1"
         assert headers["Content-Length"] == str(len(b'{"a": 1}'))
 
+    def test_opener_rebuilds_when_ssl_cert_env_changes(self, monkeypatch):
+        monkeypatch.setattr(http_json, "_OPENER", None)
+        monkeypatch.setattr(http_json, "_BUILT_OPENER", None)
+        monkeypatch.setattr(http_json, "_OPENER_TLS_ENV", None)
+        monkeypatch.setenv("SSL_CERT_FILE", "/nonexistent/first.pem")
+        first = http_json._get_opener()
+        assert http_json._get_opener() is first
+        monkeypatch.setenv("SSL_CERT_FILE", "/nonexistent/second.pem")
+        second = http_json._get_opener()
+        assert second is not first
+
+    def test_injected_opener_is_preserved_across_env_changes(self, monkeypatch):
+        custom = urllib.request.build_opener(http_json._NoRedirect)
+        monkeypatch.setattr(http_json, "_OPENER", custom)
+        monkeypatch.setenv("SSL_CERT_FILE", "/nonexistent/changed.pem")
+        assert http_json._get_opener() is custom
+
 
 class TestFailureMemory:
     def test_it_blocks_for_the_window_and_then_lets_a_try_through(self):

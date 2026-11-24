@@ -62,7 +62,13 @@ class TestClaudeWithoutUsageData:
     def test_an_expired_session_is_a_warning(self, error):
         assert status_for(Engine.CLAUDE, None, NOT_LOGGED_IN, error) == ("warn", "Session expired")
 
-    @pytest.mark.parametrize("error", ["credentials not found", "No OAuth token", "no oauth credentials"])
+    @pytest.mark.parametrize("error", [
+        "credentials not found",
+        "No OAuth token",
+        "no oauth credentials",
+        "OAuth: credentials file holds no Claude OAuth token",
+        "OAuth: no credentials file at /home/user/.claude/.credentials.json",
+    ])
     def test_no_login_is_a_warning(self, error):
         assert status_for(Engine.CLAUDE, None, NOT_LOGGED_IN, error) == ("warn", "Not logged in")
 
